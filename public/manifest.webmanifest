@@ -1,0 +1,10 @@
+{
+  "name": "研途 · AI 考研工作台",
+  "short_name": "研途",
+  "description": "记录每一次专注与成长的双 Agent 学习工作台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f2",
+  "theme_color": "#18241e",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
