@@ -1,4 +1,5 @@
 create extension if not exists vector with schema extensions;
+create extension if not exists btree_gist with schema extensions;
 
 create table public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
@@ -22,6 +23,21 @@ create table public.tasks (
   updated_at timestamptz not null default now()
 );
 
+create table public.plans (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  parent_id uuid references public.plans(id) on delete cascade,
+  level text not null check (level in ('stage','week','day')),
+  title text not null check (char_length(title) between 1 and 160),
+  description text not null default '',
+  starts_on date not null,
+  ends_on date not null,
+  status text not null default 'active' check (status in ('draft','active','completed','archived')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (ends_on >= starts_on)
+);
+
 create table public.study_sessions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -37,8 +53,42 @@ create table public.study_sessions (
   check (ended_at > started_at)
 );
 
+alter table public.study_sessions
+  add constraint study_sessions_no_user_overlap
+  exclude using gist (
+    user_id with =,
+    tstzrange(started_at, ended_at, '[)') with &&
+  );
+
 create index study_sessions_user_started_idx on public.study_sessions(user_id, started_at);
 create index tasks_user_due_idx on public.tasks(user_id, due_at);
+create index plans_user_dates_idx on public.plans(user_id, starts_on, ends_on);
+
+create table public.knowledge_points (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  parent_id uuid references public.knowledge_points(id) on delete cascade,
+  subject text not null check (subject in ('math','english','politics','cs408')),
+  title text not null,
+  mastery integer not null default 1 check (mastery between 1 and 5),
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.question_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  knowledge_point_id uuid references public.knowledge_points(id) on delete set null,
+  subject text not null check (subject in ('math','english','politics','cs408')),
+  source text,
+  question_ref text,
+  correct boolean not null,
+  duration_seconds integer check (duration_seconds is null or duration_seconds >= 0),
+  notes text not null default '',
+  attempted_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
 
 create table public.mistake_cards (
   id uuid primary key default gen_random_uuid(),
@@ -53,6 +103,17 @@ create table public.mistake_cards (
   review_count integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table public.review_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  mistake_card_id uuid not null references public.mistake_cards(id) on delete cascade,
+  result text not null check (result in ('again','hard','good','easy')),
+  mastery_before integer not null check (mastery_before between 1 and 5),
+  mastery_after integer not null check (mastery_after between 1 and 5),
+  reviewed_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
 );
 
 create table public.school_options (
@@ -77,6 +138,19 @@ create table public.school_options (
   unique(user_id, college, major_code, exam_year)
 );
 
+create table public.career_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  item_type text not null check (item_type in ('milestone','resume','application','interview')),
+  title text not null,
+  company text,
+  status text not null default 'planned',
+  occurred_on date,
+  notes text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table public.documents (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -89,7 +163,7 @@ create table public.documents (
   byte_size bigint,
   sha256 text,
   version integer not null default 1,
-  ingestion_status text not null default 'queued' check (ingestion_status in ('queued','processing','ready','failed')),
+  ingestion_status text not null default 'queued' check (ingestion_status in ('queued','processing','ocr_required','ready','failed')),
   ingestion_error text,
   downloaded_at timestamptz,
   created_at timestamptz not null default now(),
@@ -130,6 +204,15 @@ create table public.import_proposals (
   created_at timestamptz not null default now()
 );
 
+create table public.web_search_records (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  query text not null,
+  provider text not null,
+  results jsonb not null default '[]'::jsonb,
+  searched_at timestamptz not null default now()
+);
+
 create table public.agent_threads (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
@@ -166,14 +249,50 @@ create table public.audit_logs (
 
 create or replace view public.daily_study_contributions
 with (security_invoker = true) as
+with session_slices as (
+  select
+    ss.id,
+    ss.user_id,
+    ss.subject,
+    local_day::date as study_date,
+    greatest(
+      0,
+      extract(epoch from (
+        least(ss.ended_at, ((local_day + interval '1 day')::timestamp at time zone p.timezone))
+        - greatest(ss.started_at, (local_day::timestamp at time zone p.timezone))
+      ))
+      - ss.paused_seconds * (
+        extract(epoch from (
+          least(ss.ended_at, ((local_day + interval '1 day')::timestamp at time zone p.timezone))
+          - greatest(ss.started_at, (local_day::timestamp at time zone p.timezone))
+        )) / nullif(extract(epoch from (ss.ended_at - ss.started_at)), 0)
+      )
+    ) as effective_seconds
+  from public.study_sessions ss
+  join public.profiles p on p.id = ss.user_id
+  cross join lateral generate_series(
+    date_trunc('day', ss.started_at at time zone p.timezone),
+    date_trunc('day', (ss.ended_at - interval '1 microsecond') at time zone p.timezone),
+    interval '1 day'
+  ) as local_day
+), subject_daily as (
+  select
+    user_id,
+    study_date,
+    subject,
+    floor(sum(effective_seconds) / 60)::integer as effective_minutes,
+    count(distinct id)::integer as session_count
+  from session_slices
+  group by user_id, study_date, subject
+)
 select
   user_id,
-  (started_at at time zone 'Asia/Shanghai')::date as study_date,
-  subject,
-  floor(sum(greatest(0, extract(epoch from (ended_at - started_at)) - paused_seconds)) / 60)::integer as effective_minutes,
-  count(*)::integer as session_count
-from public.study_sessions
-group by user_id, (started_at at time zone 'Asia/Shanghai')::date, subject;
+  study_date,
+  sum(effective_minutes)::integer as effective_minutes,
+  sum(session_count)::integer as session_count,
+  jsonb_object_agg(subject, effective_minutes order by subject) as subject_minutes
+from subject_daily
+group by user_id, study_date;
 
 create or replace function public.match_document_chunks(
   query_embedding extensions.vector(1536),
@@ -206,14 +325,89 @@ as $$
   limit least(match_count, 30);
 $$;
 
+create or replace function public.hybrid_search_document_chunks(
+  query_text text,
+  query_embedding extensions.vector(1536),
+  match_count integer default 8
+)
+returns table (
+  id bigint,
+  document_id uuid,
+  title text,
+  locator text,
+  content text,
+  score float
+)
+language sql stable security invoker
+as $$
+  select
+    dc.id,
+    dc.document_id,
+    d.title,
+    dc.locator,
+    dc.content,
+    (
+      0.65 * (1 - (dc.embedding <=> query_embedding))
+      + 0.35 * ts_rank_cd(dc.content_tsv, websearch_to_tsquery('simple', query_text))
+    )::float as score
+  from public.document_chunks dc
+  join public.documents d on d.id = dc.document_id
+  where dc.user_id = auth.uid()
+    and dc.embedding is not null
+  order by score desc
+  limit least(match_count, 30);
+$$;
+
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array[
+    'profiles','plans','tasks','study_sessions','knowledge_points','mistake_cards',
+    'school_options','career_items','documents','agent_threads'
+  ] loop
+    execute format(
+      'create trigger %I before update on public.%I for each row execute function public.set_updated_at()',
+      table_name || '_set_updated_at', table_name
+    );
+  end loop;
+end $$;
+
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, display_name)
+  values (new.id, coalesce(new.raw_user_meta_data ->> 'display_name', split_part(new.email, '@', 1)))
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+after insert on auth.users
+for each row execute function public.handle_new_user();
+
 alter table public.profiles enable row level security;
+alter table public.plans enable row level security;
 alter table public.tasks enable row level security;
 alter table public.study_sessions enable row level security;
+alter table public.knowledge_points enable row level security;
+alter table public.question_attempts enable row level security;
 alter table public.mistake_cards enable row level security;
+alter table public.review_events enable row level security;
 alter table public.school_options enable row level security;
+alter table public.career_items enable row level security;
 alter table public.documents enable row level security;
 alter table public.document_chunks enable row level security;
 alter table public.import_proposals enable row level security;
+alter table public.web_search_records enable row level security;
 alter table public.agent_threads enable row level security;
 alter table public.action_proposals enable row level security;
 alter table public.audit_logs enable row level security;
@@ -222,8 +416,10 @@ do $$
 declare table_name text;
 begin
   foreach table_name in array array[
-    'tasks','study_sessions','mistake_cards','school_options','documents',
-    'document_chunks','import_proposals','agent_threads','action_proposals','audit_logs'
+    'plans','tasks','study_sessions','knowledge_points','question_attempts',
+    'mistake_cards','review_events','school_options','career_items','documents',
+    'document_chunks','import_proposals','web_search_records','agent_threads',
+    'action_proposals'
   ] loop
     execute format(
       'create policy %I on public.%I for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid())',
@@ -232,6 +428,18 @@ begin
   end loop;
 end $$;
 
+drop policy action_proposals_owner_policy on public.action_proposals;
+create policy action_proposals_owner_select on public.action_proposals
+for select to authenticated using (user_id = auth.uid());
+
+create policy audit_logs_owner_select on public.audit_logs
+for select to authenticated using (user_id = auth.uid());
+
 -- profiles use their primary key as the owner key.
 create policy profiles_owner_policy on public.profiles
 for all to authenticated using (id = auth.uid()) with check (id = auth.uid());
+
+revoke all on function public.match_document_chunks(extensions.vector, integer, uuid[]) from public;
+grant execute on function public.match_document_chunks(extensions.vector, integer, uuid[]) to authenticated;
+revoke all on function public.hybrid_search_document_chunks(text, extensions.vector, integer) from public;
+grant execute on function public.hybrid_search_document_chunks(text, extensions.vector, integer) to authenticated;

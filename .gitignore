@@ -28,6 +28,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 backend/.venv/
+*.egg-info/
 
 # Supabase local state
 supabase/.temp/
