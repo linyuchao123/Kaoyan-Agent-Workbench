@@ -1,7 +1,8 @@
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
-from typing import Iterable, Literal
+from datetime import date, datetime, time, timedelta
+from typing import Literal
 
 Scope = Literal["all", "math", "english", "politics", "cs408", "career"]
 
@@ -43,16 +44,30 @@ def _union_seconds(intervals: Iterable[tuple[datetime, datetime]]) -> int:
 
 
 def aggregate_daily_minutes(intervals: Iterable[StudyInterval]) -> dict[date, int]:
-    """Aggregate sessions without double counting overlapping clock time."""
+    """Aggregate effective study time by local date.
+
+    Pause duration is removed from the tail of a session because the API stores
+    only a duration, not individual pause intervals.  The remaining effective
+    interval is split at midnight and overlapping intervals are merged before
+    minutes are calculated.
+    """
     by_day: dict[date, list[tuple[datetime, datetime]]] = defaultdict(list)
-    paused: dict[date, int] = defaultdict(int)
     for interval in intervals:
         if interval.ended_at <= interval.started_at:
             continue
-        day = interval.started_at.date()
-        by_day[day].append((interval.started_at, interval.ended_at))
-        paused[day] += max(0, interval.paused_seconds)
-    return {
-        day: max(0, (_union_seconds(values) - paused[day]) // 60)
-        for day, values in by_day.items()
-    }
+        effective_end = interval.ended_at - timedelta(seconds=max(0, interval.paused_seconds))
+        if effective_end <= interval.started_at:
+            continue
+
+        cursor = interval.started_at
+        while cursor.date() < effective_end.date():
+            next_midnight = datetime.combine(
+                cursor.date() + timedelta(days=1),
+                time.min,
+                tzinfo=cursor.tzinfo,
+            )
+            by_day[cursor.date()].append((cursor, next_midnight))
+            cursor = next_midnight
+        by_day[cursor.date()].append((cursor, effective_end))
+
+    return {day: max(0, _union_seconds(values) // 60) for day, values in by_day.items()}

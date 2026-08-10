@@ -14,7 +14,9 @@ class WebResult:
 
 
 class WebSearchProvider(Protocol):
-    async def search(self, query: str, include_domains: list[str] | None = None) -> list[WebResult]: ...
+    async def search(
+        self, query: str, include_domains: list[str] | None = None
+    ) -> list[WebResult]: ...
 
     async def extract(self, url: str) -> str: ...
 

@@ -1,3 +1,4 @@
+import asyncio
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AnyMessage
@@ -10,6 +11,7 @@ from app.services.rag import choose_retrieval_mode
 class WorkbenchState(TypedDict, total=False):
     messages: Annotated[list[AnyMessage], add_messages]
     route: Literal["coach", "tutor", "combined"]
+    requested_route: Literal["coach", "tutor", "combined"]
     retrieval_mode: Literal["private", "web", "hybrid"]
     user_id: str
     answer: str
@@ -17,12 +19,18 @@ class WorkbenchState(TypedDict, total=False):
 
 
 def route_request(state: WorkbenchState) -> WorkbenchState:
+    requested_route = state.get("requested_route")
+    if requested_route:
+        text = str(state["messages"][-1].content).lower()
+        return {"route": requested_route, "retrieval_mode": choose_retrieval_mode(text)}
     text = str(state["messages"][-1].content).lower()
     coach_markers = ("计划", "复盘", "任务", "时间", "进度", "安排")
     tutor_markers = ("解释", "资料", "为什么", "招生", "检索", "题目", "知识点")
     coach = any(marker in text for marker in coach_markers)
     tutor = any(marker in text for marker in tutor_markers)
-    route: Literal["coach", "tutor", "combined"] = "combined" if coach and tutor else "coach" if coach else "tutor"
+    route: Literal["coach", "tutor", "combined"] = (
+        "combined" if coach and tutor else "coach" if coach else "tutor"
+    )
     return {"route": route, "retrieval_mode": choose_retrieval_mode(text)}
 
 
@@ -38,8 +46,7 @@ async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
 
 
 async def combined_subgraph(state: WorkbenchState) -> WorkbenchState:
-    coach = await coach_subgraph(state)
-    tutor = await tutor_subgraph(state)
+    coach, tutor = await asyncio.gather(coach_subgraph(state), tutor_subgraph(state))
     return {"answer": f"{coach['answer']}\n{tutor['answer']}"}
 
 
@@ -54,7 +61,9 @@ def build_graph():
     graph.add_node("tutor", tutor_subgraph)
     graph.add_node("combined", combined_subgraph)
     graph.add_edge(START, "route")
-    graph.add_conditional_edges("route", choose_branch, {"coach": "coach", "tutor": "tutor", "combined": "combined"})
+    graph.add_conditional_edges(
+        "route", choose_branch, {"coach": "coach", "tutor": "tutor", "combined": "combined"}
+    )
     graph.add_edge("coach", END)
     graph.add_edge("tutor", END)
     graph.add_edge("combined", END)

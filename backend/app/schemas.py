@@ -4,7 +4,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl
 
-
 Subject = Literal["math", "english", "politics", "cs408", "career"]
 
 
@@ -32,6 +31,13 @@ class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=160)
     subject: Subject
     planned_minutes: int = Field(default=30, ge=1, le=1440)
+    due_at: datetime | None = None
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    completed: bool | None = None
+    planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None
 
 
@@ -74,4 +80,5 @@ class ActionProposal(BaseModel):
     action: str
     payload: dict[str, Any]
     summary: str
-    status: Literal["pending", "approved", "edited", "rejected"] = "pending"
+    idempotency_key: str
+    status: Literal["pending", "approved", "edited", "rejected", "applied", "failed"] = "pending"

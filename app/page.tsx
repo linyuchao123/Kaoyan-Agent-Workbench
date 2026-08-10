@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { api, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
 
-type Scope = "all" | "math" | "english" | "politics" | "cs408" | "career";
+type Scope = ContributionScope;
 type View = "today" | "plan" | "subjects" | "schools" | "materials" | "agents";
 
 type StudyDay = {
@@ -14,10 +15,10 @@ type StudyDay = {
 };
 
 type Task = {
-  id: number;
+  id: string;
   title: string;
   detail: string;
-  subject: Exclude<Scope, "all">;
+  subject: Subject;
   done: boolean;
 };
 
@@ -48,11 +49,21 @@ const navItems: { key: View; label: string; icon: string }[] = [
 ];
 
 const initialTasks: Task[] = [
-  { id: 1, title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false },
-  { id: 2, title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true },
-  { id: 3, title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false },
-  { id: 4, title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
+  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false },
+  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true },
+  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false },
+  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
 ];
+
+function taskFromApi(task: ApiTask): Task {
+  return {
+    id: task.id,
+    title: task.title,
+    detail: `计划 ${task.planned_minutes} 分钟${task.due_at ? ` · ${task.due_at.slice(0, 10)}` : ""}`,
+    subject: task.subject,
+    done: task.completed,
+  };
+}
 
 function seededValue(seed: number) {
   const x = Math.sin(seed * 9283.17) * 43758.5453;
@@ -61,6 +72,15 @@ function seededValue(seed: number) {
 
 function formatDate(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function shanghaiDateKey(date: Date) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
 function buildYearData(year: number): StudyDay[] {
@@ -123,9 +143,38 @@ function formatTimer(seconds: number) {
 function StudyHeatmap() {
   const [year, setYear] = useState(2026);
   const [scope, setScope] = useState<Scope>("all");
-  const data = useMemo(() => buildYearData(year), [year]);
+  const demoData = useMemo(() => buildYearData(year), [year]);
+  const [remoteData, setRemoteData] = useState<StudyDay[] | null>(null);
+  const [dataSource, setDataSource] = useState<"api" | "demo">("demo");
+  const data = remoteData ?? demoData;
   const [selectedDate, setSelectedDate] = useState("2026-08-10");
   const selectedDay = data.find((day) => day.date === selectedDate) ?? data[data.length - 1];
+
+  useEffect(() => {
+    let cancelled = false;
+    api.contributions(`${year}-01-01`, `${year}-12-31`, scope)
+      .then((days) => {
+        if (cancelled) return;
+        setRemoteData(days.map((day) => ({
+          date: day.date,
+          minutes: {
+            math: day.subject_minutes.math ?? 0,
+            english: day.subject_minutes.english ?? 0,
+            politics: day.subject_minutes.politics ?? 0,
+            cs408: day.subject_minutes.cs408 ?? 0,
+            career: day.subject_minutes.career ?? 0,
+          },
+          sessions: day.session_count,
+          tasks: day.completed_tasks,
+          mistakes: day.mistake_count,
+        })));
+        setDataSource("api");
+      })
+      .catch(() => {
+        if (!cancelled) setDataSource("demo");
+      });
+    return () => { cancelled = true; };
+  }, [scope, year]);
 
   const padded = useMemo(() => {
     const first = new Date(`${year}-01-01T00:00:00Z`);
@@ -142,7 +191,7 @@ function StudyHeatmap() {
         <div>
           <div className="eyebrow">学习轨迹</div>
           <h2>{year} 年有效学习 {Math.round(totalMinutes / 60)} 小时</h2>
-          <p>{activeDays} 个学习日 · 当前连续 12 天 · 最长连续 28 天</p>
+          <p>{activeDays} 个学习日 · {dataSource === "api" ? "来自真实学习会话" : "后端未连接，显示演示数据"}</p>
         </div>
         <div className="year-switch" aria-label="选择年份">
           {[2026, 2025].map((item) => (
@@ -204,8 +253,26 @@ function StudyHeatmap() {
 function TodayView() {
   const [tasks, setTasks] = useState(initialTasks);
   const [newTask, setNewTask] = useState("");
-  const [seconds, setSeconds] = useState(42 * 60 + 18);
+  const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
+  const [focusSubject, setFocusSubject] = useState<Subject>("math");
+  const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
+  const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
+  const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
+  const [pausedSeconds, setPausedSeconds] = useState(0);
+  const [todayMinutes, setTodayMinutes] = useState(260);
+  const [recordStatus, setRecordStatus] = useState("演示数据 · 启动 API 后自动同步");
+
+  useEffect(() => {
+    const today = shanghaiDateKey(new Date());
+    Promise.all([api.today(), api.contributions(today, today, "all")])
+      .then(([snapshot, contributions]) => {
+        setTasks(snapshot.tasks.map(taskFromApi));
+        setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
+        setRecordStatus("已连接本地 API · 数据来自学习会话");
+      })
+      .catch(() => setRecordStatus("后端未连接 · 当前操作保留在本页"));
+  }, []);
 
   useEffect(() => {
     if (!running) return;
@@ -213,11 +280,74 @@ function TodayView() {
     return () => window.clearInterval(timer);
   }, [running]);
 
-  function addTask(event: FormEvent) {
+  async function addTask(event: FormEvent) {
     event.preventDefault();
     if (!newTask.trim()) return;
-    setTasks((items) => [...items, { id: Date.now(), title: newTask.trim(), detail: "今日临时任务", subject: "math", done: false }]);
+    const title = newTask.trim();
+    const temporaryId = `local-${Date.now()}`;
+    setTasks((items) => [...items, { id: temporaryId, title, detail: "计划 30 分钟", subject: newTaskSubject, done: false }]);
     setNewTask("");
+    try {
+      const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30 });
+      setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved) : item));
+      setRecordStatus("任务已写入本地 API");
+    } catch {
+      setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
+    }
+  }
+
+  async function toggleTask(task: Task) {
+    const completed = !task.done;
+    setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: completed } : item));
+    if (task.id.startsWith("demo-") || task.id.startsWith("local-")) return;
+    try {
+      await api.updateTask(task.id, { completed });
+      setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
+    } catch {
+      setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    }
+  }
+
+  function beginFocus() {
+    if (!sessionStartedAt) {
+      setSessionStartedAt(new Date());
+      setSeconds(0);
+      setPausedSeconds(0);
+    } else if (pauseStartedAt) {
+      setPausedSeconds((value) => value + Math.floor((Date.now() - pauseStartedAt.getTime()) / 1000));
+      setPauseStartedAt(null);
+    }
+    setRunning(true);
+  }
+
+  function pauseFocus() {
+    setRunning(false);
+    setPauseStartedAt(new Date());
+  }
+
+  async function finishFocus() {
+    if (!sessionStartedAt) return;
+    const endedAt = new Date();
+    const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
+    setRunning(false);
+    try {
+      await api.createSession({
+        subject: focusSubject,
+        started_at: sessionStartedAt.toISOString(),
+        ended_at: endedAt.toISOString(),
+        paused_seconds: finalPausedSeconds,
+        source: "timer",
+        note: "由今日工作台计时器记录",
+      });
+      setTodayMinutes((value) => value + Math.floor(seconds / 60));
+      setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+    } catch {
+      setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
+    }
+    setSessionStartedAt(null);
+    setPauseStartedAt(null);
+    setPausedSeconds(0);
+    setSeconds(0);
   }
 
   const completed = tasks.filter((task) => task.done).length;
@@ -230,11 +360,11 @@ function TodayView() {
           <h1>早上好，林宇超</h1>
           <p>今天把注意力留给最重要的事。完成基础任务，就是向目标院校靠近一步。</p>
         </div>
-        <button className="primary-button" onClick={() => setRunning(true)}>＋ 开始一次专注</button>
+        <button className="primary-button" onClick={beginFocus}>＋ 开始一次专注</button>
       </div>
 
       <div className="metric-grid">
-        <article className="metric-card accent"><span>今日有效学习</span><strong>4<small>h</small> 20<small>m</small></strong><em>目标 6 小时 · 72%</em></article>
+        <article className="metric-card accent"><span>今日有效学习</span><strong>{Math.floor(todayMinutes / 60)}<small>h</small> {todayMinutes % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round(todayMinutes / 360 * 100))}%</em></article>
         <article className="metric-card"><span>本周完成率</span><strong>68<small>%</small></strong><em>已完成 17 / 25 项</em></article>
         <article className="metric-card"><span>连续学习</span><strong>12<small>天</small></strong><em>最长记录 28 天</em></article>
         <article className="metric-card"><span>待复习错题</span><strong>16<small>道</small></strong><em>数学 7 · 408 9</em></article>
@@ -249,22 +379,23 @@ function TodayView() {
           <div className="task-list">
             {tasks.map((task) => (
               <label className={`task-item ${task.done ? "done" : ""}`} key={task.id}>
-                <input type="checkbox" checked={task.done} onChange={() => setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: !item.done } : item))} />
+                <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
                 <span className="fake-check">✓</span>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
                 <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span>
               </label>
             ))}
           </div>
-          <form className="quick-add" onSubmit={addTask}><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
+          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
+          <p className="record-status">● {recordStatus}</p>
         </section>
 
         <aside className="right-stack">
           <section className="panel focus-card">
-            <div className="focus-top"><span className="focus-dot" /><span>{running ? "正在专注 · 数学一" : "专注计时器"}</span></div>
+            <div className="focus-top"><span className="focus-dot" /><span>{running ? `正在专注 · ${subjectMeta[focusSubject].label}` : "专注计时器"}</span></div>
             <strong className="timer">{formatTimer(seconds)}</strong>
-            <p>高等数学 · 极限与连续</p>
-            <div className="timer-actions"><button onClick={() => setRunning((value) => !value)}>{running ? "暂停" : "继续"}</button><button className="secondary" onClick={() => { setRunning(false); setSeconds(0); }}>结束并记录</button></div>
+            <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
+            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
           </section>
           <section className="panel review-card">
             <div className="eyebrow">AI 学习教练</div>
@@ -308,21 +439,116 @@ function SchoolsView() {
 }
 
 function MaterialsView() {
-  const docs = [["王道数据结构 2027.pdf","PDF · 486 页","已完成索引","408"],["高数基础讲义.md","Markdown · 38 KB","已完成索引","数学"],["苏州大学 2026 招生目录","网页 · 官方来源","等待年度复核","院校"]];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button">＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><div className="upload-icon">⇧</div><h2>拖入 PDF 或 Markdown</h2><p>扫描版 PDF 将自动进入 OCR；网页资料需预览确认后入库。</p><button className="outline-button">选择文件</button></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">已入库</div><h2>3 份资料</h2></div><span className="subtle-pill">混合检索已开启</span></div>{docs.map(([name, type, status, tag]) => <div className="document-row" key={name}><span className="document-icon">▤</span><div><strong>{name}</strong><small>{type}</small></div><em>{tag}</em><span className="document-status">● {status}</span></div>)}</section></div></section>;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [docs, setDocs] = useState([
+    { name: "王道数据结构 2027.pdf", type: "PDF · 486 页", status: "演示索引", tag: "408" },
+    { name: "高数基础讲义.md", type: "Markdown · 38 KB", status: "演示索引", tag: "数学" },
+    { name: "苏州大学 2026 招生目录", type: "网页 · 官方来源", status: "等待年度复核", tag: "院校" },
+  ]);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [importStatus, setImportStatus] = useState("选择本地资料，或提交一个公开网页链接进行预览");
+  const [busy, setBusy] = useState(false);
+
+  async function upload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setImportStatus(`正在解析 ${file.name}…`);
+    try {
+      const result = await api.uploadDocument(file);
+      const status = result.ingestion_status === "ocr_required" ? "等待 OCR" : `已切分 ${result.chunk_count} 段`;
+      setDocs((items) => [{ name: result.original_filename, type: `${file.type || "资料"} · ${Math.ceil(result.byte_size / 1024)} KB`, status, tag: "新导入" }, ...items]);
+      setImportStatus(result.duplicate ? "检测到相同文件，已复用原索引" : `导入完成 · ${result.flagged_chunk_count} 个片段需要安全复核`);
+    } catch (error) {
+      setImportStatus(error instanceof Error ? `导入失败：${error.message}` : "导入失败");
+    } finally {
+      setBusy(false);
+      event.target.value = "";
+    }
+  }
+
+  async function previewUrl(event: FormEvent) {
+    event.preventDefault();
+    if (!sourceUrl.trim()) return;
+    setBusy(true);
+    try {
+      const preview = await api.previewImport(sourceUrl.trim());
+      setImportStatus(`已生成待确认提案：${preview.summary}`);
+      setSourceUrl("");
+    } catch (error) {
+      setImportStatus(error instanceof Error ? `链接预览失败：${error.message}` : "链接预览失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{docs.length} 份资料</h2></div><span className="subtle-pill">混合检索已开启</span></div>{docs.map((doc) => <div className="document-row" key={`${doc.name}-${doc.status}`}><span className="document-icon">▤</span><div><strong>{doc.name}</strong><small>{doc.type}</small></div><em>{doc.tag}</em><span className="document-status">● {doc.status}</span></div>)}</section></div></section>;
 }
 
 function AgentsView() {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
-  function submit(event: FormEvent) { event.preventDefault(); if (!query.trim()) return; const text = query.trim(); setMessages((items) => [...items, { role: "user", text }, { role: "agent", text: mode === "coach" ? "我已读取本周计划与实际学习记录。当前数学进度正常，408 落后约 1.8 小时。我建议生成一个周三晚间的补偿任务，等待你确认后写入。" : mode === "tutor" ? "我会先检索你的私有资料；如果依据不足，再联网查找可信来源，并把两类引用分开呈现。" : "计划教练和资料导师已并行分析：先补足数据结构线性表的错题复习，再将相关讲义片段加入明日任务。我已生成变更提案，尚未写入。" }]); setQuery(""); }
-  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className="status-chip online">● 服务就绪</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div><div className="agent-proposal"><div><strong>待确认提案</strong><p>创建「数据结构错题回顾」· 明天 19:30 · 45 分钟</p></div><div><button className="approve">批准写入</button><button className="outline-button">编辑</button><button className="text-button">拒绝</button></div></div><form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit">发送 ↑</button></form></div></section>;
+  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
+  const [proposal, setProposal] = useState<ActionProposal | null>(null);
+  const [threadId, setThreadId] = useState<string>();
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!query.trim() || busy) return;
+    const text = query.trim();
+    setMessages((items) => [...items, { role: "user", text }]);
+    setQuery("");
+    setBusy(true);
+    try {
+      const result = await api.runAgent(mode, text, threadId);
+      setThreadId(result.thread_id);
+      setProposal(result.proposal);
+      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode}` }]);
+    } catch {
+      const fallback = mode === "coach"
+        ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"
+        : mode === "tutor"
+          ? "资料导师当前无法连接检索服务。为避免无依据回答，我暂不补全事实。"
+          : "双 Agent API 尚未连接；当前消息没有写入任何学习数据。";
+      setMessages((items) => [...items, { role: "agent", text: fallback }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function decide(decision: "approve" | "edit" | "reject") {
+    if (!proposal) return;
+    setBusy(true);
+    try {
+      const updated = await api.decideProposal(proposal.id, decision);
+      setProposal(updated);
+      const resultText = updated.status === "applied" ? "提案已批准并幂等写入任务清单。" : updated.status === "rejected" ? "提案已拒绝，没有修改学习数据。" : "提案已进入编辑状态。";
+      setMessages((items) => [...items, { role: "agent", text: resultText }]);
+    } catch {
+      setMessages((items) => [...items, { role: "agent", text: "提案处理失败，没有执行写入。" }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
 export default function Home() {
   const [view, setView] = useState<View>("today");
-  const content = { today: <TodayView />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView />, agents: <AgentsView /> }[view];
+  const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">("checking");
+  const content = { today: <TodayView key={apiStatus} />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView />, agents: <AgentsView /> }[view];
+
+  useEffect(() => {
+    let active = true;
+    const check = () => api.health()
+      .then(() => { if (active) setApiStatus("online"); })
+      .catch(() => { if (active) setApiStatus("offline"); });
+    void check();
+    const timer = window.setInterval(check, 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
 
   return (
     <main className="app-shell">
@@ -333,7 +559,7 @@ export default function Home() {
         <div className="profile"><span>LY</span><div><strong>林宇超</strong><small>苏大应院 · 软件工程</small></div><button aria-label="打开设置">•••</button></div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className="sync-status"><i /> 数据已同步 · 刚刚</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${apiStatus}`}><i /> {apiStatus === "online" ? "本地 API 已连接" : apiStatus === "offline" ? "离线演示模式" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>

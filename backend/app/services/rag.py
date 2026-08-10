@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-
 RetrievalMode = Literal["private", "web", "hybrid"]
 
 
@@ -20,7 +19,17 @@ class PrivateKnowledgeRetriever(Protocol):
 
 def choose_retrieval_mode(message: str) -> RetrievalMode:
     lowered = message.lower()
-    current_markers = ("最新", "今年", "当前", "现在", "招生简章", "官网", "联网", "today", "latest")
+    current_markers = (
+        "最新",
+        "今年",
+        "当前",
+        "现在",
+        "招生简章",
+        "官网",
+        "联网",
+        "today",
+        "latest",
+    )
     private_markers = ("我的资料", "讲义", "笔记", "我上传", "根据资料", "错题")
     wants_web = any(marker in lowered for marker in current_markers)
     wants_private = any(marker in lowered for marker in private_markers)
@@ -31,7 +40,9 @@ def choose_retrieval_mode(message: str) -> RetrievalMode:
     return "private"
 
 
-def reciprocal_rank_fusion(groups: list[list[RetrievedSource]], limit: int = 8) -> list[RetrievedSource]:
+def reciprocal_rank_fusion(
+    groups: list[list[RetrievedSource]], limit: int = 8
+) -> list[RetrievedSource]:
     scores: dict[tuple[str, str], float] = {}
     values: dict[tuple[str, str], RetrievedSource] = {}
     for group in groups:
