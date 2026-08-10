@@ -48,3 +48,14 @@ class DemoStoreTests(TestCase):
                     ended_at=self.start + timedelta(hours=3),
                 )
             )
+
+    def test_session_ending_at_midnight_is_not_counted_on_next_day(self):
+        self.store.create_session(
+            StudySessionCreate(
+                subject="math",
+                started_at=datetime(2026, 8, 10, 14, tzinfo=UTC),
+                ended_at=datetime(2026, 8, 10, 16, tzinfo=UTC),
+            )
+        )
+        next_day = self.store.contributions(date(2026, 8, 11), date(2026, 8, 11), "all")[0]
+        self.assertEqual(next_day.session_count, 0)

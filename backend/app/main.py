@@ -55,7 +55,7 @@ async def health() -> dict[str, str]:
 @app.get("/api/v1/today")
 async def today() -> dict:
     return {
-        "date": datetime.now(UTC).date(),
+        "date": datetime.now(store.timezone).date(),
         "tasks": store.list_tasks(),
         "sessions": store.list_sessions(),
     }
@@ -220,9 +220,13 @@ async def run_agent(agent: str, payload: AgentRunRequest) -> dict:
             "requested_route": agent,
         }
     )
-    idempotency_key = sha256(f"{payload.thread_id}:{agent}:{payload.message}".encode()).hexdigest()
+    thread_id = payload.thread_id or str(uuid4())
+    proposal_id = uuid4()
+    idempotency_key = sha256(
+        f"{thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
+    ).hexdigest()
     proposal = ActionProposal(
-        id=uuid4(),
+        id=proposal_id,
         agent="coach" if agent in {"coach", "combined"} else "tutor",
         action="create_review_task",
         payload={"title": "数据结构错题回顾", "planned_minutes": 45},
@@ -231,7 +235,7 @@ async def run_agent(agent: str, payload: AgentRunRequest) -> dict:
     )
     action_proposals[proposal.id] = proposal
     return {
-        "thread_id": payload.thread_id or str(uuid4()),
+        "thread_id": thread_id,
         "agent": agent,
         "answer": result.get("answer", "已完成分析。写入动作已转换为待确认提案。"),
         "route": result.get("route", agent),

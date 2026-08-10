@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -80,7 +80,9 @@ class DemoStore:
         session_days: dict[date, int] = defaultdict(int)
         for item in sessions:
             start_day = item["started_at"].astimezone(self.timezone).date()
-            end_day = item["ended_at"].astimezone(self.timezone).date()
+            end_day = (
+                (item["ended_at"] - timedelta(microseconds=1)).astimezone(self.timezone).date()
+            )
             cursor = start_day
             while cursor <= end_day:
                 session_days[cursor] += 1

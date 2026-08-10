@@ -419,7 +419,7 @@ begin
     'plans','tasks','study_sessions','knowledge_points','question_attempts',
     'mistake_cards','review_events','school_options','career_items','documents',
     'document_chunks','import_proposals','web_search_records','agent_threads',
-    'action_proposals','audit_logs'
+    'action_proposals'
   ] loop
     execute format(
       'create policy %I on public.%I for all to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid())',
@@ -427,6 +427,13 @@ begin
     );
   end loop;
 end $$;
+
+drop policy action_proposals_owner_policy on public.action_proposals;
+create policy action_proposals_owner_select on public.action_proposals
+for select to authenticated using (user_id = auth.uid());
+
+create policy audit_logs_owner_select on public.audit_logs
+for select to authenticated using (user_id = auth.uid());
 
 -- profiles use their primary key as the owner key.
 create policy profiles_owner_policy on public.profiles

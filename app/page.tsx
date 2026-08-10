@@ -83,8 +83,19 @@ function shanghaiDateKey(date: Date) {
   }).format(date);
 }
 
+function shanghaiDisplayDate(date: Date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    weekday: "short",
+  }).format(date);
+}
+
 function buildYearData(year: number): StudyDay[] {
-  const today = new Date("2026-08-10T12:00:00+08:00");
+  const today = new Date();
+  const currentYear = Number(shanghaiDateKey(today).slice(0, 4));
   const start = new Date(Date.UTC(year, 0, 1));
   const end = new Date(Date.UTC(year, 11, 31));
   const result: StudyDay[] = [];
@@ -93,7 +104,7 @@ function buildYearData(year: number): StudyDay[] {
 
   while (cursor <= end) {
     const isFuture = cursor > today;
-    const active = !isFuture && seededValue(index + year * 7) > (year === 2026 ? 0.36 : 0.28);
+    const active = !isFuture && seededValue(index + year * 7) > (year === currentYear ? 0.36 : 0.28);
     const load = active ? 40 + Math.floor(seededValue(index * 5 + 11) * 360) : 0;
     const math = active ? Math.floor(load * (0.28 + seededValue(index + 3) * 0.18)) : 0;
     const english = active ? Math.floor(load * (0.12 + seededValue(index + 8) * 0.1)) : 0;
@@ -141,13 +152,14 @@ function formatTimer(seconds: number) {
 }
 
 function StudyHeatmap() {
-  const [year, setYear] = useState(2026);
+  const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
+  const [year, setYear] = useState(currentYear);
   const [scope, setScope] = useState<Scope>("all");
   const demoData = useMemo(() => buildYearData(year), [year]);
   const [remoteData, setRemoteData] = useState<StudyDay[] | null>(null);
   const [dataSource, setDataSource] = useState<"api" | "demo">("demo");
   const data = remoteData ?? demoData;
-  const [selectedDate, setSelectedDate] = useState("2026-08-10");
+  const [selectedDate, setSelectedDate] = useState(shanghaiDateKey(new Date()));
   const selectedDay = data.find((day) => day.date === selectedDate) ?? data[data.length - 1];
 
   useEffect(() => {
@@ -194,7 +206,7 @@ function StudyHeatmap() {
           <p>{activeDays} 个学习日 · {dataSource === "api" ? "来自真实学习会话" : "后端未连接，显示演示数据"}</p>
         </div>
         <div className="year-switch" aria-label="选择年份">
-          {[2026, 2025].map((item) => (
+          {[currentYear, currentYear - 1].map((item) => (
             <button key={item} className={year === item ? "active" : ""} onClick={() => setYear(item)}>{item}</button>
           ))}
         </div>
@@ -341,13 +353,15 @@ function TodayView() {
       });
       setTodayMinutes((value) => value + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setSessionStartedAt(null);
+      setPauseStartedAt(null);
+      setPausedSeconds(0);
+      setSeconds(0);
     } catch {
       setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
+      setPausedSeconds(finalPausedSeconds);
+      setPauseStartedAt(endedAt);
     }
-    setSessionStartedAt(null);
-    setPauseStartedAt(null);
-    setPausedSeconds(0);
-    setSeconds(0);
   }
 
   const completed = tasks.filter((task) => task.done).length;
@@ -356,7 +370,7 @@ function TodayView() {
     <>
       <div className="hero-row">
         <div>
-          <div className="eyebrow">2026年8月10日 · 距离初试还有 502 天</div>
+          <div className="eyebrow">{shanghaiDisplayDate(new Date())} · 基础阶段</div>
           <h1>早上好，林宇超</h1>
           <p>今天把注意力留给最重要的事。完成基础任务，就是向目标院校靠近一步。</p>
         </div>

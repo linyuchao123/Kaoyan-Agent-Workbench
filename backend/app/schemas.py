@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 Subject = Literal["math", "english", "politics", "cs408", "career"]
 
@@ -25,6 +25,13 @@ class StudySessionCreate(BaseModel):
     paused_seconds: int = Field(default=0, ge=0)
     source: Literal["timer", "manual"] = "timer"
     note: str = ""
+
+    @field_validator("started_at", "ended_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("study session timestamps must include a timezone")
+        return value
 
 
 class TaskCreate(BaseModel):

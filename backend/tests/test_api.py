@@ -64,6 +64,28 @@ class ApiFlowTests(TestCase):
         self.assertEqual(second.json()["status"], "applied")
         self.assertEqual(len(main.store.tasks), 1)
 
+    def test_separate_agent_runs_do_not_share_idempotency_key(self):
+        payload = {"message": "安排明天的 408 复习"}
+        first = self.client.post("/api/v1/agents/coach/runs", json=payload).json()
+        second = self.client.post("/api/v1/agents/coach/runs", json=payload).json()
+        self.assertNotEqual(
+            first["proposal"]["idempotency_key"], second["proposal"]["idempotency_key"]
+        )
+        self.client.post(f"/api/v1/proposals/{first['proposal']['id']}/approve")
+        self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
+        self.assertEqual(len(main.store.tasks), 2)
+
+    def test_naive_session_timestamp_is_rejected(self):
+        response = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "subject": "math",
+                "started_at": "2026-08-10T09:00:00",
+                "ended_at": "2026-08-10T10:00:00",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
     def test_document_upload_deduplicates_and_blocks_private_url(self):
         content = b"# Limits\nDefinition and examples"
         first = self.client.post(
