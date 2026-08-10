@@ -1,9 +1,11 @@
 {
   "name": "kaoyan-agent-workbench",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "AI-powered postgraduate exam study workbench with RAG and dual agents.",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "dev:api": "backend/.venv/bin/uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000",
@@ -14,6 +16,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.2",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },

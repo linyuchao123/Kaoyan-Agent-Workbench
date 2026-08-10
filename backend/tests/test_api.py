@@ -1,19 +1,44 @@
+from datetime import UTC, datetime
 from unittest import TestCase
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
 from app import main
+from app.auth import AuthUser, InvalidTokenError, get_current_user
+from app.services.repository import DemoRepository
 
 
 class ApiFlowTests(TestCase):
     def setUp(self):
-        main.store.tasks.clear()
-        main.store.sessions.clear()
+        self.previous_repository = main.repository
+        main.repository = DemoRepository(
+            now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC)
+        )
+        self.user = AuthUser(
+            id=UUID("11111111-1111-1111-1111-111111111111"),
+            email="one@example.com",
+            access_token="user-one-token",
+        )
+        self.current_user = self.user
+
+        async def authenticated_user() -> AuthUser:
+            return self.current_user
+
+        main.app.dependency_overrides[get_current_user] = authenticated_user
+        main.import_proposals.clear()
         main.action_proposals.clear()
         main.applied_proposals.clear()
         main.demo_documents.clear()
         main.document_ids_by_hash.clear()
         self.client = TestClient(main.app)
+
+    def tearDown(self):
+        main.app.dependency_overrides.clear()
+        main.repository = self.previous_repository
+
+    def task_count(self) -> int:
+        return len(self.client.get("/api/v1/tasks").json())
 
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
@@ -55,14 +80,14 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertEqual(body["route"], "combined")
         self.assertEqual(body["retrieval_mode"], "hybrid")
-        self.assertEqual(len(main.store.tasks), 0)
+        self.assertEqual(self.task_count(), 0)
 
         proposal_id = body["proposal"]["id"]
         first = self.client.post(f"/api/v1/proposals/{proposal_id}/approve")
         second = self.client.post(f"/api/v1/proposals/{proposal_id}/approve")
         self.assertEqual(first.json()["status"], "applied")
         self.assertEqual(second.json()["status"], "applied")
-        self.assertEqual(len(main.store.tasks), 1)
+        self.assertEqual(self.task_count(), 1)
 
     def test_separate_agent_runs_do_not_share_idempotency_key(self):
         payload = {"message": "安排明天的 408 复习"}
@@ -73,7 +98,58 @@ class ApiFlowTests(TestCase):
         )
         self.client.post(f"/api/v1/proposals/{first['proposal']['id']}/approve")
         self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
-        self.assertEqual(len(main.store.tasks), 2)
+        self.assertEqual(self.task_count(), 2)
+
+    def test_users_cannot_read_or_modify_each_others_tasks(self):
+        first = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "用户一任务", "subject": "math", "planned_minutes": 30},
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/tasks").json(), [])
+        self.assertEqual(
+            self.client.patch(f"/api/v1/tasks/{first['id']}", json={"completed": True}).status_code,
+            404,
+        )
+        self.current_user = self.user
+        self.assertEqual(self.task_count(), 1)
+
+    def test_client_cannot_choose_the_task_owner(self):
+        response = self.client.post(
+            "/api/v1/tasks",
+            json={
+                "title": "伪造归属",
+                "subject": "math",
+                "planned_minutes": 30,
+                "user_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.task_count(), 0)
+
+    def test_missing_and_invalid_tokens_return_401(self):
+        main.app.dependency_overrides.clear()
+        self.assertEqual(self.client.get("/api/v1/tasks").status_code, 401)
+
+        class RejectVerifier:
+            async def verify(self, access_token: str) -> AuthUser:
+                raise InvalidTokenError("expired or invalid access token")
+
+        from app import auth
+
+        previous = auth.token_verifier
+        auth.token_verifier = RejectVerifier()
+        try:
+            response = self.client.get(
+                "/api/v1/tasks", headers={"Authorization": "Bearer expired-token"}
+            )
+        finally:
+            auth.token_verifier = previous
+        self.assertEqual(response.status_code, 401)
 
     def test_naive_session_timestamp_is_rejected(self):
         response = self.client.post(

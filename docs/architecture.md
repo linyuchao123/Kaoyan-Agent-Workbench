@@ -30,7 +30,7 @@ LangGraph 主路由
 - 文档正文永远是不可信输入，不能改变系统提示词或直接调用工具。
 - Agent 不拥有直接写业务表的工具，只能创建 `action_proposal`；应用提案时使用幂等键和事务。
 - 数据库通过 GiST 排他约束拒绝同一用户的重叠会话；贡献视图按用户时区拆分跨日会话，并按比例扣除暂停时间。
-- 本地 `DEMO_MODE=true` 使用进程内仓库完成接口联调；它不是最终事实来源，配置 Supabase 后由 PostgreSQL 接管持久化。
+- `DEMO_MODE=true` 使用按用户隔离的进程内 Repository；`DEMO_MODE=false` 切换到 Supabase Repository，所有 PostgREST 请求携带用户 JWT 并继续受到 RLS 约束。
 
 ## RAG 数据流
 
@@ -44,7 +44,8 @@ LangGraph 主路由
 
 ## 当前实现层级
 
-- `v0.2`：前端已连接任务、会话、贡献、资料上传和 Agent 提案 API，离线时明确回退为演示状态；FastAPI 当前使用进程内开发仓库，Supabase repository 尚待接线。
+- `v0.3`：前端已接入 Supabase 邮箱密码登录、会话恢复与退出；FastAPI 通过 Supabase Auth 验证 Bearer Token，并将任务、会话和贡献统计切换到可配置的 Supabase Repository。
+- 仓库边界：Demo Repository 用于测试和离线联调；Supabase Repository 使用用户 JWT 访问 PostgREST，不使用前端提交的 `user_id`，云端模式下数据可跨设备持久化。
 - 数据迁移：覆盖计划、任务、会话、知识点、做题记录、错题复习、院校、求职、资料、搜索、Agent 和审计实体。
 - 私有资料：Markdown 按标题切分，PDF 按页切分；低文本密度 PDF 标记为 `ocr_required`，待接入正式 OCR worker。
 - 联网资料：预览阶段校验公开 URL，默认不保存；批准导入后才进入下载、解析和向量化队列。

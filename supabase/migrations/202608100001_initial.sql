@@ -284,15 +284,51 @@ with session_slices as (
     count(distinct id)::integer as session_count
   from session_slices
   group by user_id, study_date, subject
+), session_daily as (
+  select
+    user_id,
+    study_date,
+    sum(effective_minutes)::integer as effective_minutes,
+    sum(session_count)::integer as session_count,
+    jsonb_object_agg(subject, effective_minutes order by subject) as subject_minutes
+  from subject_daily
+  group by user_id, study_date
+), task_daily as (
+  select
+    t.user_id,
+    (t.completed_at at time zone p.timezone)::date as study_date,
+    count(*)::integer as completed_tasks
+  from public.tasks t
+  join public.profiles p on p.id = t.user_id
+  where t.completed_at is not null
+  group by t.user_id, (t.completed_at at time zone p.timezone)::date
+), mistake_daily as (
+  select
+    m.user_id,
+    (m.created_at at time zone p.timezone)::date as study_date,
+    count(*)::integer as mistake_count
+  from public.mistake_cards m
+  join public.profiles p on p.id = m.user_id
+  group by m.user_id, (m.created_at at time zone p.timezone)::date
+), activity_days as (
+  select user_id, study_date from session_daily
+  union
+  select user_id, study_date from task_daily
+  union
+  select user_id, study_date from mistake_daily
 )
 select
-  user_id,
-  study_date,
-  sum(effective_minutes)::integer as effective_minutes,
-  sum(session_count)::integer as session_count,
-  jsonb_object_agg(subject, effective_minutes order by subject) as subject_minutes
-from subject_daily
-group by user_id, study_date;
+  a.user_id,
+  a.study_date,
+  coalesce(s.effective_minutes, 0)::integer as effective_minutes,
+  coalesce(s.session_count, 0)::integer as session_count,
+  coalesce(t.completed_tasks, 0)::integer as completed_tasks,
+  coalesce(m.mistake_count, 0)::integer as mistake_count,
+  coalesce(s.subject_minutes, '{}'::jsonb) as subject_minutes
+from activity_days a
+left join session_daily s using (user_id, study_date)
+left join task_daily t using (user_id, study_date)
+left join mistake_daily m using (user_id, study_date);
 
 create or replace function public.match_document_chunks(
   query_embedding extensions.vector(1536),

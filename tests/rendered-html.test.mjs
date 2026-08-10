@@ -10,13 +10,13 @@ async function render() {
   }, { waitUntil() {}, passThroughOnException() {} });
 }
 
-test("server-renders the 研途 workbench", async () => {
+test("server-renders the 研途 authentication loading shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
   assert.match(html, /研途/);
   assert.match(html, /AI 考研工作台/);
-  assert.match(html, /今日工作台/);
+  assert.match(html, /正在恢复登录状态/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
 });

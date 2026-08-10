@@ -7,3 +7,17 @@ class MigrationContractTests(TestCase):
         sql = Path("supabase/migrations/202608100001_initial.sql").read_text()
         self.assertIn("create policy audit_logs_owner_select", sql)
         self.assertNotIn("'action_proposals','audit_logs'", sql)
+
+    def test_core_cloud_tables_and_contribution_view_are_user_scoped(self):
+        sql = Path("supabase/migrations/202608100001_initial.sql").read_text()
+        for table in ("tasks", "study_sessions"):
+            self.assertIn(f"alter table public.{table} enable row level security", sql)
+        self.assertIn("with (security_invoker = true)", sql)
+        self.assertIn("completed_tasks", sql)
+        self.assertIn("mistake_count", sql)
+        self.assertIn("user_id = auth.uid()", sql)
+
+    def test_security_invoker_contribution_view_can_read_its_source_tables(self):
+        sql = Path("supabase/migrations/202608100002_cloud_study_loop.sql").read_text()
+        self.assertIn("grant select on public.profiles to authenticated", sql)
+        self.assertIn("grant select on public.mistake_cards to authenticated", sql)

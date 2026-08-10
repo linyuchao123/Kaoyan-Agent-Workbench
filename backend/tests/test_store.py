@@ -7,7 +7,10 @@ from app.services.store import DemoStore, SessionOverlapError
 
 class DemoStoreTests(TestCase):
     def setUp(self):
-        self.store = DemoStore("Asia/Shanghai")
+        self.store = DemoStore(
+            "Asia/Shanghai",
+            now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC),
+        )
         self.start = datetime(2026, 8, 10, 1, tzinfo=UTC)
 
     def test_task_completion_is_counted(self):

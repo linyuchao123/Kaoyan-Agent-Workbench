@@ -2,9 +2,13 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 Subject = Literal["math", "english", "politics", "cs408", "career"]
+
+
+class StrictRequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ContributionDay(BaseModel):
@@ -18,7 +22,7 @@ class ContributionDay(BaseModel):
     subject_minutes: dict[str, int] = Field(default_factory=dict)
 
 
-class StudySessionCreate(BaseModel):
+class StudySessionCreate(StrictRequestModel):
     subject: Subject
     started_at: datetime
     ended_at: datetime
@@ -34,21 +38,21 @@ class StudySessionCreate(BaseModel):
         return value
 
 
-class TaskCreate(BaseModel):
+class TaskCreate(StrictRequestModel):
     title: str = Field(min_length=1, max_length=160)
     subject: Subject
     planned_minutes: int = Field(default=30, ge=1, le=1440)
     due_at: datetime | None = None
 
 
-class TaskUpdate(BaseModel):
+class TaskUpdate(StrictRequestModel):
     title: str | None = Field(default=None, min_length=1, max_length=160)
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None
 
 
-class WebSearchRequest(BaseModel):
+class WebSearchRequest(StrictRequestModel):
     query: str = Field(min_length=2, max_length=500)
     include_domains: list[str] = Field(default_factory=list)
     recency_days: int | None = Field(default=None, ge=1, le=3650)
@@ -62,7 +66,7 @@ class SearchSource(BaseModel):
     source_type: Literal["web", "private"] = "web"
 
 
-class ImportPreviewRequest(BaseModel):
+class ImportPreviewRequest(StrictRequestModel):
     url: HttpUrl
 
 
@@ -76,7 +80,7 @@ class ImportProposal(BaseModel):
     status: Literal["pending", "approved", "rejected"] = "pending"
 
 
-class AgentRunRequest(BaseModel):
+class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: str | None = None
 

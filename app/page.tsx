@@ -1,7 +1,9 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { api, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import type { User } from "@supabase/supabase-js";
+import { api, setApiAccessToken, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
 type View = "today" | "plan" | "subjects" | "schools" | "materials" | "agents";
@@ -123,6 +125,25 @@ function buildYearData(year: number): StudyDay[] {
   return result;
 }
 
+function buildEmptyYearData(year: number): StudyDay[] {
+  const start = new Date(Date.UTC(year, 0, 1));
+  const end = new Date(Date.UTC(year, 11, 31));
+  const result: StudyDay[] = [];
+  const cursor = new Date(start);
+
+  while (cursor <= end) {
+    result.push({
+      date: formatDate(cursor),
+      minutes: { math: 0, english: 0, politics: 0, cs408: 0, career: 0 },
+      sessions: 0,
+      tasks: 0,
+      mistakes: 0,
+    });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
+
 function getMinutes(day: StudyDay, scope: Scope) {
   if (scope === "all") return Object.values(day.minutes).reduce((sum, value) => sum + value, 0);
   return day.minutes[scope];
@@ -151,42 +172,49 @@ function formatTimer(seconds: number) {
   return `${hours}:${minutes}:${secs}`;
 }
 
-function StudyHeatmap() {
+function StudyHeatmap({ isDemo }: { isDemo: boolean }) {
   const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
   const [year, setYear] = useState(currentYear);
   const [scope, setScope] = useState<Scope>("all");
   const demoData = useMemo(() => buildYearData(year), [year]);
-  const [remoteData, setRemoteData] = useState<StudyDay[] | null>(null);
-  const [dataSource, setDataSource] = useState<"api" | "demo">("demo");
-  const data = remoteData ?? demoData;
+  const emptyData = useMemo(() => buildEmptyYearData(year), [year]);
+  const queryKey = `${year}:${scope}`;
+  const [cloudData, setCloudData] = useState<{ key: string; status: "api" | "error"; data: StudyDay[] | null } | null>(null);
+  const dataSource = isDemo ? "demo" : cloudData?.key === queryKey ? cloudData.status : "loading";
+  const remoteData = cloudData?.key === queryKey ? cloudData.data : null;
+  const data = dataSource === "demo" ? demoData : remoteData ?? emptyData;
   const [selectedDate, setSelectedDate] = useState(shanghaiDateKey(new Date()));
   const selectedDay = data.find((day) => day.date === selectedDate) ?? data[data.length - 1];
 
   useEffect(() => {
+    if (isDemo) return;
     let cancelled = false;
     api.contributions(`${year}-01-01`, `${year}-12-31`, scope)
       .then((days) => {
         if (cancelled) return;
-        setRemoteData(days.map((day) => ({
-          date: day.date,
-          minutes: {
-            math: day.subject_minutes.math ?? 0,
-            english: day.subject_minutes.english ?? 0,
-            politics: day.subject_minutes.politics ?? 0,
-            cs408: day.subject_minutes.cs408 ?? 0,
-            career: day.subject_minutes.career ?? 0,
-          },
-          sessions: day.session_count,
-          tasks: day.completed_tasks,
-          mistakes: day.mistake_count,
-        })));
-        setDataSource("api");
+        setCloudData({
+          key: queryKey,
+          status: "api",
+          data: days.map((day) => ({
+            date: day.date,
+            minutes: {
+              math: day.subject_minutes.math ?? 0,
+              english: day.subject_minutes.english ?? 0,
+              politics: day.subject_minutes.politics ?? 0,
+              cs408: day.subject_minutes.cs408 ?? 0,
+              career: day.subject_minutes.career ?? 0,
+            },
+            sessions: day.session_count,
+            tasks: day.completed_tasks,
+            mistakes: day.mistake_count,
+          })),
+        });
       })
       .catch(() => {
-        if (!cancelled) setDataSource("demo");
+        if (!cancelled) setCloudData({ key: queryKey, status: "error", data: null });
       });
     return () => { cancelled = true; };
-  }, [scope, year]);
+  }, [isDemo, queryKey, scope, year]);
 
   const padded = useMemo(() => {
     const first = new Date(`${year}-01-01T00:00:00Z`);
@@ -196,14 +224,28 @@ function StudyHeatmap() {
   const weeks = Array.from({ length: Math.ceil(padded.length / 7) }, (_, index) => padded.slice(index * 7, index * 7 + 7));
   const totalMinutes = data.reduce((sum, day) => sum + getMinutes(day, scope), 0);
   const activeDays = data.filter((day) => getMinutes(day, scope) > 0).length;
+  const isLoading = dataSource === "loading";
+  const hasError = dataSource === "error";
 
   return (
-    <section className="panel heatmap-panel">
+    <section className="panel heatmap-panel" aria-busy={isLoading}>
       <div className="panel-heading heatmap-heading">
         <div>
           <div className="eyebrow">学习轨迹</div>
-          <h2>{year} 年有效学习 {Math.round(totalMinutes / 60)} 小时</h2>
-          <p>{activeDays} 个学习日 · {dataSource === "api" ? "来自真实学习会话" : "后端未连接，显示演示数据"}</p>
+          <h2 className={isLoading ? "cloud-loading-text" : undefined}>
+            {isLoading
+              ? "正在加载云端学习数据…"
+              : hasError
+                ? "云端学习数据加载失败"
+                : `${year} 年有效学习 ${Math.round(totalMinutes / 60)} 小时`}
+          </h2>
+          <p>
+            {isLoading
+              ? "正在读取学习会话与年度统计"
+              : hasError
+                ? "请确认数据服务已启动后刷新页面"
+                : `${activeDays} 个学习日 · ${dataSource === "api" ? "来自真实学习会话" : "离线演示数据"}`}
+          </p>
         </div>
         <div className="year-switch" aria-label="选择年份">
           {[currentYear, currentYear - 1].map((item) => (
@@ -224,7 +266,7 @@ function StudyHeatmap() {
         </div>
         <div className="heatmap-body">
           <div className="weekday-labels" aria-hidden="true"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div>
-          <div className="heatmap-grid" role="grid" aria-label={`${year} 学习贡献热力图`}>
+          <div className={`heatmap-grid ${isLoading ? "loading" : ""}`} role="grid" aria-label={`${year} 学习贡献热力图`}>
             {weeks.map((week, weekIndex) => (
               <div className="heatmap-week" key={weekIndex} role="row">
                 {Array.from({ length: 7 }, (_, dayIndex) => {
@@ -250,11 +292,19 @@ function StudyHeatmap() {
 
       <div className="heatmap-footer">
         <div className="selected-summary">
-          <strong>{selectedDay.date}</strong>
-          <span>{formatMinutes(getMinutes(selectedDay, scope))}</span>
-          <span>{selectedDay.sessions} 次专注</span>
-          <span>{selectedDay.tasks} 项完成</span>
-          <span>{selectedDay.mistakes} 道错题</span>
+          {isLoading ? (
+            <span className="cloud-loading-text">正在同步云端统计…</span>
+          ) : hasError ? (
+            <span>暂时无法读取学习统计</span>
+          ) : (
+            <>
+              <strong>{selectedDay.date}</strong>
+              <span>{formatMinutes(getMinutes(selectedDay, scope))}</span>
+              <span>{selectedDay.sessions} 次专注</span>
+              <span>{selectedDay.tasks} 项完成</span>
+              <span>{selectedDay.mistakes} 道错题</span>
+            </>
+          )}
         </div>
         <div className="legend"><span>少</span>{[0, 1, 2, 3, 4].map((level) => <i className={`level-${level}`} key={level} />)}<span>多</span></div>
       </div>
@@ -262,8 +312,8 @@ function StudyHeatmap() {
   );
 }
 
-function TodayView() {
-  const [tasks, setTasks] = useState(initialTasks);
+function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: string }) {
+  const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
   const [focusSubject, setFocusSubject] = useState<Subject>("math");
@@ -272,19 +322,29 @@ function TodayView() {
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
-  const [todayMinutes, setTodayMinutes] = useState(260);
-  const [recordStatus, setRecordStatus] = useState("演示数据 · 启动 API 后自动同步");
+  const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
+  const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
+  const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
 
   useEffect(() => {
+    if (isDemo) return;
+    let active = true;
     const today = shanghaiDateKey(new Date());
     Promise.all([api.today(), api.contributions(today, today, "all")])
       .then(([snapshot, contributions]) => {
+        if (!active) return;
         setTasks(snapshot.tasks.map(taskFromApi));
         setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
-        setRecordStatus("已连接本地 API · 数据来自学习会话");
+        setCloudState("ready");
+        setRecordStatus("已同步至 Supabase 云端 · 数据来自学习会话");
       })
-      .catch(() => setRecordStatus("后端未连接 · 当前操作保留在本页"));
-  }, []);
+      .catch(() => {
+        if (!active) return;
+        setCloudState("error");
+        setRecordStatus("云端学习数据加载失败 · 请检查数据服务后刷新页面");
+      });
+    return () => { active = false; };
+  }, [isDemo]);
 
   useEffect(() => {
     if (!running) return;
@@ -299,6 +359,10 @@ function TodayView() {
     const temporaryId = `local-${Date.now()}`;
     setTasks((items) => [...items, { id: temporaryId, title, detail: "计划 30 分钟", subject: newTaskSubject, done: false }]);
     setNewTask("");
+    if (isDemo) {
+      setRecordStatus("演示任务仅保留在当前页面");
+      return;
+    }
     try {
       const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30 });
       setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved) : item));
@@ -342,6 +406,15 @@ function TodayView() {
     const endedAt = new Date();
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
     setRunning(false);
+    if (isDemo) {
+      setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
+      setRecordStatus(`演示专注已记录在本页 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setSessionStartedAt(null);
+      setPauseStartedAt(null);
+      setPausedSeconds(0);
+      setSeconds(0);
+      return;
+    }
     try {
       await api.createSession({
         subject: focusSubject,
@@ -351,7 +424,7 @@ function TodayView() {
         source: "timer",
         note: "由今日工作台计时器记录",
       });
-      setTodayMinutes((value) => value + Math.floor(seconds / 60));
+      setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setSessionStartedAt(null);
       setPauseStartedAt(null);
@@ -371,26 +444,28 @@ function TodayView() {
       <div className="hero-row">
         <div>
           <div className="eyebrow">{shanghaiDisplayDate(new Date())} · 基础阶段</div>
-          <h1>早上好，林宇超</h1>
+          <h1>早上好，{displayName}</h1>
           <p>今天把注意力留给最重要的事。完成基础任务，就是向目标院校靠近一步。</p>
         </div>
         <button className="primary-button" onClick={beginFocus}>＋ 开始一次专注</button>
       </div>
 
       <div className="metric-grid">
-        <article className="metric-card accent"><span>今日有效学习</span><strong>{Math.floor(todayMinutes / 60)}<small>h</small> {todayMinutes % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round(todayMinutes / 360 * 100))}%</em></article>
+        <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round((todayMinutes ?? 0) / 360 * 100))}%</em></>}</article>
         <article className="metric-card"><span>本周完成率</span><strong>68<small>%</small></strong><em>已完成 17 / 25 项</em></article>
         <article className="metric-card"><span>连续学习</span><strong>12<small>天</small></strong><em>最长记录 28 天</em></article>
         <article className="metric-card"><span>待复习错题</span><strong>16<small>道</small></strong><em>数学 7 · 408 9</em></article>
       </div>
 
-      <StudyHeatmap />
+      <StudyHeatmap isDemo={isDemo} />
 
       <div className="dashboard-grid">
         <section className="panel task-panel">
-          <div className="panel-heading compact"><div><div className="eyebrow">今日清单</div><h2>{completed} / {tasks.length} 已完成</h2></div><span className="subtle-pill">考研 60% · 项目 40%</span></div>
+          <div className="panel-heading compact"><div><div className="eyebrow">今日清单</div><h2>{cloudState === "loading" ? "正在加载云端任务…" : `${completed} / ${tasks.length} 已完成`}</h2></div><span className="subtle-pill">考研 60% · 项目 40%</span></div>
           <div className="progress-track"><span style={{ width: `${tasks.length ? (completed / tasks.length) * 100 : 0}%` }} /></div>
           <div className="task-list">
+            {cloudState === "loading" && <div className="task-loading cloud-loading-text">正在同步你的今日任务…</div>}
+            {cloudState === "ready" && tasks.length === 0 && <div className="task-loading">今天还没有任务，可以从下方添加第一项。</div>}
             {tasks.map((task) => (
               <label className={`task-item ${task.done ? "done" : ""}`} key={task.id}>
                 <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
@@ -452,7 +527,7 @@ function SchoolsView() {
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button">＋ 添加院校</button></div><div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.name + school.tier}><div className={`tier tier-${school.tier}`}>{school.tier}</div><div className="school-main"><span>{school.year}</span><h2>{school.name}</h2><p>{school.major}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exams}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.city}</strong></div><button className="more-button">查看档案 →</button></article>)}</div></section>;
 }
 
-function MaterialsView() {
+function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState([
     { name: "王道数据结构 2027.pdf", type: "PDF · 486 页", status: "演示索引", tag: "408" },
@@ -466,6 +541,11 @@ function MaterialsView() {
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (isDemo) {
+      setImportStatus("当前为离线演示模式；登录后才能安全导入个人资料");
+      event.target.value = "";
+      return;
+    }
     setBusy(true);
     setImportStatus(`正在解析 ${file.name}…`);
     try {
@@ -484,6 +564,10 @@ function MaterialsView() {
   async function previewUrl(event: FormEvent) {
     event.preventDefault();
     if (!sourceUrl.trim()) return;
+    if (isDemo) {
+      setImportStatus("当前为离线演示模式；登录后才能生成导入提案");
+      return;
+    }
     setBusy(true);
     try {
       const preview = await api.previewImport(sourceUrl.trim());
@@ -496,10 +580,10 @@ function MaterialsView() {
     }
   }
 
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{docs.length} 份资料</h2></div><span className="subtle-pill">混合检索已开启</span></div>{docs.map((doc) => <div className="document-row" key={`${doc.name}-${doc.status}`}><span className="document-icon">▤</span><div><strong>{doc.name}</strong><small>{doc.type}</small></div><em>{doc.tag}</em><span className="document-status">● {doc.status}</span></div>)}</section></div></section>;
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{docs.length} 份资料</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "混合检索准备中"}</span></div>{docs.map((doc) => <div className="document-row" key={`${doc.name}-${doc.status}`}><span className="document-icon">▤</span><div><strong>{doc.name}</strong><small>{doc.type}</small></div><em>{doc.tag}</em><span className="document-status">● {doc.status}</span></div>)}</section></div></section>;
 }
 
-function AgentsView() {
+function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
@@ -513,6 +597,10 @@ function AgentsView() {
     const text = query.trim();
     setMessages((items) => [...items, { role: "user", text }]);
     setQuery("");
+    if (isDemo) {
+      setMessages((items) => [...items, { role: "agent", text: "当前为离线演示模式。登录并连接 Supabase 后，Agent 才能读取你的个人学习数据。" }]);
+      return;
+    }
     setBusy(true);
     try {
       const result = await api.runAgent(mode, text, threadId);
@@ -549,15 +637,75 @@ function AgentsView() {
   return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
-export default function Home() {
+function AuthScreen() {
+  const [mode, setMode] = useState<"login" | "register">("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      const result = mode === "login"
+        ? await client.auth.signInWithPassword({ email: email.trim(), password })
+        : await client.auth.signUp({ email: email.trim(), password });
+      if (result.error) {
+        setStatus(result.error.message);
+      } else if (mode === "register" && !result.data.session) {
+        setStatus("注册成功，请前往邮箱完成验证后登录。");
+        setMode("login");
+      } else {
+        setStatus("登录成功，正在加载你的学习数据…");
+      }
+    } catch {
+      setStatus("暂时无法连接登录服务，请检查网络后重试。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="auth-shell">
+      <section className="auth-brand-panel">
+        <div className="brand auth-brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
+        <div><div className="eyebrow">2028 考研长期工作台</div><h1>让每一天的投入，<br />都留下可以复盘的证据。</h1><p>任务、专注、热力图和学习资料统一保存在你的个人云端空间。</p></div>
+        <div className="auth-proof"><span>01</span><p><strong>数据长期保存</strong><small>重启和换设备后，学习记录依然存在</small></p></div>
+        <div className="auth-proof"><span>02</span><p><strong>严格个人隔离</strong><small>每个账户只能访问自己的任务与资料</small></p></div>
+      </section>
+      <section className="auth-form-panel">
+        <div className="auth-card">
+          <span className="auth-kicker">SUPABASE CLOUD</span>
+          <h2>{mode === "login" ? "欢迎回来" : "创建学习账户"}</h2>
+          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : "第一版使用邮箱和密码注册。"}</p>
+          <form onSubmit={submit}>
+            <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>
+            <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /></label>
+            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : "注册账户"}</button>
+          </form>
+          {status && <div className="auth-status" role="status">{status}</div>}
+          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "已有账户？返回登录"}</button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
   const [view, setView] = useState<View>("today");
-  const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">("checking");
-  const content = { today: <TodayView key={apiStatus} />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView />, agents: <AgentsView /> }[view];
+  const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const displayName = user?.email?.split("@")[0] || "林宇超";
+  const avatar = displayName.slice(0, 2).toUpperCase();
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
     const check = () => api.health()
-      .then(() => { if (active) setApiStatus("online"); })
+      .then((health) => { if (active) setApiStatus(health.mode === "supabase" ? "cloud" : "demo"); })
       .catch(() => { if (active) setApiStatus("offline"); });
     void check();
     const timer = window.setInterval(check, 15_000);
@@ -570,13 +718,56 @@ export default function Home() {
         <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
         <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
         <div className="sidebar-goal"><span>2028 考研目标</span><strong>长三角 · 软件工程专硕</strong><div className="progress-track"><span style={{ width: "18%" }} /></div><small>基础阶段 · 第 3 周</small></div>
-        <div className="profile"><span>LY</span><div><strong>林宇超</strong><small>苏大应院 · 软件工程</small></div><button aria-label="打开设置">•••</button></div>
+        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${apiStatus}`}><i /> {apiStatus === "online" ? "本地 API 已连接" : apiStatus === "offline" ? "离线演示模式" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
     </main>
   );
+}
+
+export default function Home() {
+  const [authState, setAuthState] = useState<{ status: "loading" | "demo" | "signed_out" | "signed_in"; user: User | null }>(() => ({
+    status: isSupabaseConfigured ? "loading" : "demo",
+    user: null,
+  }));
+
+  useEffect(() => {
+    const client = getSupabaseClient();
+    if (!client) {
+      setApiAccessToken(null);
+      return;
+    }
+    let active = true;
+    void client.auth.getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        setApiAccessToken(data.session?.access_token ?? null);
+        setAuthState({ status: data.session ? "signed_in" : "signed_out", user: data.session?.user ?? null });
+      })
+      .catch(() => {
+        if (!active) return;
+        setApiAccessToken(null);
+        setAuthState({ status: "signed_out", user: null });
+      });
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      setApiAccessToken(session?.access_token ?? null);
+      setAuthState({ status: session ? "signed_in" : "signed_out", user: session?.user ?? null });
+    });
+    return () => { active = false; subscription.unsubscribe(); };
+  }, []);
+
+  async function signOut() {
+    const client = getSupabaseClient();
+    if (client) await client.auth.signOut();
+    setApiAccessToken(null);
+  }
+
+  if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
+  if (authState.status === "signed_out") return <AuthScreen />;
+  return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
 }
