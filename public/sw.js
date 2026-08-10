@@ -1,4 +1,4 @@
-const CACHE_NAME = "yantu-shell-v2";
+const CACHE_NAME = "yantu-shell-v3";
 const SHELL_FILES = ["/", "/manifest.webmanifest", "/favicon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -15,6 +15,13 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || event.request.url.includes("/api/")) return;
+  const url = new URL(event.request.url);
+  if (
+    url.origin !== self.location.origin
+    || url.pathname.startsWith("/@")
+    || url.pathname.startsWith("/__")
+    || url.pathname.startsWith("/node_modules/")
+  ) return;
   if (event.request.mode === "navigate") {
     event.respondWith(fetch(event.request).catch(() => caches.match("/")));
     return;

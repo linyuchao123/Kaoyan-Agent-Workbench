@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -14,8 +15,13 @@ class SessionOverlapError(ValueError):
 class DemoStore:
     """Process-local store used until Supabase credentials are configured."""
 
-    def __init__(self, timezone_name: str = "Asia/Shanghai") -> None:
+    def __init__(
+        self,
+        timezone_name: str = "Asia/Shanghai",
+        now_factory: Callable[[], datetime] | None = None,
+    ) -> None:
         self.timezone = ZoneInfo(timezone_name)
+        self.now = now_factory or (lambda: datetime.now(UTC))
         self.tasks: dict[UUID, dict] = {}
         self.sessions: dict[UUID, dict] = {}
 
@@ -23,7 +29,7 @@ class DemoStore:
         return sorted(self.tasks.values(), key=lambda item: item["created_at"])
 
     def create_task(self, payload: TaskCreate) -> dict:
-        now = datetime.now(UTC)
+        now = self.now()
         item = {
             "id": uuid4(),
             **payload.model_dump(),
@@ -41,9 +47,9 @@ class DemoStore:
             return None
         changes = payload.model_dump(exclude_unset=True)
         if "completed" in changes:
-            changes["completed_at"] = datetime.now(UTC) if changes["completed"] else None
+            changes["completed_at"] = self.now() if changes["completed"] else None
         item.update(changes)
-        item["updated_at"] = datetime.now(UTC)
+        item["updated_at"] = self.now()
         return item
 
     def list_sessions(self) -> list[dict]:
@@ -56,7 +62,7 @@ class DemoStore:
                 and payload.ended_at > current["started_at"]
             ):
                 raise SessionOverlapError("study session overlaps an existing session")
-        now = datetime.now(UTC)
+        now = self.now()
         item = {"id": uuid4(), **payload.model_dump(), "created_at": now, "updated_at": now}
         self.sessions[item["id"]] = item
         return item

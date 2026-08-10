@@ -29,10 +29,16 @@ export type ActionProposal = {
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+let accessToken: string | null = null;
+
+export function setApiAccessToken(token: string | null) {
+  accessToken = token;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) headers.set("Content-Type", "application/json");
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     headers,
@@ -45,7 +51,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string; mode: string }>("/health"),
+  health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
