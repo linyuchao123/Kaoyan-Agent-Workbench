@@ -29,3 +29,10 @@ class MigrationContractTests(TestCase):
         self.assertIn("insert into public.review_events", sql)
         self.assertIn("update public.mistake_cards", sql)
         self.assertIn("grant execute on function public.review_mistake_card", sql)
+
+    def test_authenticated_users_can_access_plans_through_rls(self):
+        sql = Path("supabase/migrations/202608110003_grant_plan_access.sql").read_text()
+        self.assertIn(
+            "grant select, insert, update, delete on public.plans to authenticated",
+            sql,
+        )
