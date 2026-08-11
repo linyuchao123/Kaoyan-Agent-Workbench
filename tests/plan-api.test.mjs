@@ -122,3 +122,44 @@ test("日计划写入时归属于周计划且起止日期一致", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("计划支持修改与删除并正确处理无内容响应", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    if (init?.method === "DELETE") return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      parent_id: null,
+      level: "stage",
+      title: "基础阶段（已调整）",
+      description: "完成第一轮基础",
+      starts_on: "2026-09-01",
+      ends_on: "2027-02-28",
+      status: "active",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const updated = await api.updatePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", {
+      title: "基础阶段（已调整）",
+    });
+    await api.deletePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    assert.equal(updated.title, "基础阶段（已调整）");
+    assert.equal(requests[0].init.method, "PATCH");
+    assert.equal(requests[1].init.method, "DELETE");
+    assert.match(requests[1].input, /\/api\/v1\/plans\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa$/);
+    for (const request of requests) {
+      assert.equal(
+        new Headers(request.init.headers).get("Authorization"),
+        "Bearer current-user-token",
+      );
+    }
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

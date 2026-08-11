@@ -91,6 +91,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(response.status, detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -107,6 +108,13 @@ export const api = {
     ends_on: string;
     status?: PlanStatus;
   }) => request<ApiPlan>("/api/v1/plans", { method: "POST", body: JSON.stringify(payload) }),
+  updatePlan: (id: string, payload: {
+    title?: string;
+    description?: string;
+    starts_on?: string;
+    ends_on?: string;
+  }) => request<ApiPlan>(`/api/v1/plans/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
   createTask: (payload: { title: string; subject: Subject; planned_minutes: number }) =>
