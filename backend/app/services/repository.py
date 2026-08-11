@@ -8,7 +8,7 @@ import httpx
 from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
-from app.schemas import ContributionDay, StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import ContributionDay, PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
 from app.services.store import DemoStore
 
 
@@ -20,8 +20,16 @@ class RepositoryConflictError(RepositoryError):
     pass
 
 
+class RepositoryValidationError(RepositoryError):
+    pass
+
+
 class StudyRepository(Protocol):
     mode: str
+
+    async def list_plans(self, user: AuthUser, level: str | None = None) -> list[dict]: ...
+
+    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict: ...
 
     async def list_tasks(self, user: AuthUser) -> list[dict]: ...
 
@@ -58,9 +66,16 @@ class DemoRepository:
         self.stores.clear()
 
     def _store(self, user: AuthUser) -> DemoStore:
-        return self.stores.setdefault(
-            user.id, DemoStore(self.timezone_name, self.now_factory)
-        )
+        return self.stores.setdefault(user.id, DemoStore(self.timezone_name, self.now_factory))
+
+    async def list_plans(self, user: AuthUser, level: str | None = None) -> list[dict]:
+        return self._store(user).list_plans(level)
+
+    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
+        try:
+            return self._store(user).create_plan(payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
 
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_tasks()
@@ -68,9 +83,7 @@ class DemoRepository:
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict:
         return self._store(user).create_task(payload)
 
-    async def update_task(
-        self, user: AuthUser, task_id: UUID, payload: TaskUpdate
-    ) -> dict | None:
+    async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
         return self._store(user).update_task(task_id, payload)
 
     async def list_sessions(self, user: AuthUser) -> list[dict]:
@@ -144,6 +157,46 @@ class SupabaseRepository:
     def _task(row: Mapping[str, Any]) -> dict:
         return {**row, "completed": row.get("completed_at") is not None}
 
+    async def list_plans(self, user: AuthUser, level: str | None = None) -> list[dict]:
+        params = {
+            "select": "id,parent_id,level,title,description,starts_on,ends_on,status,created_at,updated_at",
+            "user_id": f"eq.{user.id}",
+            "order": "starts_on.asc,created_at.asc",
+        }
+        if level:
+            params["level"] = f"eq.{level}"
+        return await self._request(user, "GET", "plans", params=params)
+
+    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
+        if payload.parent_id:
+            parents = await self._request(
+                user,
+                "GET",
+                "plans",
+                params={
+                    "select": "id,level",
+                    "id": f"eq.{payload.parent_id}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            expected_level = "stage" if payload.level == "week" else "week"
+            if not parents:
+                raise RepositoryValidationError("parent plan not found")
+            if parents[0]["level"] != expected_level:
+                raise RepositoryValidationError(
+                    f"{payload.level} plan requires a {expected_level} parent"
+                )
+        body = payload.model_dump(mode="json")
+        body["user_id"] = str(user.id)
+        rows = await self._request(
+            user,
+            "POST",
+            "plans",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         rows = await self._request(
             user,
@@ -169,9 +222,7 @@ class SupabaseRepository:
         )
         return self._task(rows[0])
 
-    async def update_task(
-        self, user: AuthUser, task_id: UUID, payload: TaskUpdate
-    ) -> dict | None:
+    async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
         changes = payload.model_dump(mode="json", exclude_unset=True)
         completed = changes.pop("completed", None)
         if completed is not None:
@@ -233,8 +284,7 @@ class SupabaseRepository:
                 "select": "study_date,effective_minutes,session_count,completed_tasks,mistake_count,subject_minutes",
                 "user_id": f"eq.{user.id}",
                 "and": (
-                    f"(study_date.gte.{from_date.isoformat()},"
-                    f"study_date.lte.{to_date.isoformat()})"
+                    f"(study_date.gte.{from_date.isoformat()},study_date.lte.{to_date.isoformat()})"
                 ),
                 "order": "study_date.asc",
             },

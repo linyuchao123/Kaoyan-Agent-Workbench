@@ -7,7 +7,7 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import StudySessionCreate, TaskCreate
+from app.schemas import PlanCreate, StudySessionCreate, TaskCreate
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -118,6 +118,53 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         for request in requests:
             self.assertEqual(request.headers["authorization"], "Bearer signed-user-jwt")
             self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")
+
+    async def test_supabase_plan_reads_and_writes_use_current_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "parent_id": None,
+                        "level": "stage",
+                        "title": "基础阶段",
+                        "description": "完成第一轮基础",
+                        "starts_on": "2026-09-01",
+                        "ends_on": "2027-02-28",
+                        "status": "active",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.list_plans(self.user, "stage")
+        await repository.create_plan(
+            self.user,
+            PlanCreate(
+                level="stage",
+                title="基础阶段",
+                description="完成第一轮基础",
+                starts_on=date(2026, 9, 1),
+                ends_on=date(2027, 2, 28),
+            ),
+        )
+
+        self.assertEqual(requests[0].url.params["user_id"], f"eq.{self.user.id}")
+        self.assertEqual(requests[0].url.params["level"], "eq.stage")
+        payload = json.loads(requests[1].content)
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
 
     async def test_supabase_session_write_uses_current_user_identity(self):
         requests: list[httpx.Request] = []
