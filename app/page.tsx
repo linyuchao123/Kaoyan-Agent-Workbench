@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiPlan, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -576,14 +576,103 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   );
 }
 
-function PlanView() {
-  const stages = [
-    { title: "基础阶段", range: "2026.09 — 2027.02", progress: 18, note: "数英 408 完成第一轮基础" },
-    { title: "强化阶段", range: "2027.03 — 2027.06", progress: 0, note: "专题强化与院校池收缩" },
-    { title: "真题阶段", range: "2027.07 — 2027.10", progress: 0, note: "真题、政治与复试能力预备" },
-    { title: "冲刺阶段", range: "2027.11 — 2027.12", progress: 0, note: "模考、查漏补缺与状态管理" },
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button">＋ 新建阶段计划</button></div><div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${index === 0 ? "current" : ""}`} key={stage.title}><div className="stage-index">0{index + 1}</div><div><span>{stage.range}</span><h2>{stage.title}</h2><p>{stage.note}</p><div className="progress-track"><span style={{ width: `${stage.progress}%` }} /></div><small>{stage.progress}% 完成</small></div></article>)}</div><section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">本周重点</div><h2>8月10日 — 8月16日</h2></div><span className="status-chip">执行中</span></div><div className="allocation-list">{[["数学一","12h",72],["英语一","7h",58],["计算机 408","10h",61],["AI 项目","8h",44]].map(([name, time, value]) => <div className="allocation" key={String(name)}><span>{name}</span><div className="progress-track"><span style={{ width: `${value}%` }} /></div><strong>{time}</strong></div>)}</div></section></section>;
+const demoPlans: ApiPlan[] = [
+  { id: "demo-stage-1", parent_id: null, level: "stage", title: "基础阶段", description: "数英 408 完成第一轮基础", starts_on: "2026-09-01", ends_on: "2027-02-28", status: "active" },
+  { id: "demo-stage-2", parent_id: null, level: "stage", title: "强化阶段", description: "专题强化与院校池收缩", starts_on: "2027-03-01", ends_on: "2027-06-30", status: "draft" },
+  { id: "demo-stage-3", parent_id: null, level: "stage", title: "真题阶段", description: "真题、政治与复试能力预备", starts_on: "2027-07-01", ends_on: "2027-10-31", status: "draft" },
+  { id: "demo-stage-4", parent_id: null, level: "stage", title: "冲刺阶段", description: "模考、查漏补缺与状态管理", starts_on: "2027-11-01", ends_on: "2027-12-31", status: "draft" },
+  { id: "demo-week-1", parent_id: "demo-stage-1", level: "week", title: "基础阶段第 1 周", description: "建立数学、英语与 408 的稳定节奏", starts_on: "2026-09-01", ends_on: "2026-09-06", status: "active" },
+];
+
+const planStatusLabel: Record<ApiPlan["status"], string> = {
+  draft: "草稿",
+  active: "执行中",
+  completed: "已完成",
+  archived: "已归档",
+};
+
+function planDateRange(plan: ApiPlan) {
+  return `${plan.starts_on.replaceAll("-", ".")} — ${plan.ends_on.replaceAll("-", ".")}`;
+}
+
+function PlanView({ isDemo }: { isDemo: boolean }) {
+  const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [formOpen, setFormOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [startsOn, setStartsOn] = useState(() => shanghaiDateKey(new Date()));
+  const [endsOn, setEndsOn] = useState("");
+  const [status, setStatus] = useState(isDemo ? "当前显示离线演示计划" : "正在读取云端计划…");
+
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    api.listPlans()
+      .then((items) => {
+        if (!active) return;
+        setPlans(items);
+        setStatus(items.length ? `已从云端同步 ${items.length} 条计划` : "云端还没有计划，可以创建第一个阶段计划");
+      })
+      .catch((error) => {
+        if (active) setStatus(error instanceof Error ? `计划加载失败：${error.message}` : "计划加载失败");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [isDemo]);
+
+  async function createStage(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || !endsOn || endsOn < startsOn) {
+      setStatus(endsOn && endsOn < startsOn ? "阶段结束日期不能早于开始日期" : "请完整填写阶段名称和日期");
+      return;
+    }
+    const payload = {
+      level: "stage" as const,
+      title: title.trim(),
+      description: description.trim(),
+      starts_on: startsOn,
+      ends_on: endsOn,
+      status: "active" as const,
+    };
+    setBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-stage-${Date.now()}`, parent_id: null }
+        : await api.createPlan(payload);
+      setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      setStatus(isDemo ? "演示阶段计划仅保留在当前页面" : "阶段计划已写入 Supabase 云端");
+      setTitle("");
+      setDescription("");
+      setEndsOn("");
+      setFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `阶段计划保存失败：${error.message}` : "阶段计划保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const stages = plans.filter((plan) => plan.level === "stage");
+  const weeks = plans.filter((plan) => plan.level === "week");
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 新建阶段计划"}</button></div>
+    {formOpen && <form className="panel plan-form" onSubmit={createStage}>
+      <div className="plan-form-heading"><div className="eyebrow">阶段计划</div><h2>定义一个长期复习阶段</h2></div>
+      <label className="plan-title">阶段名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：基础阶段" maxLength={160} required /></label>
+      <label>开始日期<input type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required /></label>
+      <label>结束日期<input type="date" value={endsOn} min={startsOn} onChange={(event) => setEndsOn(event.target.value)} required /></label>
+      <label className="plan-description">阶段目标<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这个阶段需要完成什么？" maxLength={2000} /></label>
+      <div className="plan-form-actions"><button type="button" onClick={() => setFormOpen(false)} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存阶段计划"}</button></div>
+    </form>}
+    <p className="plan-status-line">● {status}</p>
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small></div></article>)}</div>}
+    <section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">周计划</div><h2>{weeks.length ? `${weeks.length} 个周计划` : "尚未建立周计划"}</h2></div><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span></div>{weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}</section>
+  </section>;
 }
 
 function SubjectsView() {
@@ -779,7 +868,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

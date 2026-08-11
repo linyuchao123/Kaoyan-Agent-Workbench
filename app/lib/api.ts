@@ -1,5 +1,7 @@
 export type Subject = "math" | "english" | "politics" | "cs408" | "career";
 export type ContributionScope = "all" | Subject;
+export type PlanLevel = "stage" | "week" | "day";
+export type PlanStatus = "draft" | "active" | "completed" | "archived";
 
 export type ApiTask = {
   id: string;
@@ -9,6 +11,17 @@ export type ApiTask = {
   due_at: string | null;
   completed: boolean;
   completed_at?: string | null;
+};
+
+export type ApiPlan = {
+  id: string;
+  parent_id: string | null;
+  level: PlanLevel;
+  title: string;
+  description: string;
+  starts_on: string;
+  ends_on: string;
+  status: PlanStatus;
 };
 
 export type ContributionDay = {
@@ -84,6 +97,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
+  listPlans: (level?: PlanLevel) => request<ApiPlan[]>(`/api/v1/plans${level ? `?level=${level}` : ""}`),
+  createPlan: (payload: {
+    parent_id?: string;
+    level: PlanLevel;
+    title: string;
+    description: string;
+    starts_on: string;
+    ends_on: string;
+    status?: PlanStatus;
+  }) => request<ApiPlan>("/api/v1/plans", { method: "POST", body: JSON.stringify(payload) }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
   createTask: (payload: { title: string; subject: Subject; planned_minutes: number }) =>
