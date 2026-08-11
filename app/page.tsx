@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
@@ -325,6 +326,14 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualSubject, setManualSubject] = useState<Subject>("math");
+  const [manualDate, setManualDate] = useState(() => shanghaiDateKey(new Date()));
+  const [manualStartedTime, setManualStartedTime] = useState("19:00");
+  const [manualEndedTime, setManualEndedTime] = useState("20:00");
+  const [manualNote, setManualNote] = useState("");
+  const [manualError, setManualError] = useState("");
 
   useEffect(() => {
     if (isDemo) return;
@@ -437,6 +446,60 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     }
   }
 
+  async function addManualSession(event: FormEvent) {
+    event.preventDefault();
+    setManualError("");
+    if (manualDate > shanghaiDateKey(new Date())) {
+      setManualError("不能补录未来的学习记录");
+      return;
+    }
+
+    let interval: ReturnType<typeof createShanghaiStudyInterval>;
+    try {
+      interval = createShanghaiStudyInterval(
+        manualDate,
+        manualStartedTime,
+        manualEndedTime,
+      );
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : "补录时间无效");
+      return;
+    }
+
+    if (isDemo) {
+      if (manualDate === shanghaiDateKey(new Date())) {
+        setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+      }
+      setRecordStatus(`演示补录仅保留在本页 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setManualOpen(false);
+      setManualNote("");
+      return;
+    }
+
+    setManualBusy(true);
+    try {
+      await api.createSession({
+        subject: manualSubject,
+        started_at: interval.startedAt.toISOString(),
+        ended_at: interval.endedAt.toISOString(),
+        paused_seconds: 0,
+        source: "manual",
+        note: manualNote.trim() || "由今日工作台手动补录",
+      });
+      if (manualDate === shanghaiDateKey(new Date())) {
+        setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+      }
+      setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setManualOpen(false);
+      setManualNote("");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "云端写入失败";
+      setManualError(detail.includes("overlap") ? "该时间段与已有学习记录重叠，请调整后重试" : detail);
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
   const completed = tasks.filter((task) => task.done).length;
 
   return (
@@ -485,6 +548,18 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
             <strong className="timer">{formatTimer(seconds)}</strong>
             <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
             <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
+          </section>
+          <section className="panel manual-card">
+            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
+            {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
+              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
+              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
+              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
+              {manualError && <p className="manual-error" role="alert">{manualError}</p>}
+              <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
+            </form>}
           </section>
           <section className="panel review-card">
             <div className="eyebrow">AI 学习教练</div>
