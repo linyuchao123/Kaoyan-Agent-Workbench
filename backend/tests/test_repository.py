@@ -218,7 +218,7 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                             "description": "",
                             "starts_on": "2026-09-01",
                             "ends_on": "2027-02-28",
-                            "status": "active",
+                            "status": "completed",
                         }
                     ],
                 )
@@ -231,11 +231,14 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         repository = SupabaseRepository(settings, httpx.MockTransport(handler))
         updated = await repository.update_plan(
-            self.user, plan_id, PlanUpdate(title="基础阶段（已调整）")
+            self.user,
+            plan_id,
+            PlanUpdate(title="基础阶段（已调整）", status="completed"),
         )
         deleted = await repository.delete_plan(self.user, plan_id)
 
         self.assertEqual(updated["title"], "基础阶段（已调整）")
+        self.assertEqual(updated["status"], "completed")
         self.assertTrue(deleted)
         for request in requests:
             self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")

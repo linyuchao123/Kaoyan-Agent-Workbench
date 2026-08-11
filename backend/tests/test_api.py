@@ -207,6 +207,26 @@ class ApiFlowTests(TestCase):
         self.assertEqual(edited.status_code, 200)
         self.assertEqual(edited.json()["title"], "基础阶段第一周")
 
+        completed = self.client.patch(
+            f"/api/v1/plans/{week['id']}",
+            json={"status": "completed"},
+        )
+        self.assertEqual(completed.status_code, 200)
+        self.assertEqual(completed.json()["status"], "completed")
+
+        archived = self.client.patch(
+            f"/api/v1/plans/{week['id']}",
+            json={"status": "archived"},
+        )
+        self.assertEqual(archived.status_code, 200)
+        self.assertEqual(archived.json()["status"], "archived")
+
+        invalid_status = self.client.patch(
+            f"/api/v1/plans/{week['id']}",
+            json={"status": "paused"},
+        )
+        self.assertEqual(invalid_status.status_code, 422)
+
         invalid_parent_dates = self.client.patch(
             f"/api/v1/plans/{stage['id']}",
             json={"starts_on": "2026-09-03"},

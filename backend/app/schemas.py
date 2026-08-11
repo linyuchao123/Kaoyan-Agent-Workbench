@@ -79,6 +79,7 @@ class PlanUpdate(StrictRequestModel):
     description: str | None = Field(default=None, max_length=2000)
     starts_on: date | None = None
     ends_on: date | None = None
+    status: PlanStatus | None = None
 
     @model_validator(mode="after")
     def require_changes(self) -> "PlanUpdate":
