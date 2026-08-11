@@ -5,6 +5,7 @@ export type PlanStatus = "draft" | "active" | "completed" | "archived";
 
 export type ApiTask = {
   id: string;
+  plan_id: string | null;
   title: string;
   subject: Subject;
   planned_minutes: number;
@@ -118,9 +119,9 @@ export const api = {
   deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
-  createTask: (payload: { title: string; subject: Subject; planned_minutes: number }) =>
+  createTask: (payload: { title: string; subject: Subject; planned_minutes: number; plan_id?: string }) =>
     request<ApiTask>("/api/v1/tasks", { method: "POST", body: JSON.stringify(payload) }),
-  updateTask: (id: string, payload: { completed: boolean }) =>
+  updateTask: (id: string, payload: { completed?: boolean; plan_id?: string | null }) =>
     request<ApiTask>(`/api/v1/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   createSession: (payload: {
     subject: Subject;

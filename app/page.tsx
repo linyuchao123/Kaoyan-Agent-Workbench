@@ -58,11 +58,11 @@ const initialTasks: Task[] = [
   { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
 ];
 
-function taskFromApi(task: ApiTask): Task {
+function taskFromApi(task: ApiTask, planTitle?: string): Task {
   return {
     id: task.id,
     title: task.title,
-    detail: `计划 ${task.planned_minutes} 分钟${task.due_at ? ` · ${task.due_at.slice(0, 10)}` : ""}`,
+    detail: `计划 ${task.planned_minutes} 分钟${planTitle ? ` · ${planTitle}` : ""}${task.due_at ? ` · ${task.due_at.slice(0, 10)}` : ""}`,
     subject: task.subject,
     done: task.completed,
   };
@@ -317,6 +317,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
+  const [dayPlans, setDayPlans] = useState<ApiPlan[]>([]);
+  const [newTaskPlanId, setNewTaskPlanId] = useState("");
   const [focusSubject, setFocusSubject] = useState<Subject>("math");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
@@ -340,10 +342,14 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     if (isDemo) return;
     let active = true;
     const today = shanghaiDateKey(new Date());
-    Promise.all([api.today(), api.contributions(today, today, "all")])
-      .then(([snapshot, contributions]) => {
+    Promise.all([api.today(), api.contributions(today, today, "all"), api.listPlans("day")])
+      .then(([snapshot, contributions, plans]) => {
         if (!active) return;
-        setTasks(snapshot.tasks.map(taskFromApi));
+        const todayPlans = plans.filter((plan) => plan.starts_on === today);
+        const planTitleById = new Map(todayPlans.map((plan) => [plan.id, plan.title]));
+        setDayPlans(todayPlans);
+        setNewTaskPlanId(todayPlans.find((plan) => plan.status === "active")?.id ?? todayPlans[0]?.id ?? "");
+        setTasks(snapshot.tasks.map((task) => taskFromApi(task, task.plan_id ? planTitleById.get(task.plan_id) : undefined)));
         setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
         setCloudState("ready");
         setRecordStatus("已同步至 Supabase 云端 · 数据来自学习会话");
@@ -366,17 +372,18 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     event.preventDefault();
     if (!newTask.trim()) return;
     const title = newTask.trim();
+    const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
-    setTasks((items) => [...items, { id: temporaryId, title, detail: "计划 30 分钟", subject: newTaskSubject, done: false }]);
+    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false }]);
     setNewTask("");
     if (isDemo) {
       setRecordStatus("演示任务仅保留在当前页面");
       return;
     }
     try {
-      const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30 });
-      setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved) : item));
-      setRecordStatus("任务已写入本地 API");
+      const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30, plan_id: newTaskPlanId || undefined });
+      setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved, selectedPlan?.title) : item));
+      setRecordStatus(selectedPlan ? `任务已关联日计划“${selectedPlan.title}”` : "任务已写入 Supabase 云端");
     } catch {
       setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
     }
@@ -542,7 +549,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
               </label>
             ))}
           </div>
-          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
+          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划"><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
           <p className="record-status">● {recordStatus}</p>
         </section>
 
