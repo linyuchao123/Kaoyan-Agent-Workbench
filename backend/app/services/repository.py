@@ -11,6 +11,7 @@ from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
     ContributionDay,
     PlanCreate,
+    PlanProgress,
     PlanUpdate,
     StudySessionCreate,
     TaskCreate,
@@ -43,6 +44,8 @@ class StudyRepository(Protocol):
     ) -> dict | None: ...
 
     async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool: ...
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None: ...
 
     async def list_tasks(self, user: AuthUser) -> list[dict]: ...
 
@@ -98,6 +101,10 @@ class DemoRepository:
 
     async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool:
         return self._store(user).delete_plan(plan_id)
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None:
+        progress = self._store(user).plan_progress(plan_id)
+        return PlanProgress.model_validate(progress) if progress else None
 
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_tasks()
@@ -312,6 +319,50 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return bool(rows)
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None:
+        plans = await self.list_plans(user)
+        root = next((plan for plan in plans if plan["id"] == str(plan_id)), None)
+        if not root:
+            return None
+        plan_ids = {str(plan_id)}
+        previous_size = 0
+        while previous_size != len(plan_ids):
+            previous_size = len(plan_ids)
+            plan_ids.update(
+                str(plan["id"])
+                for plan in plans
+                if plan.get("parent_id") in plan_ids
+            )
+        task_rows = await self._request(
+            user,
+            "GET",
+            "tasks",
+            params={
+                "select": "id,completed_at",
+                "user_id": f"eq.{user.id}",
+                "plan_id": f"in.({','.join(sorted(plan_ids))})",
+            },
+        )
+        contribution_rows = await self._request(
+            user,
+            "GET",
+            "daily_study_contributions",
+            params={
+                "select": "effective_minutes",
+                "user_id": f"eq.{user.id}",
+                "study_date": f"gte.{root['starts_on']}",
+                "and": f"(study_date.lte.{root['ends_on']})",
+            },
+        )
+        completed_tasks = sum(row.get("completed_at") is not None for row in task_rows)
+        return PlanProgress(
+            plan_id=plan_id,
+            task_count=len(task_rows),
+            completed_tasks=completed_tasks,
+            completion_rate=(round(completed_tasks / len(task_rows) * 100) if task_rows else 0),
+            actual_minutes=sum(int(row.get("effective_minutes", 0)) for row in contribution_rows),
+        )
 
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         rows = await self._request(

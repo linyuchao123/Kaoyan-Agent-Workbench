@@ -90,6 +90,14 @@ class PlanUpdate(StrictRequestModel):
         return self
 
 
+class PlanProgress(BaseModel):
+    plan_id: UUID
+    task_count: int = 0
+    completed_tasks: int = 0
+    completion_rate: int = Field(default=0, ge=0, le=100)
+    actual_minutes: int = 0
+
+
 class WebSearchRequest(StrictRequestModel):
     query: str = Field(min_length=2, max_length=500)
     include_domains: list[str] = Field(default_factory=list)

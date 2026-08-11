@@ -89,6 +89,31 @@ class DemoStore:
             self.plans.pop(current, None)
         return True
 
+    def plan_progress(self, plan_id: UUID) -> dict | None:
+        plan = self.plans.get(plan_id)
+        if not plan:
+            return None
+        plan_ids = {plan_id}
+        previous_size = 0
+        while previous_size != len(plan_ids):
+            previous_size = len(plan_ids)
+            plan_ids.update(
+                item["id"] for item in self.plans.values() if item["parent_id"] in plan_ids
+            )
+        tasks = [item for item in self.tasks.values() if item.get("plan_id") in plan_ids]
+        completed_tasks = sum(item["completed_at"] is not None for item in tasks)
+        actual_minutes = sum(
+            day.effective_minutes
+            for day in self.contributions(plan["starts_on"], plan["ends_on"], "all")
+        )
+        return {
+            "plan_id": plan_id,
+            "task_count": len(tasks),
+            "completed_tasks": completed_tasks,
+            "completion_rate": round(completed_tasks / len(tasks) * 100) if tasks else 0,
+            "actual_minutes": actual_minutes,
+        }
+
     def list_tasks(self) -> list[dict]:
         return sorted(self.tasks.values(), key=lambda item: item["created_at"])
 

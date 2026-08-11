@@ -315,6 +315,79 @@ class ApiFlowTests(TestCase):
         )
         self.assertEqual(other_user.status_code, 422)
 
+    def test_plan_progress_aggregates_descendant_tasks_and_actual_minutes(self):
+        stage = self.client.post(
+            "/api/v1/plans",
+            json={
+                "level": "stage",
+                "title": "基础阶段",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-30",
+            },
+        ).json()
+        week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage["id"],
+                "level": "week",
+                "title": "基础阶段第 1 周",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-07",
+            },
+        ).json()
+        day = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": week["id"],
+                "level": "day",
+                "title": "9 月 1 日计划",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-01",
+            },
+        ).json()
+        first_task = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "plan_id": day["id"]},
+        ).json()
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "英语词汇", "subject": "english", "plan_id": day["id"]},
+        )
+        self.client.patch(f"/api/v1/tasks/{first_task['id']}", json={"completed": True})
+        self.client.post(
+            "/api/v1/sessions",
+            json={
+                "subject": "math",
+                "started_at": "2026-09-01T01:00:00Z",
+                "ended_at": "2026-09-01T02:30:00Z",
+                "paused_seconds": 600,
+                "source": "timer",
+            },
+        )
+
+        progress = self.client.get(f"/api/v1/plans/{stage['id']}/progress")
+        self.assertEqual(progress.status_code, 200)
+        self.assertEqual(
+            progress.json(),
+            {
+                "plan_id": stage["id"],
+                "task_count": 2,
+                "completed_tasks": 1,
+                "completion_rate": 50,
+                "actual_minutes": 80,
+            },
+        )
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(
+            self.client.get(f"/api/v1/plans/{stage['id']}/progress").status_code,
+            404,
+        )
+
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
             "/api/v1/tasks",

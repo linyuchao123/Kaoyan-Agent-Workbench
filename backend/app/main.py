@@ -23,6 +23,7 @@ from app.schemas import (
     ImportProposal,
     PlanCreate,
     PlanLevel,
+    PlanProgress,
     PlanUpdate,
     SearchSource,
     StudySessionCreate,
@@ -134,6 +135,17 @@ async def delete_plan(
     if not await repository.delete_plan(user, plan_id):
         raise HTTPException(404, "plan not found")
     return Response(status_code=204)
+
+
+@app.get("/api/v1/plans/{plan_id}/progress")
+async def get_plan_progress(
+    plan_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> PlanProgress:
+    progress = await repository.plan_progress(user, plan_id)
+    if not progress:
+        raise HTTPException(404, "plan not found")
+    return progress
 
 
 @app.post("/api/v1/tasks", status_code=201)
