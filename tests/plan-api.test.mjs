@@ -83,3 +83,42 @@ test("周计划写入时携带所属阶段但不携带用户编号", async () =>
     globalThis.fetch = originalFetch;
   }
 });
+
+test("日计划写入时归属于周计划且起止日期一致", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      parent_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      level: "day",
+      title: "高数极限专题",
+      description: "完成 20 道基础题",
+      starts_on: "2026-09-02",
+      ends_on: "2026-09-02",
+      status: "active",
+    }), { status: 201, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.createPlan({
+      parent_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      level: "day",
+      title: "高数极限专题",
+      description: "完成 20 道基础题",
+      starts_on: "2026-09-02",
+      ends_on: "2026-09-02",
+    });
+    const payload = JSON.parse(request.init.body);
+    assert.equal(payload.parent_id, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    assert.equal(payload.level, "day");
+    assert.equal(payload.starts_on, payload.ends_on);
+    assert.equal("user_id" in payload, false);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

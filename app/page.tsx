@@ -618,6 +618,12 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [weekStartsOn, setWeekStartsOn] = useState("");
   const [weekEndsOn, setWeekEndsOn] = useState("");
   const [weekBusy, setWeekBusy] = useState(false);
+  const [dayFormOpen, setDayFormOpen] = useState(false);
+  const [dayParentId, setDayParentId] = useState("");
+  const [dayTitle, setDayTitle] = useState("");
+  const [dayDescription, setDayDescription] = useState("");
+  const [dayDate, setDayDate] = useState("");
+  const [dayBusy, setDayBusy] = useState(false);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示计划" : "正在读取云端计划…");
 
   useEffect(() => {
@@ -672,7 +678,9 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   const stages = plans.filter((plan) => plan.level === "stage");
   const weeks = plans.filter((plan) => plan.level === "week");
+  const days = plans.filter((plan) => plan.level === "day");
   const weekParent = stages.find((stage) => stage.id === weekParentId);
+  const dayParent = weeks.find((week) => week.id === dayParentId);
 
   function selectWeekParent(parentId: string) {
     const parent = stages.find((stage) => stage.id === parentId);
@@ -740,6 +748,62 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
+  function selectDayParent(parentId: string) {
+    const parent = weeks.find((week) => week.id === parentId);
+    setDayParentId(parentId);
+    setDayDate(parent?.starts_on ?? "");
+  }
+
+  function toggleDayForm() {
+    if (dayFormOpen) {
+      setDayFormOpen(false);
+      return;
+    }
+    const parent = weeks.find((week) => week.status === "active") ?? weeks[0];
+    if (!parent) {
+      setStatus("请先创建周计划，再继续安排日计划");
+      return;
+    }
+    selectDayParent(parent.id);
+    setDayFormOpen(true);
+  }
+
+  async function createDay(event: FormEvent) {
+    event.preventDefault();
+    if (!dayParent || !dayTitle.trim() || !dayDate) {
+      setStatus("请完整填写日计划的所属周、名称和日期");
+      return;
+    }
+    if (dayDate < dayParent.starts_on || dayDate > dayParent.ends_on) {
+      setStatus("日计划日期必须在所属周计划范围内");
+      return;
+    }
+    const payload = {
+      parent_id: dayParent.id,
+      level: "day" as const,
+      title: dayTitle.trim(),
+      description: dayDescription.trim(),
+      starts_on: dayDate,
+      ends_on: dayDate,
+      status: "active" as const,
+    };
+    setDayBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-day-${dayParent.id}-${dayDate}-${dayTitle.trim()}` }
+        : await api.createPlan(payload);
+      setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      setStatus(isDemo ? "演示日计划仅保留在当前页面" : "日计划已写入 Supabase 云端");
+      setDayTitle("");
+      setDayDescription("");
+      setDayFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `日计划保存失败：${error.message}` : "日计划保存失败");
+    } finally {
+      setDayBusy(false);
+    }
+  }
+
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 新建阶段计划"}</button></div>
     {formOpen && <form className="panel plan-form" onSubmit={createStage}>
@@ -762,6 +826,16 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <div className="plan-form-actions"><button type="button" onClick={() => setWeekFormOpen(false)} disabled={weekBusy}>取消</button><button className="primary-button" type="submit" disabled={weekBusy}>{weekBusy ? "正在保存…" : "保存周计划"}</button></div>
       </form>}
       {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
+    </section>
+    <section className="panel daily-plan"><div className="panel-heading"><div><div className="eyebrow">日计划</div><h2>{days.length ? `${days.length} 个日计划` : "尚未安排日计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleDayForm}>{dayFormOpen ? "收起" : "＋ 新建日计划"}</button></div></div>
+      {dayFormOpen && <form className="plan-form week-plan-form" onSubmit={createDay}>
+        <label className="plan-title">所属周计划<select value={dayParentId} onChange={(event) => selectDayParent(event.target.value)} required>{weeks.map((week) => <option key={week.id} value={week.id}>{week.title}（{week.starts_on} 至 {week.ends_on}）</option>)}</select></label>
+        <label className="plan-title">日计划名称<input value={dayTitle} onChange={(event) => setDayTitle(event.target.value)} placeholder="例如：高数极限专题与英语词汇" maxLength={160} required /></label>
+        <label>计划日期<input type="date" value={dayDate} min={dayParent?.starts_on} max={dayParent?.ends_on} onChange={(event) => setDayDate(event.target.value)} required /></label>
+        <label className="plan-description">当天成果<textarea value={dayDescription} onChange={(event) => setDayDescription(event.target.value)} placeholder="完成哪些章节、题目或复盘？" maxLength={2000} /></label>
+        <div className="plan-form-actions"><button type="button" onClick={() => setDayFormOpen(false)} disabled={dayBusy}>取消</button><button className="primary-button" type="submit" disabled={dayBusy}>{dayBusy ? "正在保存…" : "保存日计划"}</button></div>
+      </form>}
+      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
     </section>
   </section>;
 }
