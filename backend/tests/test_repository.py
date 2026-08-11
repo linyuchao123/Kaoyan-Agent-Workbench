@@ -1,4 +1,5 @@
-from datetime import date
+import json
+from datetime import UTC, date, datetime, timedelta
 from unittest import IsolatedAsyncioTestCase
 from uuid import UUID
 
@@ -6,8 +7,12 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import TaskCreate
-from app.services.repository import DemoRepository, SupabaseRepository
+from app.schemas import StudySessionCreate, TaskCreate
+from app.services.repository import (
+    DemoRepository,
+    RepositoryConflictError,
+    SupabaseRepository,
+)
 
 
 class RepositoryTests(IsolatedAsyncioTestCase):
@@ -91,3 +96,99 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual([day.effective_minutes for day in days], [80, 0])
         self.assertEqual([day.intensity_level for day in days], [3, 0])
+
+    async def test_supabase_reads_are_scoped_to_the_authenticated_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[])
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+
+        await repository.list_tasks(self.user)
+        await repository.list_sessions(self.user)
+
+        self.assertEqual(len(requests), 2)
+        for request in requests:
+            self.assertEqual(request.headers["authorization"], "Bearer signed-user-jwt")
+            self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")
+
+    async def test_supabase_session_write_uses_current_user_identity(self):
+        requests: list[httpx.Request] = []
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "subject": "math",
+                        "started_at": started_at.isoformat(),
+                        "ended_at": (started_at + timedelta(hours=1)).isoformat(),
+                        "paused_seconds": 300,
+                        "source": "timer",
+                        "note": "极限练习",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.create_session(
+            self.user,
+            StudySessionCreate(
+                subject="math",
+                started_at=started_at,
+                ended_at=started_at + timedelta(hours=1),
+                paused_seconds=300,
+                source="timer",
+                note="极限练习",
+            ),
+        )
+
+        payload = json.loads(requests[0].content)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
+
+    async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                409,
+                json={
+                    "code": "23P01",
+                    "message": "conflicting key value violates exclusion constraint",
+                },
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+
+        with self.assertRaisesRegex(
+            RepositoryConflictError, "study session overlaps an existing session"
+        ):
+            await repository.create_session(
+                self.user,
+                StudySessionCreate(
+                    subject="math",
+                    started_at=started_at,
+                    ended_at=started_at + timedelta(hours=1),
+                ),
+            )
