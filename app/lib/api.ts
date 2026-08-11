@@ -113,6 +113,7 @@ export const api = {
     description?: string;
     starts_on?: string;
     ends_on?: string;
+    status?: PlanStatus;
   }) => request<ApiPlan>(`/api/v1/plans/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>

@@ -146,9 +146,11 @@ test("计划支持修改与删除并正确处理无内容响应", async () => {
   try {
     const updated = await api.updatePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", {
       title: "基础阶段（已调整）",
+      status: "completed",
     });
     await api.deletePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     assert.equal(updated.title, "基础阶段（已调整）");
+    assert.equal(JSON.parse(requests[0].init.body).status, "completed");
     assert.equal(requests[0].init.method, "PATCH");
     assert.equal(requests[1].init.method, "DELETE");
     assert.match(requests[1].input, /\/api\/v1\/plans\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa$/);

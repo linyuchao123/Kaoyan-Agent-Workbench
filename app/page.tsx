@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiPlan, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiPlan, type ApiTask, type ContributionScope, type PlanStatus, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -597,6 +597,19 @@ const planLevelLabel: Record<ApiPlan["level"], string> = {
   day: "日",
 };
 
+const planStatusOptions: Array<{ value: PlanStatus; label: string }> = [
+  { value: "draft", label: "草稿" },
+  { value: "active", label: "执行中" },
+  { value: "completed", label: "已完成" },
+  { value: "archived", label: "已归档" },
+];
+
+function nextPlanStatus(plan: ApiPlan): { value: PlanStatus; label: string } {
+  if (plan.status === "completed") return { value: "archived", label: "归档" };
+  if (plan.status === "archived") return { value: "active", label: "恢复" };
+  return { value: "completed", label: "完成" };
+}
+
 function planDateRange(plan: ApiPlan) {
   return `${plan.starts_on.replaceAll("-", ".")} — ${plan.ends_on.replaceAll("-", ".")}`;
 }
@@ -647,7 +660,9 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [editDescription, setEditDescription] = useState("");
   const [editStartsOn, setEditStartsOn] = useState("");
   const [editEndsOn, setEditEndsOn] = useState("");
+  const [editStatus, setEditStatus] = useState<PlanStatus>("draft");
   const [editBusy, setEditBusy] = useState(false);
+  const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示计划" : "正在读取云端计划…");
 
   useEffect(() => {
@@ -837,6 +852,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
     setEditDescription(plan.description);
     setEditStartsOn(plan.starts_on);
     setEditEndsOn(plan.ends_on);
+    setEditStatus(plan.status);
     setStatus(`正在编辑${planLevelLabel[plan.level]}计划“${plan.title}”`);
   }
 
@@ -863,6 +879,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       description: editDescription.trim(),
       starts_on: editStartsOn,
       ends_on: nextEndsOn,
+      status: editStatus,
     };
     setEditBusy(true);
     try {
@@ -896,6 +913,28 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
+  async function changePlanStatus(plan: ApiPlan) {
+    const next = nextPlanStatus(plan);
+    setStatusBusyId(plan.id);
+    try {
+      const saved = isDemo
+        ? { ...plan, status: next.value }
+        : await api.updatePlan(plan.id, { status: next.value });
+      setPlans((items) => items.map((item) => item.id === saved.id ? saved : item));
+      if (editingPlan?.id === saved.id) {
+        setEditingPlan(saved);
+        setEditStatus(saved.status);
+      }
+      setStatus(isDemo
+        ? `演示计划已标记为${planStatusLabel[saved.status]}`
+        : `计划已同步为${planStatusLabel[saved.status]}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `计划状态修改失败：${error.message}` : "计划状态修改失败");
+    } finally {
+      setStatusBusyId(null);
+    }
+  }
+
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 新建阶段计划"}</button></div>
     {formOpen && <form className="panel plan-form" onSubmit={createStage}>
@@ -912,10 +951,11 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       <label className="plan-title">计划名称<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={160} required /></label>
       <label>{editingPlan.level === "day" ? "计划日期" : "开始日期"}<input type="date" value={editStartsOn} min={editParent?.starts_on} max={editParent?.ends_on} onChange={(event) => { setEditStartsOn(event.target.value); if (editingPlan.level === "day") setEditEndsOn(event.target.value); }} required /></label>
       {editingPlan.level !== "day" && <label>结束日期<input type="date" value={editEndsOn} min={editStartsOn || editParent?.starts_on} max={editParent?.ends_on} onChange={(event) => setEditEndsOn(event.target.value)} required /></label>}
+      <label>计划状态<select value={editStatus} onChange={(event) => setEditStatus(event.target.value as PlanStatus)}>{planStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
       <label className="plan-description">计划目标<textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={2000} /></label>
       <div className="plan-form-actions"><button type="button" onClick={() => setEditingPlan(null)} disabled={editBusy}>取消</button><button className="primary-button" type="submit" disabled={editBusy}>{editBusy ? "正在保存…" : "保存修改"}</button></div>
     </form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(stage)}>删除</button></div></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button className="status-action" type="button" disabled={statusBusyId === stage.id} onClick={() => void changePlanStatus(stage)}>{statusBusyId === stage.id ? "同步中…" : nextPlanStatus(stage).label}</button><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(stage)}>删除</button></div></div></article>)}</div>}
     <section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">周计划</div><h2>{weeks.length ? `${weeks.length} 个周计划` : "尚未建立周计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleWeekForm}>{weekFormOpen ? "收起" : "＋ 新建周计划"}</button></div></div>
       {weekFormOpen && <form className="plan-form week-plan-form" onSubmit={createWeek}>
         <label className="plan-title">所属阶段<select value={weekParentId} onChange={(event) => selectWeekParent(event.target.value)} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.title}（{stage.starts_on} 至 {stage.ends_on}）</option>)}</select></label>
@@ -925,7 +965,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">本周重点<textarea value={weekDescription} onChange={(event) => setWeekDescription(event.target.value)} placeholder="这一周最重要的学习结果是什么？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setWeekFormOpen(false)} disabled={weekBusy}>取消</button><button className="primary-button" type="submit" disabled={weekBusy}>{weekBusy ? "正在保存…" : "保存周计划"}</button></div>
       </form>}
-      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(week)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
+      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button className="status-action" type="button" disabled={statusBusyId === week.id} onClick={() => void changePlanStatus(week)}>{statusBusyId === week.id ? "同步中…" : nextPlanStatus(week).label}</button><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(week)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
     </section>
     <section className="panel daily-plan"><div className="panel-heading"><div><div className="eyebrow">日计划</div><h2>{days.length ? `${days.length} 个日计划` : "尚未安排日计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleDayForm}>{dayFormOpen ? "收起" : "＋ 新建日计划"}</button></div></div>
       {dayFormOpen && <form className="plan-form week-plan-form" onSubmit={createDay}>
@@ -935,7 +975,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">当天成果<textarea value={dayDescription} onChange={(event) => setDayDescription(event.target.value)} placeholder="完成哪些章节、题目或复盘？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setDayFormOpen(false)} disabled={dayBusy}>取消</button><button className="primary-button" type="submit" disabled={dayBusy}>{dayBusy ? "正在保存…" : "保存日计划"}</button></div>
       </form>}
-      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(day)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
+      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button className="status-action" type="button" disabled={statusBusyId === day.id} onClick={() => void changePlanStatus(day)}>{statusBusyId === day.id ? "同步中…" : nextPlanStatus(day).label}</button><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(day)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
     </section>
   </section>;
 }
