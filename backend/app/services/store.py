@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from app.domain.contributions import StudyInterval, aggregate_daily_minutes, intensity_level
-from app.schemas import ContributionDay, StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import ContributionDay, PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
 
 
 class SessionOverlapError(ValueError):
@@ -24,6 +24,31 @@ class DemoStore:
         self.now = now_factory or (lambda: datetime.now(UTC))
         self.tasks: dict[UUID, dict] = {}
         self.sessions: dict[UUID, dict] = {}
+        self.plans: dict[UUID, dict] = {}
+
+    def list_plans(self, level: str | None = None) -> list[dict]:
+        plans = [item for item in self.plans.values() if level is None or item["level"] == level]
+        return sorted(plans, key=lambda item: (item["starts_on"], item["created_at"]))
+
+    def create_plan(self, payload: PlanCreate) -> dict:
+        if payload.parent_id:
+            parent = self.plans.get(payload.parent_id)
+            expected_level = "stage" if payload.level == "week" else "week"
+            if not parent:
+                raise ValueError("parent plan not found")
+            if parent["level"] != expected_level:
+                raise ValueError(f"{payload.level} plan requires a {expected_level} parent")
+            if payload.starts_on < parent["starts_on"] or payload.ends_on > parent["ends_on"]:
+                raise ValueError("child plan dates must stay within parent plan dates")
+        now = self.now()
+        item = {
+            "id": uuid4(),
+            **payload.model_dump(),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.plans[item["id"]] = item
+        return item
 
     def list_tasks(self) -> list[dict]:
         return sorted(self.tasks.values(), key=lambda item: item["created_at"])

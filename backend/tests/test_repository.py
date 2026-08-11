@@ -1,4 +1,5 @@
-from datetime import date
+import json
+from datetime import UTC, date, datetime, timedelta
 from unittest import IsolatedAsyncioTestCase
 from uuid import UUID
 
@@ -6,8 +7,13 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import TaskCreate
-from app.services.repository import DemoRepository, SupabaseRepository
+from app.schemas import PlanCreate, StudySessionCreate, TaskCreate
+from app.services.repository import (
+    DemoRepository,
+    RepositoryConflictError,
+    RepositoryValidationError,
+    SupabaseRepository,
+)
 
 
 class RepositoryTests(IsolatedAsyncioTestCase):
@@ -91,3 +97,183 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual([day.effective_minutes for day in days], [80, 0])
         self.assertEqual([day.intensity_level for day in days], [3, 0])
+
+    async def test_supabase_reads_are_scoped_to_the_authenticated_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[])
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+
+        await repository.list_tasks(self.user)
+        await repository.list_sessions(self.user)
+
+        self.assertEqual(len(requests), 2)
+        for request in requests:
+            self.assertEqual(request.headers["authorization"], "Bearer signed-user-jwt")
+            self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")
+
+    async def test_supabase_plan_reads_and_writes_use_current_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "parent_id": None,
+                        "level": "stage",
+                        "title": "基础阶段",
+                        "description": "完成第一轮基础",
+                        "starts_on": "2026-09-01",
+                        "ends_on": "2027-02-28",
+                        "status": "active",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.list_plans(self.user, "stage")
+        await repository.create_plan(
+            self.user,
+            PlanCreate(
+                level="stage",
+                title="基础阶段",
+                description="完成第一轮基础",
+                starts_on=date(2026, 9, 1),
+                ends_on=date(2027, 2, 28),
+            ),
+        )
+
+        self.assertEqual(requests[0].url.params["user_id"], f"eq.{self.user.id}")
+        self.assertEqual(requests[0].url.params["level"], "eq.stage")
+        payload = json.loads(requests[1].content)
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
+
+    async def test_supabase_child_plan_must_stay_inside_parent_dates(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.method, "GET")
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "level": "stage",
+                        "starts_on": "2026-09-01",
+                        "ends_on": "2027-02-28",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+
+        with self.assertRaisesRegex(
+            RepositoryValidationError,
+            "child plan dates must stay within parent plan dates",
+        ):
+            await repository.create_plan(
+                self.user,
+                PlanCreate(
+                    parent_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                    level="week",
+                    title="超出阶段范围的周计划",
+                    starts_on=date(2027, 2, 27),
+                    ends_on=date(2027, 3, 5),
+                ),
+            )
+
+    async def test_supabase_session_write_uses_current_user_identity(self):
+        requests: list[httpx.Request] = []
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "subject": "math",
+                        "started_at": started_at.isoformat(),
+                        "ended_at": (started_at + timedelta(hours=1)).isoformat(),
+                        "paused_seconds": 300,
+                        "source": "timer",
+                        "note": "极限练习",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.create_session(
+            self.user,
+            StudySessionCreate(
+                subject="math",
+                started_at=started_at,
+                ended_at=started_at + timedelta(hours=1),
+                paused_seconds=300,
+                source="timer",
+                note="极限练习",
+            ),
+        )
+
+        payload = json.loads(requests[0].content)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
+
+    async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                409,
+                json={
+                    "code": "23P01",
+                    "message": "conflicting key value violates exclusion constraint",
+                },
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+
+        with self.assertRaisesRegex(
+            RepositoryConflictError, "study session overlaps an existing session"
+        ):
+            await repository.create_session(
+                self.user,
+                StudySessionCreate(
+                    subject="math",
+                    started_at=started_at,
+                    ended_at=started_at + timedelta(hours=1),
+                ),
+            )

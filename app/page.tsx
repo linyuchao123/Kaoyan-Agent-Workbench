@@ -2,7 +2,8 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiPlan, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
@@ -172,7 +173,7 @@ function formatTimer(seconds: number) {
   return `${hours}:${minutes}:${secs}`;
 }
 
-function StudyHeatmap({ isDemo }: { isDemo: boolean }) {
+function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVersion: number }) {
   const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
   const [year, setYear] = useState(currentYear);
   const [scope, setScope] = useState<Scope>("all");
@@ -214,7 +215,7 @@ function StudyHeatmap({ isDemo }: { isDemo: boolean }) {
         if (!cancelled) setCloudData({ key: queryKey, status: "error", data: null });
       });
     return () => { cancelled = true; };
-  }, [isDemo, queryKey, scope, year]);
+  }, [isDemo, queryKey, refreshVersion, scope, year]);
 
   const padded = useMemo(() => {
     const first = new Date(`${year}-01-01T00:00:00Z`);
@@ -325,6 +326,15 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
+  const [contributionRevision, setContributionRevision] = useState(0);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualSubject, setManualSubject] = useState<Subject>("math");
+  const [manualDate, setManualDate] = useState(() => shanghaiDateKey(new Date()));
+  const [manualStartedTime, setManualStartedTime] = useState("19:00");
+  const [manualEndedTime, setManualEndedTime] = useState("20:00");
+  const [manualNote, setManualNote] = useState("");
+  const [manualError, setManualError] = useState("");
 
   useEffect(() => {
     if (isDemo) return;
@@ -379,6 +389,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     try {
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
+      setContributionRevision((value) => value + 1);
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
     }
@@ -426,6 +437,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       });
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setContributionRevision((value) => value + 1);
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
@@ -434,6 +446,61 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
       setPausedSeconds(finalPausedSeconds);
       setPauseStartedAt(endedAt);
+    }
+  }
+
+  async function addManualSession(event: FormEvent) {
+    event.preventDefault();
+    setManualError("");
+    if (manualDate > shanghaiDateKey(new Date())) {
+      setManualError("不能补录未来的学习记录");
+      return;
+    }
+
+    let interval: ReturnType<typeof createShanghaiStudyInterval>;
+    try {
+      interval = createShanghaiStudyInterval(
+        manualDate,
+        manualStartedTime,
+        manualEndedTime,
+      );
+    } catch (error) {
+      setManualError(error instanceof Error ? error.message : "补录时间无效");
+      return;
+    }
+
+    if (isDemo) {
+      if (manualDate === shanghaiDateKey(new Date())) {
+        setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+      }
+      setRecordStatus(`演示补录仅保留在本页 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setManualOpen(false);
+      setManualNote("");
+      return;
+    }
+
+    setManualBusy(true);
+    try {
+      await api.createSession({
+        subject: manualSubject,
+        started_at: interval.startedAt.toISOString(),
+        ended_at: interval.endedAt.toISOString(),
+        paused_seconds: 0,
+        source: "manual",
+        note: manualNote.trim() || "由今日工作台手动补录",
+      });
+      if (manualDate === shanghaiDateKey(new Date())) {
+        setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+      }
+      setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setContributionRevision((value) => value + 1);
+      setManualOpen(false);
+      setManualNote("");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "云端写入失败";
+      setManualError(detail.includes("overlap") ? "该时间段与已有学习记录重叠，请调整后重试" : detail);
+    } finally {
+      setManualBusy(false);
     }
   }
 
@@ -457,7 +524,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         <article className="metric-card"><span>待复习错题</span><strong>16<small>道</small></strong><em>数学 7 · 408 9</em></article>
       </div>
 
-      <StudyHeatmap isDemo={isDemo} />
+      <StudyHeatmap isDemo={isDemo} refreshVersion={contributionRevision} />
 
       <div className="dashboard-grid">
         <section className="panel task-panel">
@@ -486,6 +553,18 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
             <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
             <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
           </section>
+          <section className="panel manual-card">
+            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
+            {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
+              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
+              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
+              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
+              {manualError && <p className="manual-error" role="alert">{manualError}</p>}
+              <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
+            </form>}
+          </section>
           <section className="panel review-card">
             <div className="eyebrow">AI 学习教练</div>
             <p>你最近三天的 408 学习时间低于周计划 1.8 小时。建议今晚将“Agent 项目开发”缩短 30 分钟，补一次数据结构错题复习。</p>
@@ -497,14 +576,268 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   );
 }
 
-function PlanView() {
-  const stages = [
-    { title: "基础阶段", range: "2026.09 — 2027.02", progress: 18, note: "数英 408 完成第一轮基础" },
-    { title: "强化阶段", range: "2027.03 — 2027.06", progress: 0, note: "专题强化与院校池收缩" },
-    { title: "真题阶段", range: "2027.07 — 2027.10", progress: 0, note: "真题、政治与复试能力预备" },
-    { title: "冲刺阶段", range: "2027.11 — 2027.12", progress: 0, note: "模考、查漏补缺与状态管理" },
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button">＋ 新建阶段计划</button></div><div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${index === 0 ? "current" : ""}`} key={stage.title}><div className="stage-index">0{index + 1}</div><div><span>{stage.range}</span><h2>{stage.title}</h2><p>{stage.note}</p><div className="progress-track"><span style={{ width: `${stage.progress}%` }} /></div><small>{stage.progress}% 完成</small></div></article>)}</div><section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">本周重点</div><h2>8月10日 — 8月16日</h2></div><span className="status-chip">执行中</span></div><div className="allocation-list">{[["数学一","12h",72],["英语一","7h",58],["计算机 408","10h",61],["AI 项目","8h",44]].map(([name, time, value]) => <div className="allocation" key={String(name)}><span>{name}</span><div className="progress-track"><span style={{ width: `${value}%` }} /></div><strong>{time}</strong></div>)}</div></section></section>;
+const demoPlans: ApiPlan[] = [
+  { id: "demo-stage-1", parent_id: null, level: "stage", title: "基础阶段", description: "数英 408 完成第一轮基础", starts_on: "2026-09-01", ends_on: "2027-02-28", status: "active" },
+  { id: "demo-stage-2", parent_id: null, level: "stage", title: "强化阶段", description: "专题强化与院校池收缩", starts_on: "2027-03-01", ends_on: "2027-06-30", status: "draft" },
+  { id: "demo-stage-3", parent_id: null, level: "stage", title: "真题阶段", description: "真题、政治与复试能力预备", starts_on: "2027-07-01", ends_on: "2027-10-31", status: "draft" },
+  { id: "demo-stage-4", parent_id: null, level: "stage", title: "冲刺阶段", description: "模考、查漏补缺与状态管理", starts_on: "2027-11-01", ends_on: "2027-12-31", status: "draft" },
+  { id: "demo-week-1", parent_id: "demo-stage-1", level: "week", title: "基础阶段第 1 周", description: "建立数学、英语与 408 的稳定节奏", starts_on: "2026-09-01", ends_on: "2026-09-06", status: "active" },
+];
+
+const planStatusLabel: Record<ApiPlan["status"], string> = {
+  draft: "草稿",
+  active: "执行中",
+  completed: "已完成",
+  archived: "已归档",
+};
+
+function planDateRange(plan: ApiPlan) {
+  return `${plan.starts_on.replaceAll("-", ".")} — ${plan.ends_on.replaceAll("-", ".")}`;
+}
+
+function suggestedWeekEnd(startsOn: string, parentEndsOn: string) {
+  if (!startsOn) return "";
+  const date = new Date(`${startsOn}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 6);
+  return [date.toISOString().slice(0, 10), parentEndsOn].sort()[0];
+}
+
+function PlanView({ isDemo }: { isDemo: boolean }) {
+  const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [formOpen, setFormOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [startsOn, setStartsOn] = useState(() => shanghaiDateKey(new Date()));
+  const [endsOn, setEndsOn] = useState("");
+  const [weekFormOpen, setWeekFormOpen] = useState(false);
+  const [weekParentId, setWeekParentId] = useState("");
+  const [weekTitle, setWeekTitle] = useState("");
+  const [weekDescription, setWeekDescription] = useState("");
+  const [weekStartsOn, setWeekStartsOn] = useState("");
+  const [weekEndsOn, setWeekEndsOn] = useState("");
+  const [weekBusy, setWeekBusy] = useState(false);
+  const [dayFormOpen, setDayFormOpen] = useState(false);
+  const [dayParentId, setDayParentId] = useState("");
+  const [dayTitle, setDayTitle] = useState("");
+  const [dayDescription, setDayDescription] = useState("");
+  const [dayDate, setDayDate] = useState("");
+  const [dayBusy, setDayBusy] = useState(false);
+  const [status, setStatus] = useState(isDemo ? "当前显示离线演示计划" : "正在读取云端计划…");
+
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    api.listPlans()
+      .then((items) => {
+        if (!active) return;
+        setPlans(items);
+        setStatus(items.length ? `已从云端同步 ${items.length} 条计划` : "云端还没有计划，可以创建第一个阶段计划");
+      })
+      .catch((error) => {
+        if (active) setStatus(error instanceof Error ? `计划加载失败：${error.message}` : "计划加载失败");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [isDemo]);
+
+  async function createStage(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || !endsOn || endsOn < startsOn) {
+      setStatus(endsOn && endsOn < startsOn ? "阶段结束日期不能早于开始日期" : "请完整填写阶段名称和日期");
+      return;
+    }
+    const payload = {
+      level: "stage" as const,
+      title: title.trim(),
+      description: description.trim(),
+      starts_on: startsOn,
+      ends_on: endsOn,
+      status: "active" as const,
+    };
+    setBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-stage-${Date.now()}`, parent_id: null }
+        : await api.createPlan(payload);
+      setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      setStatus(isDemo ? "演示阶段计划仅保留在当前页面" : "阶段计划已写入 Supabase 云端");
+      setTitle("");
+      setDescription("");
+      setEndsOn("");
+      setFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `阶段计划保存失败：${error.message}` : "阶段计划保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const stages = plans.filter((plan) => plan.level === "stage");
+  const weeks = plans.filter((plan) => plan.level === "week");
+  const days = plans.filter((plan) => plan.level === "day");
+  const weekParent = stages.find((stage) => stage.id === weekParentId);
+  const dayParent = weeks.find((week) => week.id === dayParentId);
+
+  function selectWeekParent(parentId: string) {
+    const parent = stages.find((stage) => stage.id === parentId);
+    setWeekParentId(parentId);
+    if (!parent) {
+      setWeekStartsOn("");
+      setWeekEndsOn("");
+      return;
+    }
+    setWeekStartsOn(parent.starts_on);
+    setWeekEndsOn(suggestedWeekEnd(parent.starts_on, parent.ends_on));
+  }
+
+  function toggleWeekForm() {
+    if (weekFormOpen) {
+      setWeekFormOpen(false);
+      return;
+    }
+    const parent = stages.find((stage) => stage.status === "active") ?? stages[0];
+    if (!parent) {
+      setStatus("请先创建阶段计划，再继续拆分周计划");
+      return;
+    }
+    selectWeekParent(parent.id);
+    setWeekFormOpen(true);
+  }
+
+  async function createWeek(event: FormEvent) {
+    event.preventDefault();
+    if (!weekParent || !weekTitle.trim() || !weekStartsOn || !weekEndsOn) {
+      setStatus("请完整填写周计划的所属阶段、名称和日期");
+      return;
+    }
+    if (weekEndsOn < weekStartsOn) {
+      setStatus("周计划结束日期不能早于开始日期");
+      return;
+    }
+    if (weekStartsOn < weekParent.starts_on || weekEndsOn > weekParent.ends_on) {
+      setStatus("周计划日期必须在所属阶段范围内");
+      return;
+    }
+    const payload = {
+      parent_id: weekParent.id,
+      level: "week" as const,
+      title: weekTitle.trim(),
+      description: weekDescription.trim(),
+      starts_on: weekStartsOn,
+      ends_on: weekEndsOn,
+      status: "active" as const,
+    };
+    setWeekBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-week-${weekParent.id}-${weekStartsOn}-${weekTitle.trim()}` }
+        : await api.createPlan(payload);
+      setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      setStatus(isDemo ? "演示周计划仅保留在当前页面" : "周计划已写入 Supabase 云端");
+      setWeekTitle("");
+      setWeekDescription("");
+      setWeekFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `周计划保存失败：${error.message}` : "周计划保存失败");
+    } finally {
+      setWeekBusy(false);
+    }
+  }
+
+  function selectDayParent(parentId: string) {
+    const parent = weeks.find((week) => week.id === parentId);
+    setDayParentId(parentId);
+    setDayDate(parent?.starts_on ?? "");
+  }
+
+  function toggleDayForm() {
+    if (dayFormOpen) {
+      setDayFormOpen(false);
+      return;
+    }
+    const parent = weeks.find((week) => week.status === "active") ?? weeks[0];
+    if (!parent) {
+      setStatus("请先创建周计划，再继续安排日计划");
+      return;
+    }
+    selectDayParent(parent.id);
+    setDayFormOpen(true);
+  }
+
+  async function createDay(event: FormEvent) {
+    event.preventDefault();
+    if (!dayParent || !dayTitle.trim() || !dayDate) {
+      setStatus("请完整填写日计划的所属周、名称和日期");
+      return;
+    }
+    if (dayDate < dayParent.starts_on || dayDate > dayParent.ends_on) {
+      setStatus("日计划日期必须在所属周计划范围内");
+      return;
+    }
+    const payload = {
+      parent_id: dayParent.id,
+      level: "day" as const,
+      title: dayTitle.trim(),
+      description: dayDescription.trim(),
+      starts_on: dayDate,
+      ends_on: dayDate,
+      status: "active" as const,
+    };
+    setDayBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-day-${dayParent.id}-${dayDate}-${dayTitle.trim()}` }
+        : await api.createPlan(payload);
+      setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      setStatus(isDemo ? "演示日计划仅保留在当前页面" : "日计划已写入 Supabase 云端");
+      setDayTitle("");
+      setDayDescription("");
+      setDayFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `日计划保存失败：${error.message}` : "日计划保存失败");
+    } finally {
+      setDayBusy(false);
+    }
+  }
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">从目标倒推行动</div><h1>三级计划</h1><p>阶段、周、日三层联动，计划变化由你最终确认。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 新建阶段计划"}</button></div>
+    {formOpen && <form className="panel plan-form" onSubmit={createStage}>
+      <div className="plan-form-heading"><div className="eyebrow">阶段计划</div><h2>定义一个长期复习阶段</h2></div>
+      <label className="plan-title">阶段名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：基础阶段" maxLength={160} required /></label>
+      <label>开始日期<input type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required /></label>
+      <label>结束日期<input type="date" value={endsOn} min={startsOn} onChange={(event) => setEndsOn(event.target.value)} required /></label>
+      <label className="plan-description">阶段目标<textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="这个阶段需要完成什么？" maxLength={2000} /></label>
+      <div className="plan-form-actions"><button type="button" onClick={() => setFormOpen(false)} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存阶段计划"}</button></div>
+    </form>}
+    <p className="plan-status-line">● {status}</p>
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small></div></article>)}</div>}
+    <section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">周计划</div><h2>{weeks.length ? `${weeks.length} 个周计划` : "尚未建立周计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleWeekForm}>{weekFormOpen ? "收起" : "＋ 新建周计划"}</button></div></div>
+      {weekFormOpen && <form className="plan-form week-plan-form" onSubmit={createWeek}>
+        <label className="plan-title">所属阶段<select value={weekParentId} onChange={(event) => selectWeekParent(event.target.value)} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.title}（{stage.starts_on} 至 {stage.ends_on}）</option>)}</select></label>
+        <label className="plan-title">周计划名称<input value={weekTitle} onChange={(event) => setWeekTitle(event.target.value)} placeholder="例如：基础阶段第 1 周" maxLength={160} required /></label>
+        <label>开始日期<input type="date" value={weekStartsOn} min={weekParent?.starts_on} max={weekParent?.ends_on} onChange={(event) => { const nextStart = event.target.value; setWeekStartsOn(nextStart); if (weekParent) setWeekEndsOn(suggestedWeekEnd(nextStart, weekParent.ends_on)); }} required /></label>
+        <label>结束日期<input type="date" value={weekEndsOn} min={weekStartsOn || weekParent?.starts_on} max={weekParent?.ends_on} onChange={(event) => setWeekEndsOn(event.target.value)} required /></label>
+        <label className="plan-description">本周重点<textarea value={weekDescription} onChange={(event) => setWeekDescription(event.target.value)} placeholder="这一周最重要的学习结果是什么？" maxLength={2000} /></label>
+        <div className="plan-form-actions"><button type="button" onClick={() => setWeekFormOpen(false)} disabled={weekBusy}>取消</button><button className="primary-button" type="submit" disabled={weekBusy}>{weekBusy ? "正在保存…" : "保存周计划"}</button></div>
+      </form>}
+      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
+    </section>
+    <section className="panel daily-plan"><div className="panel-heading"><div><div className="eyebrow">日计划</div><h2>{days.length ? `${days.length} 个日计划` : "尚未安排日计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleDayForm}>{dayFormOpen ? "收起" : "＋ 新建日计划"}</button></div></div>
+      {dayFormOpen && <form className="plan-form week-plan-form" onSubmit={createDay}>
+        <label className="plan-title">所属周计划<select value={dayParentId} onChange={(event) => selectDayParent(event.target.value)} required>{weeks.map((week) => <option key={week.id} value={week.id}>{week.title}（{week.starts_on} 至 {week.ends_on}）</option>)}</select></label>
+        <label className="plan-title">日计划名称<input value={dayTitle} onChange={(event) => setDayTitle(event.target.value)} placeholder="例如：高数极限专题与英语词汇" maxLength={160} required /></label>
+        <label>计划日期<input type="date" value={dayDate} min={dayParent?.starts_on} max={dayParent?.ends_on} onChange={(event) => setDayDate(event.target.value)} required /></label>
+        <label className="plan-description">当天成果<textarea value={dayDescription} onChange={(event) => setDayDescription(event.target.value)} placeholder="完成哪些章节、题目或复盘？" maxLength={2000} /></label>
+        <div className="plan-form-actions"><button type="button" onClick={() => setDayFormOpen(false)} disabled={dayBusy}>取消</button><button className="primary-button" type="submit" disabled={dayBusy}>{dayBusy ? "正在保存…" : "保存日计划"}</button></div>
+      </form>}
+      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
+    </section>
+  </section>;
 }
 
 function SubjectsView() {
@@ -637,11 +970,11 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
-function AuthScreen() {
+function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
@@ -700,7 +1033,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
@@ -734,6 +1067,7 @@ export default function Home() {
     status: isSupabaseConfigured ? "loading" : "demo",
     user: null,
   }));
+  const [authNotice, setAuthNotice] = useState("");
 
   useEffect(() => {
     const client = getSupabaseClient();
@@ -758,16 +1092,28 @@ export default function Home() {
       setApiAccessToken(session?.access_token ?? null);
       setAuthState({ status: session ? "signed_in" : "signed_out", user: session?.user ?? null });
     });
-    return () => { active = false; subscription.unsubscribe(); };
+    setApiAuthFailureHandler(() => {
+      if (!active) return;
+      setApiAccessToken(null);
+      setAuthNotice("登录状态已失效，请重新登录。");
+      setAuthState({ status: "signed_out", user: null });
+      void client.auth.signOut({ scope: "local" });
+    });
+    return () => {
+      active = false;
+      setApiAuthFailureHandler(null);
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
     const client = getSupabaseClient();
     if (client) await client.auth.signOut();
     setApiAccessToken(null);
+    setAuthNotice("");
   }
 
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
-  if (authState.status === "signed_out") return <AuthScreen />;
+  if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
   return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
 }

@@ -2,9 +2,11 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 Subject = Literal["math", "english", "politics", "cs408", "career"]
+PlanLevel = Literal["stage", "week", "day"]
+PlanStatus = Literal["draft", "active", "completed", "archived"]
 
 
 class StrictRequestModel(BaseModel):
@@ -50,6 +52,26 @@ class TaskUpdate(StrictRequestModel):
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None
+
+
+class PlanCreate(StrictRequestModel):
+    parent_id: UUID | None = None
+    level: PlanLevel
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(default="", max_length=2000)
+    starts_on: date
+    ends_on: date
+    status: PlanStatus = "active"
+
+    @model_validator(mode="after")
+    def validate_hierarchy_shape(self) -> "PlanCreate":
+        if self.ends_on < self.starts_on:
+            raise ValueError("ends_on must not be earlier than starts_on")
+        if self.level == "stage" and self.parent_id is not None:
+            raise ValueError("stage plan cannot have a parent")
+        if self.level != "stage" and self.parent_id is None:
+            raise ValueError("week and day plans require a parent")
+        return self
 
 
 class WebSearchRequest(StrictRequestModel):

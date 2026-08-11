@@ -21,6 +21,8 @@ from app.schemas import (
     ContributionDay,
     ImportPreviewRequest,
     ImportProposal,
+    PlanCreate,
+    PlanLevel,
     SearchSource,
     StudySessionCreate,
     TaskCreate,
@@ -31,6 +33,7 @@ from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
 from app.services.repository import (
     RepositoryConflictError,
     RepositoryError,
+    RepositoryValidationError,
     build_repository,
 )
 from app.services.search import get_search_provider
@@ -60,7 +63,12 @@ document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
 @app.exception_handler(RepositoryError)
 async def repository_error_handler(_: Request, error: RepositoryError) -> JSONResponse:
     logger.error("Repository request failed: %s", error)
-    status = 409 if isinstance(error, RepositoryConflictError) else 502
+    if isinstance(error, RepositoryConflictError):
+        status = 409
+    elif isinstance(error, RepositoryValidationError):
+        status = 422
+    else:
+        status = 502
     return JSONResponse(status_code=status, content={"detail": str(error)})
 
 
@@ -87,6 +95,22 @@ async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
 @app.get("/api/v1/tasks")
 async def list_tasks(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
     return await repository.list_tasks(user)
+
+
+@app.get("/api/v1/plans")
+async def list_plans(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    level: PlanLevel | None = None,
+) -> list[dict]:
+    return await repository.list_plans(user, level)
+
+
+@app.post("/api/v1/plans", status_code=201)
+async def create_plan(
+    payload: PlanCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_plan(user, payload)
 
 
 @app.post("/api/v1/tasks", status_code=201)

@@ -12,9 +12,7 @@ from app.services.repository import DemoRepository
 class ApiFlowTests(TestCase):
     def setUp(self):
         self.previous_repository = main.repository
-        main.repository = DemoRepository(
-            now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC)
-        )
+        main.repository = DemoRepository(now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC))
         self.user = AuthUser(
             id=UUID("11111111-1111-1111-1111-111111111111"),
             email="one@example.com",
@@ -117,6 +115,69 @@ class ApiFlowTests(TestCase):
         )
         self.current_user = self.user
         self.assertEqual(self.task_count(), 1)
+
+    def test_three_level_plans_are_created_and_isolated_by_user(self):
+        stage = self.client.post(
+            "/api/v1/plans",
+            json={
+                "level": "stage",
+                "title": "基础阶段",
+                "description": "完成数学、英语和 408 第一轮基础",
+                "starts_on": "2026-09-01",
+                "ends_on": "2027-02-28",
+            },
+        )
+        self.assertEqual(stage.status_code, 201)
+        week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage.json()["id"],
+                "level": "week",
+                "title": "基础阶段第 1 周",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-06",
+            },
+        )
+        self.assertEqual(week.status_code, 201)
+        self.assertEqual(
+            [item["title"] for item in self.client.get("/api/v1/plans?level=week").json()],
+            ["基础阶段第 1 周"],
+        )
+
+        outside_week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage.json()["id"],
+                "level": "week",
+                "title": "超出阶段范围的周计划",
+                "starts_on": "2027-02-27",
+                "ends_on": "2027-03-05",
+            },
+        )
+        self.assertEqual(outside_week.status_code, 422)
+        self.assertEqual(
+            outside_week.json()["detail"],
+            "child plan dates must stay within parent plan dates",
+        )
+
+        invalid_day = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage.json()["id"],
+                "level": "day",
+                "title": "层级错误的日计划",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-01",
+            },
+        )
+        self.assertEqual(invalid_day.status_code, 422)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/plans").json(), [])
 
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
