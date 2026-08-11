@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiPlan, type ApiTask, type ContributionScope, type PlanProgress, type PlanStatus, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiMistakeCard, type ApiPlan, type ApiTask, type ContributionScope, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -56,6 +56,11 @@ const initialTasks: Task[] = [
   { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true },
   { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false },
   { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
+];
+
+const initialMistakes: ApiMistakeCard[] = [
+  { id: "demo-mistake-1", subject: "cs408", title: "二叉树非递归遍历", question: "写出中序遍历的栈实现", answer: "先沿左链入栈，再访问并转向右子树", error_reason: "忘记访问后转向右子树", mastery: 1, next_review_at: new Date().toISOString(), review_count: 0 },
+  { id: "demo-mistake-2", subject: "math", title: "等价无穷小替换条件", question: "何时不能直接进行等价无穷小替换？", answer: "加减关系中需要先变形，不能直接替换", error_reason: "混淆乘除和加减场景", mastery: 2, next_review_at: new Date().toISOString(), review_count: 1 },
 ];
 
 function taskFromApi(task: ApiTask, planTitle?: string): Task {
@@ -337,19 +342,29 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [manualEndedTime, setManualEndedTime] = useState("20:00");
   const [manualNote, setManualNote] = useState("");
   const [manualError, setManualError] = useState("");
+  const [mistakes, setMistakes] = useState<ApiMistakeCard[]>(() => isDemo ? initialMistakes : []);
+  const [mistakeFormOpen, setMistakeFormOpen] = useState(false);
+  const [mistakeBusy, setMistakeBusy] = useState(false);
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
+  const [mistakeSubject, setMistakeSubject] = useState<MistakeSubject>("math");
+  const [mistakeTitle, setMistakeTitle] = useState("");
+  const [mistakeQuestion, setMistakeQuestion] = useState("");
+  const [mistakeReason, setMistakeReason] = useState("");
+  const [mistakeStatus, setMistakeStatus] = useState("");
 
   useEffect(() => {
     if (isDemo) return;
     let active = true;
     const today = shanghaiDateKey(new Date());
-    Promise.all([api.today(), api.contributions(today, today, "all"), api.listPlans("day")])
-      .then(([snapshot, contributions, plans]) => {
+    Promise.all([api.today(), api.contributions(today, today, "all"), api.listPlans("day"), api.listMistakes(true)])
+      .then(([snapshot, contributions, plans, dueMistakes]) => {
         if (!active) return;
         const todayPlans = plans.filter((plan) => plan.starts_on === today);
         const planTitleById = new Map(todayPlans.map((plan) => [plan.id, plan.title]));
         setDayPlans(todayPlans);
         setNewTaskPlanId(todayPlans.find((plan) => plan.status === "active")?.id ?? todayPlans[0]?.id ?? "");
         setTasks(snapshot.tasks.map((task) => taskFromApi(task, task.plan_id ? planTitleById.get(task.plan_id) : undefined)));
+        setMistakes(dueMistakes);
         setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
         setCloudState("ready");
         setRecordStatus("已同步至 Supabase 云端 · 数据来自学习会话");
@@ -399,6 +414,52 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       setContributionRevision((value) => value + 1);
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    }
+  }
+
+  async function addMistake(event: FormEvent) {
+    event.preventDefault();
+    if (!mistakeTitle.trim() || !mistakeQuestion.trim()) {
+      setMistakeStatus("请填写错题标题和题目内容");
+      return;
+    }
+    const payload = {
+      subject: mistakeSubject,
+      title: mistakeTitle.trim(),
+      question: mistakeQuestion.trim(),
+      error_reason: mistakeReason.trim(),
+    };
+    setMistakeBusy(true);
+    try {
+      const saved = isDemo
+        ? { ...payload, id: `demo-mistake-${Date.now()}`, answer: "", mastery: 1, next_review_at: new Date().toISOString(), review_count: 0 }
+        : await api.createMistake(payload);
+      setMistakes((items) => [saved, ...items]);
+      setMistakeTitle("");
+      setMistakeQuestion("");
+      setMistakeReason("");
+      setMistakeFormOpen(false);
+      setMistakeStatus(isDemo ? "演示错题已加入当前复习列表" : "错题已写入云端并加入复习列表");
+      setContributionRevision((value) => value + 1);
+    } catch (error) {
+      setMistakeStatus(error instanceof Error ? `错题保存失败：${error.message}` : "错题保存失败");
+    } finally {
+      setMistakeBusy(false);
+    }
+  }
+
+  async function reviewMistake(card: ApiMistakeCard, result: MistakeReviewResult) {
+    setReviewBusyId(card.id);
+    try {
+      const reviewed = isDemo
+        ? { ...card, review_count: card.review_count + 1 }
+        : await api.reviewMistake(card.id, result);
+      setMistakes((items) => items.filter((item) => item.id !== card.id));
+      setMistakeStatus(`“${card.title}”复习完成，第 ${reviewed.review_count} 次记录已保存`);
+    } catch (error) {
+      setMistakeStatus(error instanceof Error ? `复习记录失败：${error.message}` : "复习记录失败");
+    } finally {
+      setReviewBusyId(null);
     }
   }
 
@@ -528,7 +589,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round((todayMinutes ?? 0) / 360 * 100))}%</em></>}</article>
         <article className="metric-card"><span>本周完成率</span><strong>68<small>%</small></strong><em>已完成 17 / 25 项</em></article>
         <article className="metric-card"><span>连续学习</span><strong>12<small>天</small></strong><em>最长记录 28 天</em></article>
-        <article className="metric-card"><span>待复习错题</span><strong>16<small>道</small></strong><em>数学 7 · 408 9</em></article>
+        <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
 
       <StudyHeatmap isDemo={isDemo} refreshVersion={contributionRevision} />
@@ -573,9 +634,19 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
             </form>}
           </section>
           <section className="panel review-card">
-            <div className="eyebrow">AI 学习教练</div>
-            <p>你最近三天的 408 学习时间低于周计划 1.8 小时。建议今晚将“Agent 项目开发”缩短 30 分钟，补一次数据结构错题复习。</p>
-            <div className="proposal-actions"><button>查看调整</button><button className="text-button">暂不处理</button></div>
+            <div className="review-heading"><div><div className="eyebrow">错题复习</div><strong>{mistakes.length} 道待复习</strong></div><button type="button" onClick={() => { setMistakeFormOpen((value) => !value); setMistakeStatus(""); }}>{mistakeFormOpen ? "收起" : "＋ 速记"}</button></div>
+            {mistakeFormOpen && <form className="mistake-form" onSubmit={addMistake}>
+              <label>科目<select value={mistakeSubject} onChange={(event) => setMistakeSubject(event.target.value as MistakeSubject)}>{Object.entries(subjectMeta).filter(([key]) => key !== "career").map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label>错题标题<input value={mistakeTitle} onChange={(event) => setMistakeTitle(event.target.value)} placeholder="例如：二叉树非递归遍历" maxLength={160} required /></label>
+              <label>题目或知识点<textarea value={mistakeQuestion} onChange={(event) => setMistakeQuestion(event.target.value)} placeholder="记录题目、题号或关键条件" maxLength={10000} required /></label>
+              <label>错误原因<textarea value={mistakeReason} onChange={(event) => setMistakeReason(event.target.value)} placeholder="我为什么做错？" maxLength={10000} /></label>
+              <button type="submit" disabled={mistakeBusy}>{mistakeBusy ? "正在保存…" : "保存错题"}</button>
+            </form>}
+            <div className="mistake-list">
+              {mistakes.length === 0 && <p className="mistake-empty">当前没有到期错题，保持这个节奏。</p>}
+              {mistakes.map((card) => <article className="mistake-item" key={card.id}><div><span className={`subject-badge ${card.subject}`}>{subjectMeta[card.subject].short}</span><strong>{card.title}</strong><small>掌握度 {card.mastery}/5 · 已复习 {card.review_count} 次</small></div><p>{card.question}</p>{card.error_reason && <p className="mistake-reason">错因：{card.error_reason}</p>}<div className="review-actions"><button type="button" disabled={reviewBusyId === card.id} onClick={() => void reviewMistake(card, "again")}>重来</button><button type="button" disabled={reviewBusyId === card.id} onClick={() => void reviewMistake(card, "hard")}>困难</button><button type="button" disabled={reviewBusyId === card.id} onClick={() => void reviewMistake(card, "good")}>良好</button><button type="button" disabled={reviewBusyId === card.id} onClick={() => void reviewMistake(card, "easy")}>简单</button></div></article>)}
+            </div>
+            {mistakeStatus && <p className="mistake-status">● {mistakeStatus}</p>}
           </section>
         </aside>
       </div>
