@@ -174,7 +174,7 @@ class SupabaseRepository:
                 "GET",
                 "plans",
                 params={
-                    "select": "id,level",
+                    "select": "id,level,starts_on,ends_on",
                     "id": f"eq.{payload.parent_id}",
                     "user_id": f"eq.{user.id}",
                 },
@@ -185,6 +185,12 @@ class SupabaseRepository:
             if parents[0]["level"] != expected_level:
                 raise RepositoryValidationError(
                     f"{payload.level} plan requires a {expected_level} parent"
+                )
+            parent_starts_on = date.fromisoformat(parents[0]["starts_on"])
+            parent_ends_on = date.fromisoformat(parents[0]["ends_on"])
+            if payload.starts_on < parent_starts_on or payload.ends_on > parent_ends_on:
+                raise RepositoryValidationError(
+                    "child plan dates must stay within parent plan dates"
                 )
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)

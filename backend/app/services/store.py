@@ -38,6 +38,8 @@ class DemoStore:
                 raise ValueError("parent plan not found")
             if parent["level"] != expected_level:
                 raise ValueError(f"{payload.level} plan requires a {expected_level} parent")
+            if payload.starts_on < parent["starts_on"] or payload.ends_on > parent["ends_on"]:
+                raise ValueError("child plan dates must stay within parent plan dates")
         now = self.now()
         item = {
             "id": uuid4(),

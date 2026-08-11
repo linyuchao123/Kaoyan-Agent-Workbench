@@ -144,6 +144,22 @@ class ApiFlowTests(TestCase):
             ["基础阶段第 1 周"],
         )
 
+        outside_week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage.json()["id"],
+                "level": "week",
+                "title": "超出阶段范围的周计划",
+                "starts_on": "2027-02-27",
+                "ends_on": "2027-03-05",
+            },
+        )
+        self.assertEqual(outside_week.status_code, 422)
+        self.assertEqual(
+            outside_week.json()["detail"],
+            "child plan dates must stay within parent plan dates",
+        )
+
         invalid_day = self.client.post(
             "/api/v1/plans",
             json={

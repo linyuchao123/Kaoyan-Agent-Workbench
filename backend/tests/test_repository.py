@@ -11,6 +11,7 @@ from app.schemas import PlanCreate, StudySessionCreate, TaskCreate
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
+    RepositoryValidationError,
     SupabaseRepository,
 )
 
@@ -165,6 +166,43 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         payload = json.loads(requests[1].content)
         self.assertEqual(payload["user_id"], str(self.user.id))
         self.assertNotIn("access_token", payload)
+
+    async def test_supabase_child_plan_must_stay_inside_parent_dates(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.method, "GET")
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "level": "stage",
+                        "starts_on": "2026-09-01",
+                        "ends_on": "2027-02-28",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+
+        with self.assertRaisesRegex(
+            RepositoryValidationError,
+            "child plan dates must stay within parent plan dates",
+        ):
+            await repository.create_plan(
+                self.user,
+                PlanCreate(
+                    parent_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                    level="week",
+                    title="超出阶段范围的周计划",
+                    starts_on=date(2027, 2, 27),
+                    ends_on=date(2027, 3, 5),
+                ),
+            )
 
     async def test_supabase_session_write_uses_current_user_identity(self):
         requests: list[httpx.Request] = []
