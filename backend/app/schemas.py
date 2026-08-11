@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 Subject = Literal["math", "english", "politics", "cs408", "career"]
+AcademicSubject = Literal["math", "english", "politics", "cs408"]
 PlanLevel = Literal["stage", "week", "day"]
 PlanStatus = Literal["draft", "active", "completed", "archived"]
 
@@ -96,6 +97,18 @@ class PlanProgress(BaseModel):
     completed_tasks: int = 0
     completion_rate: int = Field(default=0, ge=0, le=100)
     actual_minutes: int = 0
+
+
+class MistakeCardCreate(StrictRequestModel):
+    subject: AcademicSubject
+    title: str = Field(min_length=1, max_length=160)
+    question: str = Field(min_length=1, max_length=10000)
+    answer: str = Field(default="", max_length=10000)
+    error_reason: str = Field(default="", max_length=10000)
+
+
+class MistakeReviewCreate(StrictRequestModel):
+    result: Literal["again", "hard", "good", "easy"]
 
 
 class WebSearchRequest(StrictRequestModel):

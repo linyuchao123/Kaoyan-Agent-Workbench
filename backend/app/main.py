@@ -21,6 +21,8 @@ from app.schemas import (
     ContributionDay,
     ImportPreviewRequest,
     ImportProposal,
+    MistakeCardCreate,
+    MistakeReviewCreate,
     PlanCreate,
     PlanLevel,
     PlanProgress,
@@ -183,6 +185,34 @@ async def create_session(
         return await repository.create_session(user, payload)
     except SessionOverlapError as error:
         raise HTTPException(409, str(error)) from error
+
+
+@app.get("/api/v1/mistakes")
+async def list_mistakes(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    due_only: bool = False,
+) -> list[dict]:
+    return await repository.list_mistakes(user, due_only)
+
+
+@app.post("/api/v1/mistakes", status_code=201)
+async def create_mistake(
+    payload: MistakeCardCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_mistake(user, payload)
+
+
+@app.post("/api/v1/mistakes/{card_id}/reviews")
+async def review_mistake(
+    card_id: UUID,
+    payload: MistakeReviewCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    card = await repository.review_mistake(user, card_id, payload)
+    if not card:
+        raise HTTPException(404, "mistake card not found")
+    return card
 
 
 @app.get("/api/v1/analytics/contributions", response_model=list[ContributionDay])

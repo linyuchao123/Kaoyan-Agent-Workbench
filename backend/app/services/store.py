@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 from app.domain.contributions import StudyInterval, aggregate_daily_minutes, intensity_level
 from app.schemas import (
     ContributionDay,
+    MistakeCardCreate,
+    MistakeReviewCreate,
     PlanCreate,
     PlanUpdate,
     StudySessionCreate,
@@ -32,6 +34,8 @@ class DemoStore:
         self.tasks: dict[UUID, dict] = {}
         self.sessions: dict[UUID, dict] = {}
         self.plans: dict[UUID, dict] = {}
+        self.mistake_cards: dict[UUID, dict] = {}
+        self.review_events: dict[UUID, dict] = {}
 
     def list_plans(self, level: str | None = None) -> list[dict]:
         plans = [item for item in self.plans.values() if level is None or item["level"] == level]
@@ -166,6 +170,59 @@ class DemoStore:
         self.sessions[item["id"]] = item
         return item
 
+    def list_mistakes(self, due_only: bool = False) -> list[dict]:
+        now = self.now()
+        cards = list(self.mistake_cards.values())
+        if due_only:
+            cards = [card for card in cards if card["next_review_at"] <= now]
+        return sorted(cards, key=lambda card: (card["next_review_at"], card["created_at"]))
+
+    def create_mistake(self, payload: MistakeCardCreate) -> dict:
+        now = self.now()
+        card = {
+            "id": uuid4(),
+            **payload.model_dump(),
+            "mastery": 1,
+            "next_review_at": now,
+            "review_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.mistake_cards[card["id"]] = card
+        return card
+
+    def review_mistake(self, card_id: UUID, payload: MistakeReviewCreate) -> dict | None:
+        card = self.mistake_cards.get(card_id)
+        if not card:
+            return None
+        result_settings = {
+            "again": (-1, 1),
+            "hard": (0, 3),
+            "good": (1, 7),
+            "easy": (2, 14),
+        }
+        mastery_delta, interval_days = result_settings[payload.result]
+        mastery_before = card["mastery"]
+        mastery_after = max(1, min(5, mastery_before + mastery_delta))
+        now = self.now()
+        event = {
+            "id": uuid4(),
+            "mistake_card_id": card_id,
+            "result": payload.result,
+            "mastery_before": mastery_before,
+            "mastery_after": mastery_after,
+            "reviewed_at": now,
+            "created_at": now,
+        }
+        self.review_events[event["id"]] = event
+        card.update(
+            mastery=mastery_after,
+            review_count=card["review_count"] + 1,
+            next_review_at=now + timedelta(days=interval_days),
+            updated_at=now,
+        )
+        return card
+
     def contributions(self, from_date: date, to_date: date, scope: str) -> list[ContributionDay]:
         sessions = self.list_sessions()
         by_subject: dict[str, dict[date, int]] = {}
@@ -198,6 +255,10 @@ class DemoStore:
             if item.get("completed_at"):
                 completed_tasks[item["completed_at"].astimezone(self.timezone).date()] += 1
 
+        mistake_counts: dict[date, int] = defaultdict(int)
+        for item in self.mistake_cards.values():
+            mistake_counts[item["created_at"].astimezone(self.timezone).date()] += 1
+
         result: list[ContributionDay] = []
         cursor = from_date
         while cursor <= to_date:
@@ -217,7 +278,7 @@ class DemoStore:
                     ),
                     session_count=session_days[cursor],
                     completed_tasks=completed_tasks[cursor],
-                    mistake_count=0,
+                    mistake_count=mistake_counts[cursor],
                     subject_minutes=subject_minutes,
                 )
             )

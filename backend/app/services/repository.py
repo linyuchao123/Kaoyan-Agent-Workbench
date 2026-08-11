@@ -10,6 +10,8 @@ from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
     ContributionDay,
+    MistakeCardCreate,
+    MistakeReviewCreate,
     PlanCreate,
     PlanProgress,
     PlanUpdate,
@@ -62,6 +64,14 @@ class StudyRepository(Protocol):
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
     ) -> list[ContributionDay]: ...
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]: ...
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict: ...
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None: ...
 
 
 class DemoRepository:
@@ -131,6 +141,17 @@ class DemoRepository:
         self, user: AuthUser, from_date: date, to_date: date, scope: str
     ) -> list[ContributionDay]:
         return self._store(user).contributions(from_date, to_date, scope)
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
+        return self._store(user).list_mistakes(due_only)
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
+        return self._store(user).create_mistake(payload)
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None:
+        return self._store(user).review_mistake(card_id, payload)
 
 
 class SupabaseRepository:
@@ -459,6 +480,51 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
+        params = {
+            "select": "id,subject,title,question,answer,error_reason,mastery,next_review_at,review_count,created_at,updated_at",
+            "user_id": f"eq.{user.id}",
+            "order": "next_review_at.asc,created_at.asc",
+        }
+        if due_only:
+            params["next_review_at"] = f"lte.{datetime.now(UTC).isoformat()}"
+        return await self._request(user, "GET", "mistake_cards", params=params)
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
+        body = payload.model_dump(mode="json")
+        body.update(user_id=str(user.id), next_review_at=datetime.now(UTC).isoformat())
+        rows = await self._request(
+            user,
+            "POST",
+            "mistake_cards",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None:
+        owned = await self._request(
+            user,
+            "GET",
+            "mistake_cards",
+            params={
+                "select": "id",
+                "id": f"eq.{card_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        if not owned:
+            return None
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/review_mistake_card",
+            json={"p_card_id": str(card_id), "p_result": payload.result},
+        )
+        return rows[0] if rows else None
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

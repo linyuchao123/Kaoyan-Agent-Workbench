@@ -388,6 +388,50 @@ class ApiFlowTests(TestCase):
             404,
         )
 
+    def test_mistake_card_review_loop_updates_mastery_and_due_list(self):
+        created = self.client.post(
+            "/api/v1/mistakes",
+            json={
+                "subject": "cs408",
+                "title": "二叉树非递归遍历",
+                "question": "写出中序遍历的栈实现",
+                "answer": "先沿左链入栈，再访问并转向右子树",
+                "error_reason": "忘记转向右子树",
+            },
+        )
+        self.assertEqual(created.status_code, 201)
+        card = created.json()
+        self.assertEqual(card["mastery"], 1)
+        self.assertEqual(card["review_count"], 0)
+        self.assertEqual(len(self.client.get("/api/v1/mistakes?due_only=true").json()), 1)
+
+        contribution = self.client.get(
+            "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
+        ).json()[0]
+        self.assertEqual(contribution["mistake_count"], 1)
+
+        reviewed = self.client.post(
+            f"/api/v1/mistakes/{card['id']}/reviews",
+            json={"result": "good"},
+        )
+        self.assertEqual(reviewed.status_code, 200)
+        self.assertEqual(reviewed.json()["mastery"], 2)
+        self.assertEqual(reviewed.json()["review_count"], 1)
+        self.assertEqual(self.client.get("/api/v1/mistakes?due_only=true").json(), [])
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(
+            self.client.post(
+                f"/api/v1/mistakes/{card['id']}/reviews",
+                json={"result": "again"},
+            ).status_code,
+            404,
+        )
+
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
             "/api/v1/tasks",

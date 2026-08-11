@@ -21,3 +21,11 @@ class MigrationContractTests(TestCase):
         sql = Path("supabase/migrations/202608100002_cloud_study_loop.sql").read_text()
         self.assertIn("grant select on public.profiles to authenticated", sql)
         self.assertIn("grant select on public.mistake_cards to authenticated", sql)
+
+    def test_mistake_review_is_atomic_and_user_scoped(self):
+        sql = Path("supabase/migrations/202608110002_mistake_review_loop.sql").read_text()
+        self.assertIn("create or replace function public.review_mistake_card", sql)
+        self.assertIn("user_id = auth.uid()", sql)
+        self.assertIn("insert into public.review_events", sql)
+        self.assertIn("update public.mistake_cards", sql)
+        self.assertIn("grant execute on function public.review_mistake_card", sql)
