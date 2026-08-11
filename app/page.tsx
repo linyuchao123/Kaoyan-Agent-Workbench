@@ -173,7 +173,7 @@ function formatTimer(seconds: number) {
   return `${hours}:${minutes}:${secs}`;
 }
 
-function StudyHeatmap({ isDemo }: { isDemo: boolean }) {
+function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVersion: number }) {
   const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
   const [year, setYear] = useState(currentYear);
   const [scope, setScope] = useState<Scope>("all");
@@ -215,7 +215,7 @@ function StudyHeatmap({ isDemo }: { isDemo: boolean }) {
         if (!cancelled) setCloudData({ key: queryKey, status: "error", data: null });
       });
     return () => { cancelled = true; };
-  }, [isDemo, queryKey, scope, year]);
+  }, [isDemo, queryKey, refreshVersion, scope, year]);
 
   const padded = useMemo(() => {
     const first = new Date(`${year}-01-01T00:00:00Z`);
@@ -326,6 +326,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
+  const [contributionRevision, setContributionRevision] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSubject, setManualSubject] = useState<Subject>("math");
@@ -388,6 +389,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     try {
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
+      setContributionRevision((value) => value + 1);
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
     }
@@ -435,6 +437,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       });
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setContributionRevision((value) => value + 1);
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
@@ -490,6 +493,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
       }
       setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setContributionRevision((value) => value + 1);
       setManualOpen(false);
       setManualNote("");
     } catch (error) {
@@ -520,7 +524,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         <article className="metric-card"><span>待复习错题</span><strong>16<small>道</small></strong><em>数学 7 · 408 9</em></article>
       </div>
 
-      <StudyHeatmap isDemo={isDemo} />
+      <StudyHeatmap isDemo={isDemo} refreshVersion={contributionRevision} />
 
       <div className="dashboard-grid">
         <section className="panel task-panel">
