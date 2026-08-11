@@ -93,6 +93,7 @@ class DemoStore:
         return sorted(self.tasks.values(), key=lambda item: item["created_at"])
 
     def create_task(self, payload: TaskCreate) -> dict:
+        self._validate_task_plan(payload.plan_id)
         now = self.now()
         item = {
             "id": uuid4(),
@@ -110,11 +111,20 @@ class DemoStore:
         if not item:
             return None
         changes = payload.model_dump(exclude_unset=True)
+        if "plan_id" in changes:
+            self._validate_task_plan(changes["plan_id"])
         if "completed" in changes:
             changes["completed_at"] = self.now() if changes["completed"] else None
         item.update(changes)
         item["updated_at"] = self.now()
         return item
+
+    def _validate_task_plan(self, plan_id: UUID | None) -> None:
+        if plan_id is None:
+            return
+        plan = self.plans.get(plan_id)
+        if not plan or plan["level"] != "day":
+            raise ValueError("task plan must be an owned day plan")
 
     def list_sessions(self) -> list[dict]:
         return sorted(self.sessions.values(), key=lambda item: item["started_at"])

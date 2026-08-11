@@ -45,6 +45,7 @@ class TaskCreate(StrictRequestModel):
     subject: Subject
     planned_minutes: int = Field(default=30, ge=1, le=1440)
     due_at: datetime | None = None
+    plan_id: UUID | None = None
 
 
 class TaskUpdate(StrictRequestModel):
@@ -52,6 +53,7 @@ class TaskUpdate(StrictRequestModel):
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None
+    plan_id: UUID | None = None
 
 
 class PlanCreate(StrictRequestModel):

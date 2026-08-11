@@ -103,10 +103,16 @@ class DemoRepository:
         return self._store(user).list_tasks()
 
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict:
-        return self._store(user).create_task(payload)
+        try:
+            return self._store(user).create_task(payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
 
     async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
-        return self._store(user).update_task(task_id, payload)
+        try:
+            return self._store(user).update_task(task_id, payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
 
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_sessions()
@@ -170,6 +176,8 @@ class SupabaseRepository:
             if error_payload.get("code") == "23P01":
                 raise RepositoryConflictError("study session overlaps an existing session")
             message = error_payload.get("message") or "Supabase database request failed"
+            if error_payload.get("code") == "23514":
+                raise RepositoryValidationError(str(message))
             raise RepositoryError(str(message))
         if response.status_code == 204 or not response.content:
             return None
@@ -311,14 +319,32 @@ class SupabaseRepository:
             "GET",
             "tasks",
             params={
-                "select": "id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
+                "select": "id,plan_id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.asc",
             },
         )
         return [self._task(row) for row in rows]
 
+    async def _validate_task_plan(self, user: AuthUser, plan_id: UUID | None) -> None:
+        if plan_id is None:
+            return
+        plans = await self._request(
+            user,
+            "GET",
+            "plans",
+            params={
+                "select": "id",
+                "id": f"eq.{plan_id}",
+                "user_id": f"eq.{user.id}",
+                "level": "eq.day",
+            },
+        )
+        if not plans:
+            raise RepositoryValidationError("task plan must be an owned day plan")
+
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict:
+        await self._validate_task_plan(user, payload.plan_id)
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)
         rows = await self._request(
@@ -332,6 +358,8 @@ class SupabaseRepository:
 
     async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
         changes = payload.model_dump(mode="json", exclude_unset=True)
+        if "plan_id" in changes:
+            await self._validate_task_plan(user, payload.plan_id)
         completed = changes.pop("completed", None)
         if completed is not None:
             changes["completed_at"] = datetime.now(UTC).isoformat() if completed else None
@@ -341,7 +369,7 @@ class SupabaseRepository:
                 "GET",
                 "tasks",
                 params={
-                    "select": "id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
+                    "select": "id,plan_id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
                     "id": f"eq.{task_id}",
                     "user_id": f"eq.{user.id}",
                 },

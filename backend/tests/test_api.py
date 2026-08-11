@@ -260,6 +260,61 @@ class ApiFlowTests(TestCase):
         )
         self.assertEqual(self.client.delete(f"/api/v1/plans/{plan['id']}").status_code, 404)
 
+    def test_task_can_only_link_to_owned_day_plan(self):
+        stage = self.client.post(
+            "/api/v1/plans",
+            json={
+                "level": "stage",
+                "title": "基础阶段",
+                "starts_on": "2026-09-01",
+                "ends_on": "2027-02-28",
+            },
+        ).json()
+        week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage["id"],
+                "level": "week",
+                "title": "基础阶段第 1 周",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-07",
+            },
+        ).json()
+        day = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": week["id"],
+                "level": "day",
+                "title": "9 月 1 日计划",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-01",
+            },
+        ).json()
+
+        linked = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "plan_id": day["id"]},
+        )
+        self.assertEqual(linked.status_code, 201)
+        self.assertEqual(linked.json()["plan_id"], day["id"])
+
+        wrong_level = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "错误关联", "subject": "math", "plan_id": stage["id"]},
+        )
+        self.assertEqual(wrong_level.status_code, 422)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        other_user = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "越权关联", "subject": "math", "plan_id": day["id"]},
+        )
+        self.assertEqual(other_user.status_code, 422)
+
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
             "/api/v1/tasks",
