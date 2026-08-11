@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiTask, type ContributionScope, type Subject } from "./lib/api";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
@@ -637,11 +637,11 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
-function AuthScreen() {
+function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
@@ -734,6 +734,7 @@ export default function Home() {
     status: isSupabaseConfigured ? "loading" : "demo",
     user: null,
   }));
+  const [authNotice, setAuthNotice] = useState("");
 
   useEffect(() => {
     const client = getSupabaseClient();
@@ -758,16 +759,28 @@ export default function Home() {
       setApiAccessToken(session?.access_token ?? null);
       setAuthState({ status: session ? "signed_in" : "signed_out", user: session?.user ?? null });
     });
-    return () => { active = false; subscription.unsubscribe(); };
+    setApiAuthFailureHandler(() => {
+      if (!active) return;
+      setApiAccessToken(null);
+      setAuthNotice("登录状态已失效，请重新登录。");
+      setAuthState({ status: "signed_out", user: null });
+      void client.auth.signOut({ scope: "local" });
+    });
+    return () => {
+      active = false;
+      setApiAuthFailureHandler(null);
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function signOut() {
     const client = getSupabaseClient();
     if (client) await client.auth.signOut();
     setApiAccessToken(null);
+    setAuthNotice("");
   }
 
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
-  if (authState.status === "signed_out") return <AuthScreen />;
+  if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
   return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
 }

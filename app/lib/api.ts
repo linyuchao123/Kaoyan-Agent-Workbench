@@ -30,9 +30,36 @@ export type ActionProposal = {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 let accessToken: string | null = null;
+let authFailureHandler: (() => void) | null = null;
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 export function setApiAccessToken(token: string | null) {
   accessToken = token;
+}
+
+export function setApiAuthFailureHandler(handler: (() => void) | null) {
+  authFailureHandler = handler;
+}
+
+async function responseErrorMessage(response: Response): Promise<string> {
+  const fallback = `API request failed with ${response.status}`;
+  const body = await response.text();
+  if (!body) return fallback;
+  try {
+    const payload = JSON.parse(body) as { detail?: unknown };
+    return typeof payload.detail === "string" ? payload.detail : fallback;
+  } catch {
+    return body;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -44,8 +71,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
   });
   if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || `API request failed with ${response.status}`);
+    const detail = await responseErrorMessage(response);
+    if (response.status === 401) {
+      accessToken = null;
+      authFailureHandler?.();
+    }
+    throw new ApiError(response.status, detail);
   }
   return response.json() as Promise<T>;
 }
