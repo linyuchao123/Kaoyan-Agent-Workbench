@@ -179,6 +179,67 @@ class ApiFlowTests(TestCase):
         )
         self.assertEqual(self.client.get("/api/v1/plans").json(), [])
 
+    def test_plan_edit_delete_and_child_date_validation(self):
+        stage = self.client.post(
+            "/api/v1/plans",
+            json={
+                "level": "stage",
+                "title": "基础阶段",
+                "starts_on": "2026-09-01",
+                "ends_on": "2027-02-28",
+            },
+        ).json()
+        week = self.client.post(
+            "/api/v1/plans",
+            json={
+                "parent_id": stage["id"],
+                "level": "week",
+                "title": "基础阶段第 1 周",
+                "starts_on": "2026-09-01",
+                "ends_on": "2026-09-07",
+            },
+        ).json()
+
+        edited = self.client.patch(
+            f"/api/v1/plans/{week['id']}",
+            json={"title": "基础阶段第一周", "description": "建立稳定节奏"},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()["title"], "基础阶段第一周")
+
+        invalid_parent_dates = self.client.patch(
+            f"/api/v1/plans/{stage['id']}",
+            json={"starts_on": "2026-09-03"},
+        )
+        self.assertEqual(invalid_parent_dates.status_code, 422)
+
+        deleted = self.client.delete(f"/api/v1/plans/{stage['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.client.get("/api/v1/plans").json(), [])
+
+    def test_other_user_cannot_edit_or_delete_plan(self):
+        plan = self.client.post(
+            "/api/v1/plans",
+            json={
+                "level": "stage",
+                "title": "用户一阶段",
+                "starts_on": "2026-09-01",
+                "ends_on": "2027-02-28",
+            },
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(
+            self.client.patch(
+                f"/api/v1/plans/{plan['id']}", json={"title": "越权修改"}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(self.client.delete(f"/api/v1/plans/{plan['id']}").status_code, 404)
+
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
             "/api/v1/tasks",

@@ -8,7 +8,14 @@ import httpx
 from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
-from app.schemas import ContributionDay, PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import (
+    ContributionDay,
+    PlanCreate,
+    PlanUpdate,
+    StudySessionCreate,
+    TaskCreate,
+    TaskUpdate,
+)
 from app.services.store import DemoStore
 
 
@@ -30,6 +37,12 @@ class StudyRepository(Protocol):
     async def list_plans(self, user: AuthUser, level: str | None = None) -> list[dict]: ...
 
     async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict: ...
+
+    async def update_plan(
+        self, user: AuthUser, plan_id: UUID, payload: PlanUpdate
+    ) -> dict | None: ...
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool: ...
 
     async def list_tasks(self, user: AuthUser) -> list[dict]: ...
 
@@ -76,6 +89,15 @@ class DemoRepository:
             return self._store(user).create_plan(payload)
         except ValueError as error:
             raise RepositoryValidationError(str(error)) from error
+
+    async def update_plan(self, user: AuthUser, plan_id: UUID, payload: PlanUpdate) -> dict | None:
+        try:
+            return self._store(user).update_plan(plan_id, payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool:
+        return self._store(user).delete_plan(plan_id)
 
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_tasks()
@@ -167,31 +189,65 @@ class SupabaseRepository:
             params["level"] = f"eq.{level}"
         return await self._request(user, "GET", "plans", params=params)
 
-    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
-        if payload.parent_id:
+    async def _validate_plan_dates(
+        self,
+        user: AuthUser,
+        *,
+        plan_id: UUID | None,
+        level: str,
+        parent_id: UUID | str | None,
+        starts_on: date,
+        ends_on: date,
+    ) -> None:
+        if parent_id:
             parents = await self._request(
                 user,
                 "GET",
                 "plans",
                 params={
                     "select": "id,level,starts_on,ends_on",
-                    "id": f"eq.{payload.parent_id}",
+                    "id": f"eq.{parent_id}",
                     "user_id": f"eq.{user.id}",
                 },
             )
-            expected_level = "stage" if payload.level == "week" else "week"
+            expected_level = "stage" if level == "week" else "week"
             if not parents:
                 raise RepositoryValidationError("parent plan not found")
             if parents[0]["level"] != expected_level:
-                raise RepositoryValidationError(
-                    f"{payload.level} plan requires a {expected_level} parent"
-                )
+                raise RepositoryValidationError(f"{level} plan requires a {expected_level} parent")
             parent_starts_on = date.fromisoformat(parents[0]["starts_on"])
             parent_ends_on = date.fromisoformat(parents[0]["ends_on"])
-            if payload.starts_on < parent_starts_on or payload.ends_on > parent_ends_on:
+            if starts_on < parent_starts_on or ends_on > parent_ends_on:
                 raise RepositoryValidationError(
                     "child plan dates must stay within parent plan dates"
                 )
+        if plan_id:
+            children = await self._request(
+                user,
+                "GET",
+                "plans",
+                params={
+                    "select": "id,starts_on,ends_on",
+                    "parent_id": f"eq.{plan_id}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            if any(
+                date.fromisoformat(child["starts_on"]) < starts_on
+                or date.fromisoformat(child["ends_on"]) > ends_on
+                for child in children
+            ):
+                raise RepositoryValidationError("parent plan dates must include all child plans")
+
+    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
+        await self._validate_plan_dates(
+            user,
+            plan_id=None,
+            level=payload.level,
+            parent_id=payload.parent_id,
+            starts_on=payload.starts_on,
+            ends_on=payload.ends_on,
+        )
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)
         rows = await self._request(
@@ -202,6 +258,52 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def update_plan(self, user: AuthUser, plan_id: UUID, payload: PlanUpdate) -> dict | None:
+        current = await self._request(
+            user,
+            "GET",
+            "plans",
+            params={
+                "select": "id,parent_id,level,title,description,starts_on,ends_on,status",
+                "id": f"eq.{plan_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        if not current:
+            return None
+        changes = payload.model_dump(mode="json", exclude_unset=True)
+        starts_on = date.fromisoformat(changes.get("starts_on", current[0]["starts_on"]))
+        ends_on = date.fromisoformat(changes.get("ends_on", current[0]["ends_on"]))
+        if ends_on < starts_on:
+            raise RepositoryValidationError("ends_on must not be earlier than starts_on")
+        await self._validate_plan_dates(
+            user,
+            plan_id=plan_id,
+            level=current[0]["level"],
+            parent_id=current[0]["parent_id"],
+            starts_on=starts_on,
+            ends_on=ends_on,
+        )
+        rows = await self._request(
+            user,
+            "PATCH",
+            "plans",
+            params={"id": f"eq.{plan_id}", "user_id": f"eq.{user.id}"},
+            json=changes,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "plans",
+            params={"id": f"eq.{plan_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         rows = await self._request(

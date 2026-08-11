@@ -74,6 +74,19 @@ class PlanCreate(StrictRequestModel):
         return self
 
 
+class PlanUpdate(StrictRequestModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    starts_on: date | None = None
+    ends_on: date | None = None
+
+    @model_validator(mode="after")
+    def require_changes(self) -> "PlanUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one plan field must be provided")
+        return self
+
+
 class WebSearchRequest(StrictRequestModel):
     query: str = Field(min_length=2, max_length=500)
     include_domains: list[str] = Field(default_factory=list)

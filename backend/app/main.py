@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
@@ -23,6 +23,7 @@ from app.schemas import (
     ImportProposal,
     PlanCreate,
     PlanLevel,
+    PlanUpdate,
     SearchSource,
     StudySessionCreate,
     TaskCreate,
@@ -111,6 +112,28 @@ async def create_plan(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> dict:
     return await repository.create_plan(user, payload)
+
+
+@app.patch("/api/v1/plans/{plan_id}")
+async def update_plan(
+    plan_id: UUID,
+    payload: PlanUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    plan = await repository.update_plan(user, plan_id, payload)
+    if not plan:
+        raise HTTPException(404, "plan not found")
+    return plan
+
+
+@app.delete("/api/v1/plans/{plan_id}", status_code=204)
+async def delete_plan(
+    plan_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_plan(user, plan_id):
+        raise HTTPException(404, "plan not found")
+    return Response(status_code=204)
 
 
 @app.post("/api/v1/tasks", status_code=201)
