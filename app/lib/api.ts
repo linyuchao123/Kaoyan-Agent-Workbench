@@ -25,6 +25,14 @@ export type ApiPlan = {
   status: PlanStatus;
 };
 
+export type PlanProgress = {
+  plan_id: string;
+  task_count: number;
+  completed_tasks: number;
+  completion_rate: number;
+  actual_minutes: number;
+};
+
 export type ContributionDay = {
   date: string;
   scope: string;
@@ -116,6 +124,7 @@ export const api = {
     ends_on?: string;
     status?: PlanStatus;
   }) => request<ApiPlan>(`/api/v1/plans/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  planProgress: (id: string) => request<PlanProgress>(`/api/v1/plans/${id}/progress`),
   deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),

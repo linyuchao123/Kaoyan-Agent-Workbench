@@ -165,3 +165,27 @@ test("计划支持修改与删除并正确处理无内容响应", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("按需读取单条计划的完成率与实际学习时长", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+  globalThis.fetch = async (input) => {
+    capturedUrl = String(input);
+    return new Response(JSON.stringify({
+      plan_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      task_count: 10,
+      completed_tasks: 6,
+      completion_rate: 60,
+      actual_minutes: 720,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  try {
+    const progress = await api.planProgress("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    assert.equal(progress.completion_rate, 60);
+    assert.equal(progress.actual_minutes, 720);
+    assert.match(capturedUrl, /\/api\/v1\/plans\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\/progress$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
