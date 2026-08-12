@@ -10,6 +10,17 @@ PlanLevel = Literal["stage", "week", "day"]
 PlanStatus = Literal["draft", "active", "completed", "archived"]
 SchoolTier = Literal["stretch", "match", "safety"]
 DegreeType = Literal["academic", "professional"]
+CareerItemType = Literal["milestone", "resume", "application", "interview"]
+CareerStatus = Literal[
+    "planned",
+    "in_progress",
+    "submitted",
+    "interviewing",
+    "offer",
+    "rejected",
+    "completed",
+    "archived",
+]
 
 
 class StrictRequestModel(BaseModel):
@@ -148,6 +159,30 @@ class SchoolOptionUpdate(StrictRequestModel):
     def require_changes(self) -> "SchoolOptionUpdate":
         if not self.model_fields_set:
             raise ValueError("at least one school option field must be provided")
+        return self
+
+
+class CareerItemCreate(StrictRequestModel):
+    item_type: CareerItemType
+    title: str = Field(min_length=1, max_length=160)
+    company: str | None = Field(default=None, max_length=160)
+    status: CareerStatus = "planned"
+    occurred_on: date | None = None
+    notes: str = Field(default="", max_length=10000)
+
+
+class CareerItemUpdate(StrictRequestModel):
+    item_type: CareerItemType | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    company: str | None = Field(default=None, max_length=160)
+    status: CareerStatus | None = None
+    occurred_on: date | None = None
+    notes: str | None = Field(default=None, max_length=10000)
+
+    @model_validator(mode="after")
+    def require_changes(self) -> "CareerItemUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one career item field must be provided")
         return self
 
 

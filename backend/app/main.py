@@ -18,6 +18,10 @@ from app.config import get_settings
 from app.schemas import (
     ActionProposal,
     AgentRunRequest,
+    CareerItemCreate,
+    CareerItemType,
+    CareerItemUpdate,
+    CareerStatus,
     ContributionDay,
     ImportPreviewRequest,
     ImportProposal,
@@ -255,6 +259,45 @@ async def delete_school_option(
 ) -> Response:
     if not await repository.delete_school_option(user, option_id):
         raise HTTPException(404, "school option not found")
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/career-items")
+async def list_career_items(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    item_type: CareerItemType | None = None,
+    status: CareerStatus | None = None,
+) -> list[dict]:
+    return await repository.list_career_items(user, item_type, status)
+
+
+@app.post("/api/v1/career-items", status_code=201)
+async def create_career_item(
+    payload: CareerItemCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_career_item(user, payload)
+
+
+@app.patch("/api/v1/career-items/{item_id}")
+async def update_career_item(
+    item_id: UUID,
+    payload: CareerItemUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    item = await repository.update_career_item(user, item_id, payload)
+    if not item:
+        raise HTTPException(404, "career item not found")
+    return item
+
+
+@app.delete("/api/v1/career-items/{item_id}", status_code=204)
+async def delete_career_item(
+    item_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_career_item(user, item_id):
+        raise HTTPException(404, "career item not found")
     return Response(status_code=204)
 
 

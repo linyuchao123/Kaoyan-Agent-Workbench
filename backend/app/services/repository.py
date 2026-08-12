@@ -9,6 +9,8 @@ from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
+    CareerItemCreate,
+    CareerItemUpdate,
     ContributionDay,
     MistakeCardCreate,
     MistakeReviewCreate,
@@ -86,6 +88,18 @@ class StudyRepository(Protocol):
     ) -> dict | None: ...
 
     async def delete_school_option(self, user: AuthUser, option_id: UUID) -> bool: ...
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]: ...
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict: ...
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None: ...
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool: ...
 
 
 class DemoRepository:
@@ -188,6 +202,22 @@ class DemoRepository:
 
     async def delete_school_option(self, user: AuthUser, option_id: UUID) -> bool:
         return self._store(user).delete_school_option(option_id)
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]:
+        return self._store(user).list_career_items(item_type, status)
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict:
+        return self._store(user).create_career_item(payload)
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None:
+        return self._store(user).update_career_item(item_id, payload)
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool:
+        return self._store(user).delete_career_item(item_id)
 
 
 class SupabaseRepository:
@@ -616,6 +646,55 @@ class SupabaseRepository:
             "DELETE",
             "school_options",
             params={"id": f"eq.{option_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]:
+        params = {
+            "select": "id,item_type,title,company,status,occurred_on,notes,created_at,updated_at",
+            "user_id": f"eq.{user.id}",
+            "order": "occurred_on.asc.nullslast,created_at.asc",
+        }
+        if item_type:
+            params["item_type"] = f"eq.{item_type}"
+        if status:
+            params["status"] = f"eq.{status}"
+        return await self._request(user, "GET", "career_items", params=params)
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict:
+        body = payload.model_dump(mode="json")
+        body["user_id"] = str(user.id)
+        rows = await self._request(
+            user,
+            "POST",
+            "career_items",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None:
+        rows = await self._request(
+            user,
+            "PATCH",
+            "career_items",
+            params={"id": f"eq.{item_id}", "user_id": f"eq.{user.id}"},
+            json=payload.model_dump(mode="json", exclude_unset=True),
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "career_items",
+            params={"id": f"eq.{item_id}", "user_id": f"eq.{user.id}"},
             prefer="return=representation",
         )
         return bool(rows)

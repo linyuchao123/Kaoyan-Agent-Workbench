@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 
 from app.domain.contributions import StudyInterval, aggregate_daily_minutes, intensity_level
 from app.schemas import (
+    CareerItemCreate,
+    CareerItemUpdate,
     ContributionDay,
     MistakeCardCreate,
     MistakeReviewCreate,
@@ -39,6 +41,7 @@ class DemoStore:
         self.mistake_cards: dict[UUID, dict] = {}
         self.review_events: dict[UUID, dict] = {}
         self.school_options: dict[UUID, dict] = {}
+        self.career_items: dict[UUID, dict] = {}
 
     def list_plans(self, level: str | None = None) -> list[dict]:
         plans = [item for item in self.plans.values() if level is None or item["level"] == level]
@@ -287,6 +290,44 @@ class DemoStore:
 
     def delete_school_option(self, option_id: UUID) -> bool:
         return self.school_options.pop(option_id, None) is not None
+
+    def list_career_items(
+        self, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]:
+        items = [
+            item
+            for item in self.career_items.values()
+            if (item_type is None or item["item_type"] == item_type)
+            and (status is None or item["status"] == status)
+        ]
+        return sorted(
+            items,
+            key=lambda item: (item["occurred_on"] is None, item["occurred_on"] or date.max),
+        )
+
+    def create_career_item(self, payload: CareerItemCreate) -> dict:
+        now = self.now()
+        item = {
+            "id": uuid4(),
+            **payload.model_dump(),
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.career_items[item["id"]] = item
+        return item
+
+    def update_career_item(
+        self, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None:
+        item = self.career_items.get(item_id)
+        if not item:
+            return None
+        item.update(payload.model_dump(exclude_unset=True))
+        item["updated_at"] = self.now()
+        return item
+
+    def delete_career_item(self, item_id: UUID) -> bool:
+        return self.career_items.pop(item_id, None) is not None
 
     def contributions(self, from_date: date, to_date: date, scope: str) -> list[ContributionDay]:
         sessions = self.list_sessions()

@@ -545,6 +545,83 @@ class ApiFlowTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.client.get("/api/v1/schools").json(), [])
 
+    def test_career_items_support_filters_updates_and_deletion(self):
+        milestone = self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "milestone",
+                "title": "完成 Agent 工作台 v0.5",
+                "status": "in_progress",
+                "occurred_on": "2026-09-30",
+                "notes": "形成可展示的 AI 应用项目",
+            },
+        )
+        application = self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "application",
+                "title": "投递 AI 应用开发实习",
+                "company": "示例科技",
+                "status": "planned",
+                "occurred_on": "2027-01-10",
+            },
+        )
+        self.assertEqual(milestone.status_code, 201)
+        self.assertEqual(application.status_code, 201)
+
+        filtered = self.client.get("/api/v1/career-items?item_type=application&status=planned")
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([item["title"] for item in filtered.json()], ["投递 AI 应用开发实习"])
+
+        updated = self.client.patch(
+            f"/api/v1/career-items/{application.json()['id']}",
+            json={"status": "submitted", "notes": "已投递，等待反馈"},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["status"], "submitted")
+
+        deleted = self.client.delete(f"/api/v1/career-items/{milestone.json()['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(len(self.client.get("/api/v1/career-items").json()), 1)
+
+    def test_career_items_are_isolated_and_owner_cannot_be_forged(self):
+        created = self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "resume",
+                "title": "AI 应用开发简历 v1",
+                "status": "planned",
+            },
+        )
+        self.assertEqual(created.status_code, 201)
+
+        forged = self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "interview",
+                "title": "伪造归属的面试记录",
+                "user_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+        self.assertEqual(forged.status_code, 422)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/career-items").json(), [])
+        self.assertEqual(
+            self.client.patch(
+                f"/api/v1/career-items/{created.json()['id']}", json={"status": "completed"}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.delete(f"/api/v1/career-items/{created.json()['id']}").status_code,
+            404,
+        )
+
     def test_missing_and_invalid_tokens_return_401(self):
         main.app.dependency_overrides.clear()
         self.assertEqual(self.client.get("/api/v1/tasks").status_code, 401)

@@ -7,7 +7,14 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import PlanCreate, PlanUpdate, SchoolOptionCreate, StudySessionCreate, TaskCreate
+from app.schemas import (
+    CareerItemCreate,
+    PlanCreate,
+    PlanUpdate,
+    SchoolOptionCreate,
+    StudySessionCreate,
+    TaskCreate,
+)
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -358,6 +365,53 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(requests[0].url.params["user_id"], f"eq.{self.user.id}")
         self.assertEqual(requests[0].url.params["tier"], "eq.match")
         self.assertEqual(requests[0].url.params["exam_year"], "eq.2028")
+        payload = json.loads(requests[1].content)
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
+
+    async def test_supabase_career_reads_and_writes_use_current_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "item_type": "application",
+                        "title": "投递 AI 应用开发实习",
+                        "company": "示例科技",
+                        "status": "planned",
+                        "occurred_on": "2027-01-10",
+                        "notes": "",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.list_career_items(self.user, "application", "planned")
+        await repository.create_career_item(
+            self.user,
+            CareerItemCreate(
+                item_type="application",
+                title="投递 AI 应用开发实习",
+                company="示例科技",
+                status="planned",
+                occurred_on=date(2027, 1, 10),
+            ),
+        )
+
+        self.assertEqual(requests[0].url.params["user_id"], f"eq.{self.user.id}")
+        self.assertEqual(requests[0].url.params["item_type"], "eq.application")
+        self.assertEqual(requests[0].url.params["status"], "eq.planned")
         payload = json.loads(requests[1].content)
         self.assertEqual(payload["user_id"], str(self.user.id))
         self.assertNotIn("access_token", payload)
