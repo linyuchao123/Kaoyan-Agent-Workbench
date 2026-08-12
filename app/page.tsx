@@ -2,12 +2,12 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type ContributionScope, type DegreeType, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
-type View = "today" | "plan" | "subjects" | "schools" | "materials" | "agents";
+type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "agents";
 
 type StudyDay = {
   date: string;
@@ -47,6 +47,7 @@ const navItems: { key: View; label: string; icon: string }[] = [
   { key: "plan", label: "三级计划", icon: "◇" },
   { key: "subjects", label: "学科学习", icon: "▤" },
   { key: "schools", label: "院校情报", icon: "◎" },
+  { key: "career", label: "求职副线", icon: "◫" },
   { key: "materials", label: "资料库", icon: "▱" },
   { key: "agents", label: "双 Agent", icon: "✦" },
 ];
@@ -1251,6 +1252,164 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
+const demoCareerItems: ApiCareerItem[] = [
+  { id: "demo-career-1", item_type: "milestone", title: "完成 Agent 工作台 v0.5", company: null, status: "in_progress", occurred_on: "2026-09-15", notes: "补齐院校情报、求职副线和数据导出。" },
+  { id: "demo-career-2", item_type: "resume", title: "AI 应用开发简历 v1", company: null, status: "planned", occurred_on: "2026-10-01", notes: "突出 FastAPI、Supabase、RAG 与 Agent 项目经历。" },
+  { id: "demo-career-3", item_type: "application", title: "AI 应用开发实习", company: "杭州示例科技", status: "submitted", occurred_on: "2026-12-20", notes: "演示记录，不代表真实投递。" },
+];
+
+const careerTypeMeta: Record<CareerItemType, { label: string; short: string }> = {
+  milestone: { label: "项目里程碑", short: "项" },
+  resume: { label: "简历版本", short: "历" },
+  application: { label: "求职投递", short: "投" },
+  interview: { label: "面试复盘", short: "面" },
+};
+
+const careerStatusMeta: Record<CareerStatus, string> = {
+  planned: "待开始",
+  in_progress: "进行中",
+  submitted: "已投递",
+  interviewing: "面试中",
+  offer: "已获 Offer",
+  rejected: "未通过",
+  completed: "已完成",
+  archived: "已归档",
+};
+
+function CareerView({ isDemo }: { isDemo: boolean }) {
+  const [items, setItems] = useState<ApiCareerItem[]>(isDemo ? demoCareerItems : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [message, setMessage] = useState(isDemo ? "当前显示离线演示求职记录" : "正在加载云端求职记录…");
+  const [typeFilter, setTypeFilter] = useState<CareerItemType | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<CareerStatus | "all">("all");
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<ApiCareerItem | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [itemType, setItemType] = useState<CareerItemType>("milestone");
+  const [title, setTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [careerStatus, setCareerStatus] = useState<CareerStatus>("planned");
+  const [occurredOn, setOccurredOn] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (isDemo) {
+      setItems(demoCareerItems.filter((item) =>
+        (typeFilter === "all" || item.item_type === typeFilter) &&
+        (statusFilter === "all" || item.status === statusFilter),
+      ));
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setMessage("正在加载云端求职记录…");
+    void api.listCareerItems(typeFilter === "all" ? undefined : typeFilter, statusFilter === "all" ? undefined : statusFilter)
+      .then((records) => {
+        if (!active) return;
+        setItems(records);
+        setMessage(`已从云端加载 ${records.length} 条求职记录`);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setItems([]);
+        setMessage(error instanceof Error ? `求职记录加载失败：${error.message}` : "求职记录加载失败");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [isDemo, statusFilter, typeFilter]);
+
+  function resetForm() {
+    setEditingItem(null);
+    setItemType("milestone");
+    setTitle("");
+    setCompany("");
+    setCareerStatus("planned");
+    setOccurredOn("");
+    setNotes("");
+  }
+
+  function openEditor(item: ApiCareerItem) {
+    setEditingItem(item);
+    setItemType(item.item_type);
+    setTitle(item.title);
+    setCompany(item.company || "");
+    setCareerStatus(item.status);
+    setOccurredOn(item.occurred_on || "");
+    setNotes(item.notes);
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isDemo) {
+      setMessage("离线演示模式不会写入真实求职记录，请登录后使用");
+      return;
+    }
+    setBusy(true);
+    setMessage(editingItem ? "正在更新求职记录…" : "正在保存求职记录…");
+    try {
+      const payload = {
+        item_type: itemType,
+        title: title.trim(),
+        company: company.trim() || undefined,
+        status: careerStatus,
+        occurred_on: occurredOn || undefined,
+        notes: notes.trim(),
+      };
+      const saved = editingItem
+        ? await api.updateCareerItem(editingItem.id, { ...payload, company: company.trim() || null, occurred_on: occurredOn || null })
+        : await api.createCareerItem(payload);
+      const visible = (typeFilter === "all" || saved.item_type === typeFilter) && (statusFilter === "all" || saved.status === statusFilter);
+      setItems((records) => editingItem
+        ? (visible ? records.map((item) => item.id === saved.id ? saved : item) : records.filter((item) => item.id !== saved.id))
+        : (visible ? [...records, saved] : records));
+      setMessage(`${editingItem ? "已更新" : "已保存"}：${saved.title}`);
+      resetForm();
+      setFormOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeItem(item: ApiCareerItem) {
+    if (isDemo) {
+      setMessage("演示求职记录不会被删除");
+      return;
+    }
+    if (!window.confirm(`确认删除“${item.title}”吗？`)) return;
+    setBusy(true);
+    try {
+      await api.deleteCareerItem(item.id);
+      setItems((records) => records.filter((record) => record.id !== item.id));
+      setMessage(`已删除：${item.title}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const metricCounts = {
+    total: items.length,
+    submitted: items.filter((item) => ["submitted", "interviewing", "offer"].includes(item.status)).length,
+    interviewing: items.filter((item) => item.status === "interviewing").length,
+    offer: items.filter((item) => item.status === "offer").length,
+  };
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
+    <div className="career-separation-note"><strong>独立统计</strong><span>求职记录用于追踪就业准备，不会改变学习热力图、连续学习天数或考研完成率。</span></div>
+    <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
+    <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
+    {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : items.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{items.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
+  </section>;
+}
+
 function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState([
@@ -1424,7 +1583,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

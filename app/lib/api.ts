@@ -6,6 +6,8 @@ export type MistakeSubject = Exclude<Subject, "career">;
 export type MistakeReviewResult = "again" | "hard" | "good" | "easy";
 export type SchoolTier = "stretch" | "match" | "safety";
 export type DegreeType = "academic" | "professional";
+export type CareerItemType = "milestone" | "resume" | "application" | "interview";
+export type CareerStatus = "planned" | "in_progress" | "submitted" | "interviewing" | "offer" | "rejected" | "completed" | "archived";
 
 export type ApiTask = {
   id: string;
@@ -64,6 +66,16 @@ export type ApiSchoolOption = {
   location: string | null;
   source_url: string;
   source_checked_at: string;
+  notes: string;
+};
+
+export type ApiCareerItem = {
+  id: string;
+  item_type: CareerItemType;
+  title: string;
+  company: string | null;
+  status: CareerStatus;
+  occurred_on: string | null;
   notes: string;
 };
 
@@ -211,6 +223,30 @@ export const api = {
     notes: string;
   }>) => request<ApiSchoolOption>(`/api/v1/schools/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSchoolOption: (id: string) => request<void>(`/api/v1/schools/${id}`, { method: "DELETE" }),
+  listCareerItems: (itemType?: CareerItemType, status?: CareerStatus) => {
+    const params = new URLSearchParams();
+    if (itemType) params.set("item_type", itemType);
+    if (status) params.set("status", status);
+    const query = params.size ? `?${params.toString()}` : "";
+    return request<ApiCareerItem[]>(`/api/v1/career-items${query}`);
+  },
+  createCareerItem: (payload: {
+    item_type: CareerItemType;
+    title: string;
+    company?: string;
+    status?: CareerStatus;
+    occurred_on?: string;
+    notes?: string;
+  }) => request<ApiCareerItem>("/api/v1/career-items", { method: "POST", body: JSON.stringify(payload) }),
+  updateCareerItem: (id: string, payload: Partial<{
+    item_type: CareerItemType;
+    title: string;
+    company: string | null;
+    status: CareerStatus;
+    occurred_on: string | null;
+    notes: string;
+  }>) => request<ApiCareerItem>(`/api/v1/career-items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteCareerItem: (id: string) => request<void>(`/api/v1/career-items/${id}`, { method: "DELETE" }),
   createSession: (payload: {
     subject: Subject;
     started_at: string;
