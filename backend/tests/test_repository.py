@@ -7,7 +7,7 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import PlanCreate, PlanUpdate, StudySessionCreate, TaskCreate
+from app.schemas import PlanCreate, PlanUpdate, SchoolOptionCreate, StudySessionCreate, TaskCreate
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -307,6 +307,60 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         payload = json.loads(requests[0].content)
         self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
         self.assertEqual(payload["user_id"], str(self.user.id))
+
+    async def test_supabase_school_reads_and_writes_use_current_user(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                201,
+                json=[
+                    {
+                        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                        "tier": "match",
+                        "university": "苏州大学",
+                        "college": "计算机科学与技术学院",
+                        "major_code": "083500",
+                        "major_name": "软件工程",
+                        "degree_type": "academic",
+                        "exam_year": 2028,
+                        "exam_subjects": ["101 政治", "201 英语一", "301 数学一", "408"],
+                        "source_url": "https://example.edu.cn/admissions/2028",
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        await repository.list_school_options(self.user, "match", 2028)
+        await repository.create_school_option(
+            self.user,
+            SchoolOptionCreate(
+                tier="match",
+                university="苏州大学",
+                college="计算机科学与技术学院",
+                major_code="083500",
+                major_name="软件工程",
+                degree_type="academic",
+                exam_year=2028,
+                exam_subjects=["101 政治", "201 英语一", "301 数学一", "408"],
+                source_url="https://example.edu.cn/admissions/2028",
+            ),
+        )
+
+        self.assertEqual(requests[0].url.params["user_id"], f"eq.{self.user.id}")
+        self.assertEqual(requests[0].url.params["tier"], "eq.match")
+        self.assertEqual(requests[0].url.params["exam_year"], "eq.2028")
+        payload = json.loads(requests[1].content)
+        self.assertEqual(payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", payload)
         self.assertNotIn("access_token", payload)
 
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):

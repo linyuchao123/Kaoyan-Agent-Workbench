@@ -445,6 +445,106 @@ class ApiFlowTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.task_count(), 0)
 
+    def test_school_options_support_filters_updates_and_deletion(self):
+        base = {
+            "college": "计算机科学与技术学院",
+            "major_code": "083500",
+            "major_name": "软件工程",
+            "degree_type": "academic",
+            "exam_subjects": ["101 政治", "201 英语一", "301 数学一", "408 计算机学科基础"],
+            "source_url": "https://example.edu.cn/admissions/2028",
+        }
+        stretch = self.client.post(
+            "/api/v1/schools",
+            json={
+                **base,
+                "tier": "stretch",
+                "university": "中国科学技术大学",
+                "exam_year": 2028,
+                "location": "合肥",
+            },
+        )
+        match = self.client.post(
+            "/api/v1/schools",
+            json={
+                **base,
+                "tier": "match",
+                "university": "苏州大学",
+                "college": "计算机科学与技术学院（苏州大学）",
+                "exam_year": 2028,
+                "location": "苏州",
+            },
+        )
+        self.assertEqual(stretch.status_code, 201)
+        self.assertEqual(match.status_code, 201)
+
+        filtered = self.client.get("/api/v1/schools?tier=stretch&exam_year=2028")
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([item["university"] for item in filtered.json()], ["中国科学技术大学"])
+
+        edited = self.client.patch(
+            f"/api/v1/schools/{match.json()['id']}",
+            json={"tier": "safety", "notes": "根据 2028 招生目录继续核对"},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()["tier"], "safety")
+        self.assertEqual(edited.json()["notes"], "根据 2028 招生目录继续核对")
+
+        deleted = self.client.delete(f"/api/v1/schools/{stretch.json()['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(len(self.client.get("/api/v1/schools").json()), 1)
+
+    def test_school_options_are_isolated_and_reject_duplicate_records(self):
+        payload = {
+            "tier": "match",
+            "university": "南京理工大学",
+            "college": "计算机科学与工程学院",
+            "major_code": "085405",
+            "major_name": "软件工程",
+            "degree_type": "professional",
+            "exam_year": 2028,
+            "exam_subjects": ["101 政治", "204 英语二", "302 数学二", "408 计算机学科基础"],
+            "source_url": "https://example.edu.cn/admissions/2028",
+        }
+        created = self.client.post("/api/v1/schools", json=payload)
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(self.client.post("/api/v1/schools", json=payload).status_code, 409)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/schools").json(), [])
+        self.assertEqual(
+            self.client.patch(
+                f"/api/v1/schools/{created.json()['id']}", json={"tier": "stretch"}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.delete(f"/api/v1/schools/{created.json()['id']}").status_code,
+            404,
+        )
+
+    def test_school_option_owner_is_derived_from_login(self):
+        response = self.client.post(
+            "/api/v1/schools",
+            json={
+                "tier": "match",
+                "university": "苏州大学",
+                "college": "计算机科学与技术学院",
+                "major_code": "083500",
+                "major_name": "软件工程",
+                "degree_type": "academic",
+                "exam_year": 2028,
+                "source_url": "https://example.edu.cn/admissions/2028",
+                "user_id": "22222222-2222-2222-2222-222222222222",
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.client.get("/api/v1/schools").json(), [])
+
     def test_missing_and_invalid_tokens_return_401(self):
         main.app.dependency_overrides.clear()
         self.assertEqual(self.client.get("/api/v1/tasks").status_code, 401)

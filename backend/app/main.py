@@ -27,6 +27,8 @@ from app.schemas import (
     PlanLevel,
     PlanProgress,
     PlanUpdate,
+    SchoolOptionCreate,
+    SchoolOptionUpdate,
     SearchSource,
     StudySessionCreate,
     TaskCreate,
@@ -213,6 +215,47 @@ async def review_mistake(
     if not card:
         raise HTTPException(404, "mistake card not found")
     return card
+
+
+@app.get("/api/v1/schools")
+async def list_school_options(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    tier: str | None = None,
+    exam_year: Annotated[int | None, Query(ge=2026, le=2100)] = None,
+) -> list[dict]:
+    if tier not in {None, "stretch", "match", "safety"}:
+        raise HTTPException(422, "unknown school tier")
+    return await repository.list_school_options(user, tier, exam_year)
+
+
+@app.post("/api/v1/schools", status_code=201)
+async def create_school_option(
+    payload: SchoolOptionCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_school_option(user, payload)
+
+
+@app.patch("/api/v1/schools/{option_id}")
+async def update_school_option(
+    option_id: UUID,
+    payload: SchoolOptionUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    option = await repository.update_school_option(user, option_id, payload)
+    if not option:
+        raise HTTPException(404, "school option not found")
+    return option
+
+
+@app.delete("/api/v1/schools/{option_id}", status_code=204)
+async def delete_school_option(
+    option_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_school_option(user, option_id):
+        raise HTTPException(404, "school option not found")
+    return Response(status_code=204)
 
 
 @app.get("/api/v1/analytics/contributions", response_model=list[ContributionDay])

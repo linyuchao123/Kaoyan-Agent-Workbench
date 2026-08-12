@@ -8,6 +8,8 @@ Subject = Literal["math", "english", "politics", "cs408", "career"]
 AcademicSubject = Literal["math", "english", "politics", "cs408"]
 PlanLevel = Literal["stage", "week", "day"]
 PlanStatus = Literal["draft", "active", "completed", "archived"]
+SchoolTier = Literal["stretch", "match", "safety"]
+DegreeType = Literal["academic", "professional"]
 
 
 class StrictRequestModel(BaseModel):
@@ -109,6 +111,44 @@ class MistakeCardCreate(StrictRequestModel):
 
 class MistakeReviewCreate(StrictRequestModel):
     result: Literal["again", "hard", "good", "easy"]
+
+
+class SchoolOptionCreate(StrictRequestModel):
+    tier: SchoolTier
+    university: str = Field(min_length=1, max_length=120)
+    college: str = Field(min_length=1, max_length=160)
+    major_code: str = Field(min_length=2, max_length=20)
+    major_name: str = Field(min_length=1, max_length=160)
+    degree_type: DegreeType
+    exam_year: int = Field(ge=2026, le=2100)
+    exam_subjects: list[str] = Field(default_factory=list, max_length=12)
+    tuition_total: int | None = Field(default=None, ge=0, le=10_000_000)
+    duration_years: float | None = Field(default=None, ge=0.5, le=10)
+    location: str | None = Field(default=None, max_length=160)
+    source_url: HttpUrl
+    notes: str = Field(default="", max_length=5000)
+
+
+class SchoolOptionUpdate(StrictRequestModel):
+    tier: SchoolTier | None = None
+    university: str | None = Field(default=None, min_length=1, max_length=120)
+    college: str | None = Field(default=None, min_length=1, max_length=160)
+    major_code: str | None = Field(default=None, min_length=2, max_length=20)
+    major_name: str | None = Field(default=None, min_length=1, max_length=160)
+    degree_type: DegreeType | None = None
+    exam_year: int | None = Field(default=None, ge=2026, le=2100)
+    exam_subjects: list[str] | None = Field(default=None, max_length=12)
+    tuition_total: int | None = Field(default=None, ge=0, le=10_000_000)
+    duration_years: float | None = Field(default=None, ge=0.5, le=10)
+    location: str | None = Field(default=None, max_length=160)
+    source_url: HttpUrl | None = None
+    notes: str | None = Field(default=None, max_length=5000)
+
+    @model_validator(mode="after")
+    def require_changes(self) -> "SchoolOptionUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one school option field must be provided")
+        return self
 
 
 class WebSearchRequest(StrictRequestModel):

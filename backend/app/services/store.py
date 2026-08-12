@@ -11,6 +11,8 @@ from app.schemas import (
     MistakeReviewCreate,
     PlanCreate,
     PlanUpdate,
+    SchoolOptionCreate,
+    SchoolOptionUpdate,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
@@ -36,6 +38,7 @@ class DemoStore:
         self.plans: dict[UUID, dict] = {}
         self.mistake_cards: dict[UUID, dict] = {}
         self.review_events: dict[UUID, dict] = {}
+        self.school_options: dict[UUID, dict] = {}
 
     def list_plans(self, level: str | None = None) -> list[dict]:
         plans = [item for item in self.plans.values() if level is None or item["level"] == level]
@@ -222,6 +225,68 @@ class DemoStore:
             updated_at=now,
         )
         return card
+
+    def list_school_options(
+        self, tier: str | None = None, exam_year: int | None = None
+    ) -> list[dict]:
+        options = [
+            item
+            for item in self.school_options.values()
+            if (tier is None or item["tier"] == tier)
+            and (exam_year is None or item["exam_year"] == exam_year)
+        ]
+        return sorted(
+            options,
+            key=lambda item: (item["exam_year"], item["tier"], item["university"]),
+        )
+
+    def create_school_option(self, payload: SchoolOptionCreate) -> dict:
+        duplicate = any(
+            item["college"] == payload.college
+            and item["major_code"] == payload.major_code
+            and item["exam_year"] == payload.exam_year
+            for item in self.school_options.values()
+        )
+        if duplicate:
+            raise ValueError("school option already exists for this college, major and year")
+        now = self.now()
+        item = {
+            "id": uuid4(),
+            **payload.model_dump(mode="json"),
+            "source_checked_at": now,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.school_options[item["id"]] = item
+        return item
+
+    def update_school_option(
+        self, option_id: UUID, payload: SchoolOptionUpdate
+    ) -> dict | None:
+        item = self.school_options.get(option_id)
+        if not item:
+            return None
+        changes = payload.model_dump(mode="json", exclude_unset=True)
+        college = changes.get("college", item["college"])
+        major_code = changes.get("major_code", item["major_code"])
+        exam_year = changes.get("exam_year", item["exam_year"])
+        duplicate = any(
+            current["id"] != option_id
+            and current["college"] == college
+            and current["major_code"] == major_code
+            and current["exam_year"] == exam_year
+            for current in self.school_options.values()
+        )
+        if duplicate:
+            raise ValueError("school option already exists for this college, major and year")
+        if "source_url" in changes:
+            changes["source_checked_at"] = self.now()
+        item.update(changes)
+        item["updated_at"] = self.now()
+        return item
+
+    def delete_school_option(self, option_id: UUID) -> bool:
+        return self.school_options.pop(option_id, None) is not None
 
     def contributions(self, from_date: date, to_date: date, scope: str) -> list[ContributionDay]:
         sessions = self.list_sessions()
