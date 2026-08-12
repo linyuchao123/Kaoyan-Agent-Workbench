@@ -9,12 +9,16 @@ from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
+    CareerItemCreate,
+    CareerItemUpdate,
     ContributionDay,
     MistakeCardCreate,
     MistakeReviewCreate,
     PlanCreate,
     PlanProgress,
     PlanUpdate,
+    SchoolOptionCreate,
+    SchoolOptionUpdate,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
@@ -72,6 +76,30 @@ class StudyRepository(Protocol):
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
     ) -> dict | None: ...
+
+    async def list_school_options(
+        self, user: AuthUser, tier: str | None = None, exam_year: int | None = None
+    ) -> list[dict]: ...
+
+    async def create_school_option(self, user: AuthUser, payload: SchoolOptionCreate) -> dict: ...
+
+    async def update_school_option(
+        self, user: AuthUser, option_id: UUID, payload: SchoolOptionUpdate
+    ) -> dict | None: ...
+
+    async def delete_school_option(self, user: AuthUser, option_id: UUID) -> bool: ...
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]: ...
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict: ...
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None: ...
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool: ...
 
 
 class DemoRepository:
@@ -153,6 +181,44 @@ class DemoRepository:
     ) -> dict | None:
         return self._store(user).review_mistake(card_id, payload)
 
+    async def list_school_options(
+        self, user: AuthUser, tier: str | None = None, exam_year: int | None = None
+    ) -> list[dict]:
+        return self._store(user).list_school_options(tier, exam_year)
+
+    async def create_school_option(self, user: AuthUser, payload: SchoolOptionCreate) -> dict:
+        try:
+            return self._store(user).create_school_option(payload)
+        except ValueError as error:
+            raise RepositoryConflictError(str(error)) from error
+
+    async def update_school_option(
+        self, user: AuthUser, option_id: UUID, payload: SchoolOptionUpdate
+    ) -> dict | None:
+        try:
+            return self._store(user).update_school_option(option_id, payload)
+        except ValueError as error:
+            raise RepositoryConflictError(str(error)) from error
+
+    async def delete_school_option(self, user: AuthUser, option_id: UUID) -> bool:
+        return self._store(user).delete_school_option(option_id)
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]:
+        return self._store(user).list_career_items(item_type, status)
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict:
+        return self._store(user).create_career_item(payload)
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None:
+        return self._store(user).update_career_item(item_id, payload)
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool:
+        return self._store(user).delete_career_item(item_id)
+
 
 class SupabaseRepository:
     """PostgREST repository that executes queries with the user's JWT so RLS applies."""
@@ -203,6 +269,8 @@ class SupabaseRepository:
                 error_payload = {"message": response.text}
             if error_payload.get("code") == "23P01":
                 raise RepositoryConflictError("study session overlaps an existing session")
+            if error_payload.get("code") == "23505":
+                raise RepositoryConflictError(str(error_payload.get("message") or "duplicate row"))
             message = error_payload.get("message") or "Supabase database request failed"
             if error_payload.get("code") == "23514":
                 raise RepositoryValidationError(str(message))
@@ -525,6 +593,111 @@ class SupabaseRepository:
             json={"p_card_id": str(card_id), "p_result": payload.result},
         )
         return rows[0] if rows else None
+
+    async def list_school_options(
+        self, user: AuthUser, tier: str | None = None, exam_year: int | None = None
+    ) -> list[dict]:
+        params = {
+            "select": (
+                "id,tier,university,college,major_code,major_name,degree_type,exam_year,"
+                "exam_subjects,tuition_total,duration_years,location,source_url,"
+                "source_checked_at,notes,created_at,updated_at"
+            ),
+            "user_id": f"eq.{user.id}",
+            "order": "exam_year.asc,tier.asc,university.asc",
+        }
+        if tier:
+            params["tier"] = f"eq.{tier}"
+        if exam_year:
+            params["exam_year"] = f"eq.{exam_year}"
+        return await self._request(user, "GET", "school_options", params=params)
+
+    async def create_school_option(self, user: AuthUser, payload: SchoolOptionCreate) -> dict:
+        body = payload.model_dump(mode="json")
+        body["user_id"] = str(user.id)
+        rows = await self._request(
+            user,
+            "POST",
+            "school_options",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def update_school_option(
+        self, user: AuthUser, option_id: UUID, payload: SchoolOptionUpdate
+    ) -> dict | None:
+        changes = payload.model_dump(mode="json", exclude_unset=True)
+        if "source_url" in changes:
+            changes["source_checked_at"] = datetime.now(UTC).isoformat()
+        rows = await self._request(
+            user,
+            "PATCH",
+            "school_options",
+            params={"id": f"eq.{option_id}", "user_id": f"eq.{user.id}"},
+            json=changes,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_school_option(self, user: AuthUser, option_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "school_options",
+            params={"id": f"eq.{option_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
+    async def list_career_items(
+        self, user: AuthUser, item_type: str | None = None, status: str | None = None
+    ) -> list[dict]:
+        params = {
+            "select": "id,item_type,title,company,status,occurred_on,notes,created_at,updated_at",
+            "user_id": f"eq.{user.id}",
+            "order": "occurred_on.asc.nullslast,created_at.asc",
+        }
+        if item_type:
+            params["item_type"] = f"eq.{item_type}"
+        if status:
+            params["status"] = f"eq.{status}"
+        return await self._request(user, "GET", "career_items", params=params)
+
+    async def create_career_item(self, user: AuthUser, payload: CareerItemCreate) -> dict:
+        body = payload.model_dump(mode="json")
+        body["user_id"] = str(user.id)
+        rows = await self._request(
+            user,
+            "POST",
+            "career_items",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def update_career_item(
+        self, user: AuthUser, item_id: UUID, payload: CareerItemUpdate
+    ) -> dict | None:
+        rows = await self._request(
+            user,
+            "PATCH",
+            "career_items",
+            params={"id": f"eq.{item_id}", "user_id": f"eq.{user.id}"},
+            json=payload.model_dump(mode="json", exclude_unset=True),
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "career_items",
+            params={"id": f"eq.{item_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

@@ -4,6 +4,11 @@ export type PlanLevel = "stage" | "week" | "day";
 export type PlanStatus = "draft" | "active" | "completed" | "archived";
 export type MistakeSubject = Exclude<Subject, "career">;
 export type MistakeReviewResult = "again" | "hard" | "good" | "easy";
+export type SchoolTier = "stretch" | "match" | "safety";
+export type DegreeType = "academic" | "professional";
+export type CareerItemType = "milestone" | "resume" | "application" | "interview";
+export type CareerStatus = "planned" | "in_progress" | "submitted" | "interviewing" | "offer" | "rejected" | "completed" | "archived";
+export type ExportFormat = "json" | "csv" | "markdown";
 
 export type ApiTask = {
   id: string;
@@ -45,6 +50,34 @@ export type ApiMistakeCard = {
   mastery: number;
   next_review_at: string;
   review_count: number;
+};
+
+export type ApiSchoolOption = {
+  id: string;
+  tier: SchoolTier;
+  university: string;
+  college: string;
+  major_code: string;
+  major_name: string;
+  degree_type: DegreeType;
+  exam_year: number;
+  exam_subjects: string[];
+  tuition_total: number | null;
+  duration_years: number | null;
+  location: string | null;
+  source_url: string;
+  source_checked_at: string;
+  notes: string;
+};
+
+export type ApiCareerItem = {
+  id: string;
+  item_type: CareerItemType;
+  title: string;
+  company: string | null;
+  status: CareerStatus;
+  occurred_on: string | null;
+  notes: string;
 };
 
 export type ContributionDay = {
@@ -118,6 +151,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function download(path: string): Promise<{ blob: Blob; filename: string }> {
+  const headers = new Headers();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${API_URL}${path}`, { headers });
+  if (!response.ok) {
+    const detail = await responseErrorMessage(response);
+    if (response.status === 401) {
+      accessToken = null;
+      authFailureHandler?.();
+    }
+    throw new ApiError(response.status, detail);
+  }
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "yantu-export.json";
+  return { blob: await response.blob(), filename };
+}
+
 export const api = {
   health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
@@ -157,6 +207,65 @@ export const api = {
   }) => request<ApiMistakeCard>("/api/v1/mistakes", { method: "POST", body: JSON.stringify(payload) }),
   reviewMistake: (id: string, result: MistakeReviewResult) =>
     request<ApiMistakeCard>(`/api/v1/mistakes/${id}/reviews`, { method: "POST", body: JSON.stringify({ result }) }),
+  listSchoolOptions: (tier?: SchoolTier, examYear?: number) => {
+    const params = new URLSearchParams();
+    if (tier) params.set("tier", tier);
+    if (examYear) params.set("exam_year", String(examYear));
+    const query = params.size ? `?${params.toString()}` : "";
+    return request<ApiSchoolOption[]>(`/api/v1/schools${query}`);
+  },
+  createSchoolOption: (payload: {
+    tier: SchoolTier;
+    university: string;
+    college: string;
+    major_code: string;
+    major_name: string;
+    degree_type: DegreeType;
+    exam_year: number;
+    exam_subjects: string[];
+    location?: string;
+    source_url: string;
+    notes?: string;
+  }) => request<ApiSchoolOption>("/api/v1/schools", { method: "POST", body: JSON.stringify(payload) }),
+  updateSchoolOption: (id: string, payload: Partial<{
+    tier: SchoolTier;
+    university: string;
+    college: string;
+    major_code: string;
+    major_name: string;
+    degree_type: DegreeType;
+    exam_year: number;
+    exam_subjects: string[];
+    location: string;
+    source_url: string;
+    notes: string;
+  }>) => request<ApiSchoolOption>(`/api/v1/schools/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteSchoolOption: (id: string) => request<void>(`/api/v1/schools/${id}`, { method: "DELETE" }),
+  listCareerItems: (itemType?: CareerItemType, status?: CareerStatus) => {
+    const params = new URLSearchParams();
+    if (itemType) params.set("item_type", itemType);
+    if (status) params.set("status", status);
+    const query = params.size ? `?${params.toString()}` : "";
+    return request<ApiCareerItem[]>(`/api/v1/career-items${query}`);
+  },
+  createCareerItem: (payload: {
+    item_type: CareerItemType;
+    title: string;
+    company?: string;
+    status?: CareerStatus;
+    occurred_on?: string;
+    notes?: string;
+  }) => request<ApiCareerItem>("/api/v1/career-items", { method: "POST", body: JSON.stringify(payload) }),
+  updateCareerItem: (id: string, payload: Partial<{
+    item_type: CareerItemType;
+    title: string;
+    company: string | null;
+    status: CareerStatus;
+    occurred_on: string | null;
+    notes: string;
+  }>) => request<ApiCareerItem>(`/api/v1/career-items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteCareerItem: (id: string) => request<void>(`/api/v1/career-items/${id}`, { method: "DELETE" }),
+  exportData: (format: ExportFormat) => download(`/api/v1/export?format=${format}`),
   createSession: (payload: {
     subject: Subject;
     started_at: string;

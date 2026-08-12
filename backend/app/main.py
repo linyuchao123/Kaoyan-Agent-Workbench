@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -18,6 +18,10 @@ from app.config import get_settings
 from app.schemas import (
     ActionProposal,
     AgentRunRequest,
+    CareerItemCreate,
+    CareerItemType,
+    CareerItemUpdate,
+    CareerStatus,
     ContributionDay,
     ImportPreviewRequest,
     ImportProposal,
@@ -27,12 +31,15 @@ from app.schemas import (
     PlanLevel,
     PlanProgress,
     PlanUpdate,
+    SchoolOptionCreate,
+    SchoolOptionUpdate,
     SearchSource,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
     WebSearchRequest,
 )
+from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
 from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
 from app.services.repository import (
     RepositoryConflictError,
@@ -213,6 +220,127 @@ async def review_mistake(
     if not card:
         raise HTTPException(404, "mistake card not found")
     return card
+
+
+@app.get("/api/v1/schools")
+async def list_school_options(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    tier: str | None = None,
+    exam_year: Annotated[int | None, Query(ge=2026, le=2100)] = None,
+) -> list[dict]:
+    if tier not in {None, "stretch", "match", "safety"}:
+        raise HTTPException(422, "unknown school tier")
+    return await repository.list_school_options(user, tier, exam_year)
+
+
+@app.post("/api/v1/schools", status_code=201)
+async def create_school_option(
+    payload: SchoolOptionCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_school_option(user, payload)
+
+
+@app.patch("/api/v1/schools/{option_id}")
+async def update_school_option(
+    option_id: UUID,
+    payload: SchoolOptionUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    option = await repository.update_school_option(user, option_id, payload)
+    if not option:
+        raise HTTPException(404, "school option not found")
+    return option
+
+
+@app.delete("/api/v1/schools/{option_id}", status_code=204)
+async def delete_school_option(
+    option_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_school_option(user, option_id):
+        raise HTTPException(404, "school option not found")
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/career-items")
+async def list_career_items(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    item_type: CareerItemType | None = None,
+    status: CareerStatus | None = None,
+) -> list[dict]:
+    return await repository.list_career_items(user, item_type, status)
+
+
+@app.post("/api/v1/career-items", status_code=201)
+async def create_career_item(
+    payload: CareerItemCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_career_item(user, payload)
+
+
+@app.patch("/api/v1/career-items/{item_id}")
+async def update_career_item(
+    item_id: UUID,
+    payload: CareerItemUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    item = await repository.update_career_item(user, item_id, payload)
+    if not item:
+        raise HTTPException(404, "career item not found")
+    return item
+
+
+@app.delete("/api/v1/career-items/{item_id}", status_code=204)
+async def delete_career_item(
+    item_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_career_item(user, item_id):
+        raise HTTPException(404, "career item not found")
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/export")
+async def export_user_data(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    format: Literal["json", "csv", "markdown"] = "json",
+) -> Response:
+    plans = await repository.list_plans(user)
+    tasks = await repository.list_tasks(user)
+    sessions = await repository.list_sessions(user)
+    mistakes = await repository.list_mistakes(user)
+    schools = await repository.list_school_options(user)
+    career_items = await repository.list_career_items(user)
+    exported_at = datetime.now(UTC).isoformat()
+    payload = {
+        "metadata": {
+            "schema_version": "2026-08-v1",
+            "exported_at": exported_at,
+            "timezone": "Asia/Shanghai",
+        },
+        "data": {
+            "plans": plans,
+            "tasks": tasks,
+            "study_sessions": sessions,
+            "mistake_cards": mistakes,
+            "school_options": schools,
+            "career_items": career_items,
+        },
+    }
+    date_stamp = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    if format == "csv":
+        body, media_type, suffix = render_csv_export(payload), "text/csv; charset=utf-8", "csv"
+    elif format == "markdown":
+        body, media_type, suffix = render_markdown_export(payload), "text/markdown; charset=utf-8", "md"
+    else:
+        body, media_type, suffix = render_json_export(payload), "application/json", "json"
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'},
+    )
 
 
 @app.get("/api/v1/analytics/contributions", response_model=list[ContributionDay])

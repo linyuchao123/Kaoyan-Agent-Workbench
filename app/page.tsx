@@ -2,12 +2,12 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiMistakeCard, type ApiPlan, type ApiTask, type ContributionScope, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
-type View = "today" | "plan" | "subjects" | "schools" | "materials" | "agents";
+type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "backup" | "agents";
 
 type StudyDay = {
   date: string;
@@ -47,7 +47,9 @@ const navItems: { key: View; label: string; icon: string }[] = [
   { key: "plan", label: "三级计划", icon: "◇" },
   { key: "subjects", label: "学科学习", icon: "▤" },
   { key: "schools", label: "院校情报", icon: "◎" },
+  { key: "career", label: "求职副线", icon: "◫" },
   { key: "materials", label: "资料库", icon: "▱" },
+  { key: "backup", label: "数据备份", icon: "⇩" },
   { key: "agents", label: "双 Agent", icon: "✦" },
 ];
 
@@ -721,6 +723,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
   const [loading, setLoading] = useState(!isDemo);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1098,14 +1101,358 @@ function SubjectsView() {
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用章节、题目和错题复习衡量真实进度。</p></div><button className="primary-button">＋ 添加学习资源</button></div><div className="subject-card-grid">{cards.map(([title, chapter, count, progress, time], index) => <article className="panel subject-card" key={String(title)}><div className={`subject-icon s${index}`}>{index === 2 ? "408" : String(title).slice(0,1)}</div><span>{time}</span><h2>{title}</h2><p>{chapter}</p><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><div className="subject-bottom"><strong>{count}</strong><small>{progress}%</small></div></article>)}</div><section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button">进入错题本</button></div><div className="knowledge-table"><div><strong>函数极限的等价无穷小替换</strong><span>数学一 · 错误 3 次</span><em>明天复习</em></div><div><strong>二叉树的非递归遍历</strong><span>数据结构 · 错误 2 次</span><em>今天复习</em></div><div><strong>长难句中的同位语从句</strong><span>英语一 · 掌握度 45%</span><em>后天复习</em></div></div></section></section>;
 }
 
-function SchoolsView() {
-  const schools = [
-    { tier: "冲", name: "中国科学技术大学", major: "软件学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "合肥 / 苏州", year: "2026 基线" },
-    { tier: "稳", name: "苏州大学", major: "计算机学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "苏州", year: "2026 基线" },
-    { tier: "稳", name: "南京理工大学", major: "计算机学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "南京", year: "2026 基线" },
-    { tier: "保", name: "待调研院校", major: "长三角就业导向专硕", exams: "优先 408", city: "沪苏浙皖", year: "等待补充" },
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button">＋ 添加院校</button></div><div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.name + school.tier}><div className={`tier tier-${school.tier}`}>{school.tier}</div><div className="school-main"><span>{school.year}</span><h2>{school.name}</h2><p>{school.major}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exams}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.city}</strong></div><button className="more-button">查看档案 →</button></article>)}</div></section>;
+const demoSchools: ApiSchoolOption[] = [
+  { id: "demo-ustc", tier: "stretch", university: "中国科学技术大学", college: "软件学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "合肥 / 苏州", source_url: "https://yz.ustc.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+  { id: "demo-suda", tier: "match", university: "苏州大学", college: "计算机科学与技术学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "苏州", source_url: "https://yjs.suda.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+  { id: "demo-njust", tier: "match", university: "南京理工大学", college: "计算机科学与工程学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "南京", source_url: "https://gs.njust.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+];
+
+const schoolTierMeta: Record<SchoolTier, { label: string; title: string }> = {
+  stretch: { label: "冲", title: "冲刺" },
+  match: { label: "稳", title: "匹配" },
+  safety: { label: "保", title: "保底" },
+};
+
+function SchoolsView({ isDemo }: { isDemo: boolean }) {
+  const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
+  const [formOpen, setFormOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [tierFilter, setTierFilter] = useState<SchoolTier | "all">("all");
+  const [yearFilter, setYearFilter] = useState("2028");
+  const [tier, setTier] = useState<SchoolTier>("match");
+  const [university, setUniversity] = useState("");
+  const [college, setCollege] = useState("");
+  const [majorCode, setMajorCode] = useState("");
+  const [majorName, setMajorName] = useState("软件工程");
+  const [degreeType, setDegreeType] = useState<DegreeType>("professional");
+  const [examYear, setExamYear] = useState("2028");
+  const [examSubjects, setExamSubjects] = useState("101 政治、201 英语一、301 数学一、408 计算机学科基础");
+  const [location, setLocation] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (isDemo) {
+      setSchools(demoSchools);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setStatus("正在加载云端院校情报…");
+    void api.listSchoolOptions(tierFilter === "all" ? undefined : tierFilter, Number(yearFilter) || undefined)
+      .then((items) => {
+        if (!active) return;
+        setSchools(items);
+        setStatus(`已从云端加载 ${items.length} 所院校记录`);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setSchools([]);
+        setStatus(error instanceof Error ? `院校情报加载失败：${error.message}` : "院校情报加载失败");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [isDemo, tierFilter, yearFilter]);
+
+  function clearSchoolForm() {
+    setEditingSchool(null);
+    setTier("match");
+    setUniversity("");
+    setCollege("");
+    setMajorCode("");
+    setMajorName("软件工程");
+    setDegreeType("professional");
+    setExamYear(yearFilter || "2028");
+    setExamSubjects("101 政治、201 英语一、301 数学一、408 计算机学科基础");
+    setLocation("");
+    setSourceUrl("");
+    setNotes("");
+  }
+
+  function openSchoolEditor(school: ApiSchoolOption) {
+    setEditingSchool(school);
+    setTier(school.tier);
+    setUniversity(school.university);
+    setCollege(school.college);
+    setMajorCode(school.major_code);
+    setMajorName(school.major_name);
+    setDegreeType(school.degree_type);
+    setExamYear(String(school.exam_year));
+    setExamSubjects(school.exam_subjects.join("、"));
+    setLocation(school.location || "");
+    setSourceUrl(school.source_url);
+    setNotes(school.notes);
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveSchool(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isDemo) {
+      setStatus("离线演示模式不会写入真实院校数据，请登录后使用");
+      return;
+    }
+    setBusy(true);
+    setStatus(editingSchool ? "正在更新院校情报…" : "正在保存院校情报…");
+    try {
+      const payload = {
+        tier,
+        university: university.trim(),
+        college: college.trim(),
+        major_code: majorCode.trim(),
+        major_name: majorName.trim(),
+        degree_type: degreeType,
+        exam_year: Number(examYear),
+        exam_subjects: examSubjects.split(/[、,，]/).map((item) => item.trim()).filter(Boolean),
+        location: location.trim() || undefined,
+        source_url: sourceUrl.trim(),
+        notes: notes.trim(),
+      };
+      const saved = editingSchool
+        ? await api.updateSchoolOption(editingSchool.id, payload)
+        : await api.createSchoolOption(payload);
+      const remainsVisible = (tierFilter === "all" || tierFilter === saved.tier) && Number(yearFilter) === saved.exam_year;
+      setSchools((items) => editingSchool
+        ? (remainsVisible ? items.map((item) => item.id === saved.id ? saved : item) : items.filter((item) => item.id !== saved.id))
+        : (remainsVisible ? [...items, saved] : items));
+      setStatus(`${editingSchool ? "已更新" : "已保存"} ${saved.university} · ${saved.major_code}`);
+      clearSchoolForm();
+      setFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSchool(school: ApiSchoolOption) {
+    if (isDemo) {
+      setStatus("演示院校不会被删除");
+      return;
+    }
+    if (!window.confirm(`确认删除 ${school.university} 的 ${school.major_name} 记录吗？`)) return;
+    setBusy(true);
+    try {
+      await api.deleteSchoolOption(school.id);
+      setSchools((items) => items.filter((item) => item.id !== school.id));
+      setStatus(`已删除 ${school.university} 的院校记录`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
+    <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => setTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
+    {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : schools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
+  </section>;
+}
+
+const demoCareerItems: ApiCareerItem[] = [
+  { id: "demo-career-1", item_type: "milestone", title: "完成 Agent 工作台 v0.5", company: null, status: "in_progress", occurred_on: "2026-09-15", notes: "补齐院校情报、求职副线和数据导出。" },
+  { id: "demo-career-2", item_type: "resume", title: "AI 应用开发简历 v1", company: null, status: "planned", occurred_on: "2026-10-01", notes: "突出 FastAPI、Supabase、RAG 与 Agent 项目经历。" },
+  { id: "demo-career-3", item_type: "application", title: "AI 应用开发实习", company: "杭州示例科技", status: "submitted", occurred_on: "2026-12-20", notes: "演示记录，不代表真实投递。" },
+];
+
+const careerTypeMeta: Record<CareerItemType, { label: string; short: string }> = {
+  milestone: { label: "项目里程碑", short: "项" },
+  resume: { label: "简历版本", short: "历" },
+  application: { label: "求职投递", short: "投" },
+  interview: { label: "面试复盘", short: "面" },
+};
+
+const careerStatusMeta: Record<CareerStatus, string> = {
+  planned: "待开始",
+  in_progress: "进行中",
+  submitted: "已投递",
+  interviewing: "面试中",
+  offer: "已获 Offer",
+  rejected: "未通过",
+  completed: "已完成",
+  archived: "已归档",
+};
+
+function CareerView({ isDemo }: { isDemo: boolean }) {
+  const [items, setItems] = useState<ApiCareerItem[]>(isDemo ? demoCareerItems : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [message, setMessage] = useState(isDemo ? "当前显示离线演示求职记录" : "正在加载云端求职记录…");
+  const [typeFilter, setTypeFilter] = useState<CareerItemType | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<CareerStatus | "all">("all");
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<ApiCareerItem | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [itemType, setItemType] = useState<CareerItemType>("milestone");
+  const [title, setTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [careerStatus, setCareerStatus] = useState<CareerStatus>("planned");
+  const [occurredOn, setOccurredOn] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (isDemo) {
+      setItems(demoCareerItems.filter((item) =>
+        (typeFilter === "all" || item.item_type === typeFilter) &&
+        (statusFilter === "all" || item.status === statusFilter),
+      ));
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setMessage("正在加载云端求职记录…");
+    void api.listCareerItems(typeFilter === "all" ? undefined : typeFilter, statusFilter === "all" ? undefined : statusFilter)
+      .then((records) => {
+        if (!active) return;
+        setItems(records);
+        setMessage(`已从云端加载 ${records.length} 条求职记录`);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setItems([]);
+        setMessage(error instanceof Error ? `求职记录加载失败：${error.message}` : "求职记录加载失败");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [isDemo, statusFilter, typeFilter]);
+
+  function resetForm() {
+    setEditingItem(null);
+    setItemType("milestone");
+    setTitle("");
+    setCompany("");
+    setCareerStatus("planned");
+    setOccurredOn("");
+    setNotes("");
+  }
+
+  function openEditor(item: ApiCareerItem) {
+    setEditingItem(item);
+    setItemType(item.item_type);
+    setTitle(item.title);
+    setCompany(item.company || "");
+    setCareerStatus(item.status);
+    setOccurredOn(item.occurred_on || "");
+    setNotes(item.notes);
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isDemo) {
+      setMessage("离线演示模式不会写入真实求职记录，请登录后使用");
+      return;
+    }
+    setBusy(true);
+    setMessage(editingItem ? "正在更新求职记录…" : "正在保存求职记录…");
+    try {
+      const payload = {
+        item_type: itemType,
+        title: title.trim(),
+        company: company.trim() || undefined,
+        status: careerStatus,
+        occurred_on: occurredOn || undefined,
+        notes: notes.trim(),
+      };
+      const saved = editingItem
+        ? await api.updateCareerItem(editingItem.id, { ...payload, company: company.trim() || null, occurred_on: occurredOn || null })
+        : await api.createCareerItem(payload);
+      const visible = (typeFilter === "all" || saved.item_type === typeFilter) && (statusFilter === "all" || saved.status === statusFilter);
+      setItems((records) => editingItem
+        ? (visible ? records.map((item) => item.id === saved.id ? saved : item) : records.filter((item) => item.id !== saved.id))
+        : (visible ? [...records, saved] : records));
+      setMessage(`${editingItem ? "已更新" : "已保存"}：${saved.title}`);
+      resetForm();
+      setFormOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeItem(item: ApiCareerItem) {
+    if (isDemo) {
+      setMessage("演示求职记录不会被删除");
+      return;
+    }
+    if (!window.confirm(`确认删除“${item.title}”吗？`)) return;
+    setBusy(true);
+    try {
+      await api.deleteCareerItem(item.id);
+      setItems((records) => records.filter((record) => record.id !== item.id));
+      setMessage(`已删除：${item.title}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const metricCounts = {
+    total: items.length,
+    submitted: items.filter((item) => ["submitted", "interviewing", "offer"].includes(item.status)).length,
+    interviewing: items.filter((item) => item.status === "interviewing").length,
+    offer: items.filter((item) => item.status === "offer").length,
+  };
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
+    <div className="career-separation-note"><strong>独立统计</strong><span>求职记录用于追踪就业准备，不会改变学习热力图、连续学习天数或考研完成率。</span></div>
+    <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
+    <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
+    {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : items.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{items.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
+  </section>;
+}
+
+const exportFormatMeta: Record<ExportFormat, { label: string; extension: string; detail: string }> = {
+  json: { label: "完整 JSON", extension: ".json", detail: "适合完整备份、恢复准备和后续程序处理" },
+  csv: { label: "通用 CSV", extension: ".csv", detail: "适合用 Excel、Numbers 或数据分析工具查看" },
+  markdown: { label: "复盘 Markdown", extension: ".md", detail: "适合保存到 Obsidian、笔记库或长期归档" },
+};
+
+function BackupView({ isDemo }: { isDemo: boolean }) {
+  const [format, setFormat] = useState<ExportFormat>("json");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(isDemo ? "离线演示模式不会生成真实账户备份" : "选择格式后即可下载当前账户数据");
+
+  async function exportData() {
+    if (isDemo) {
+      setStatus("请登录 Supabase 账户后导出你的真实数据");
+      return;
+    }
+    setBusy(true);
+    setStatus(`正在生成${exportFormatMeta[format].label}备份…`);
+    try {
+      const result = await api.exportData(format);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`下载完成：${result.filename}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `导出失败：${error.message}` : "导出失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">数据可携带与长期归档</div><h1>数据备份</h1><p>随时导出自己的核心记录，服务器仍是在线使用时的最终事实来源。</p></div></div>
+    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
+    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <article className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></article>)}</div>
+    <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>资料库原始文件和向量索引将在 v0.6 Storage 阶段加入完整备份；当前导出只包含已经云端结构化的核心数据。</p></section>
+  </section>;
 }
 
 function MaterialsView({ isDemo }: { isDemo: boolean }) {
@@ -1281,7 +1628,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

@@ -36,3 +36,15 @@ class MigrationContractTests(TestCase):
             "grant select, insert, update, delete on public.plans to authenticated",
             sql,
         )
+
+    def test_authenticated_users_can_access_v05_records_through_rls(self):
+        school_sql = Path(
+            "supabase/migrations/202608120001_grant_school_option_access.sql"
+        ).read_text()
+        career_sql = Path(
+            "supabase/migrations/202608120002_grant_career_item_access.sql"
+        ).read_text()
+        self.assertIn("on public.school_options", school_sql)
+        self.assertIn("to authenticated", school_sql)
+        self.assertIn("on public.career_items", career_sql)
+        self.assertIn("to authenticated", career_sql)
