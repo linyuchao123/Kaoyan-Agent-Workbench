@@ -86,3 +86,46 @@ test("创建和删除院校档案使用当前登录身份且不能指定用户",
     globalThis.fetch = originalFetch;
   }
 });
+
+test("院校档案支持修改并继续携带当前登录身份", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      tier: "stretch",
+      university: "苏州大学",
+      college: "计算机科学与技术学院",
+      major_code: "085405",
+      major_name: "软件工程",
+      degree_type: "professional",
+      exam_year: 2028,
+      exam_subjects: ["101 政治", "201 英语一", "301 数学一", "408"],
+      tuition_total: null,
+      duration_years: null,
+      location: "苏州",
+      source_url: "https://example.edu.cn/admissions/2028",
+      source_checked_at: "2026-08-12T00:00:00Z",
+      notes: "已复核",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const updated = await api.updateSchoolOption(
+      "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      { tier: "stretch", notes: "已复核" },
+    );
+    assert.equal(updated.tier, "stretch");
+    assert.equal(request.init.method, "PATCH");
+    assert.equal(JSON.parse(request.init.body).notes, "已复核");
+    assert.equal(
+      new Headers(request.init.headers).get("Authorization"),
+      "Bearer current-user-token",
+    );
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

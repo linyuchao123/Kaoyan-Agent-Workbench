@@ -721,6 +721,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
   const [loading, setLoading] = useState(!isDemo);
   const [formOpen, setFormOpen] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1154,16 +1155,48 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     return () => { active = false; };
   }, [isDemo, tierFilter, yearFilter]);
 
-  async function addSchool(event: FormEvent<HTMLFormElement>) {
+  function clearSchoolForm() {
+    setEditingSchool(null);
+    setTier("match");
+    setUniversity("");
+    setCollege("");
+    setMajorCode("");
+    setMajorName("软件工程");
+    setDegreeType("professional");
+    setExamYear(yearFilter || "2028");
+    setExamSubjects("101 政治、201 英语一、301 数学一、408 计算机学科基础");
+    setLocation("");
+    setSourceUrl("");
+    setNotes("");
+  }
+
+  function openSchoolEditor(school: ApiSchoolOption) {
+    setEditingSchool(school);
+    setTier(school.tier);
+    setUniversity(school.university);
+    setCollege(school.college);
+    setMajorCode(school.major_code);
+    setMajorName(school.major_name);
+    setDegreeType(school.degree_type);
+    setExamYear(String(school.exam_year));
+    setExamSubjects(school.exam_subjects.join("、"));
+    setLocation(school.location || "");
+    setSourceUrl(school.source_url);
+    setNotes(school.notes);
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function saveSchool(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (isDemo) {
       setStatus("离线演示模式不会写入真实院校数据，请登录后使用");
       return;
     }
     setBusy(true);
-    setStatus("正在保存院校情报…");
+    setStatus(editingSchool ? "正在更新院校情报…" : "正在保存院校情报…");
     try {
-      const created = await api.createSchoolOption({
+      const payload = {
         tier,
         university: university.trim(),
         college: college.trim(),
@@ -1175,15 +1208,16 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
         location: location.trim() || undefined,
         source_url: sourceUrl.trim(),
         notes: notes.trim(),
-      });
-      if ((tierFilter === "all" || tierFilter === created.tier) && Number(yearFilter) === created.exam_year) setSchools((items) => [...items, created]);
-      setStatus(`已保存 ${created.university} · ${created.major_code}`);
-      setUniversity("");
-      setCollege("");
-      setMajorCode("");
-      setLocation("");
-      setSourceUrl("");
-      setNotes("");
+      };
+      const saved = editingSchool
+        ? await api.updateSchoolOption(editingSchool.id, payload)
+        : await api.createSchoolOption(payload);
+      const remainsVisible = (tierFilter === "all" || tierFilter === saved.tier) && Number(yearFilter) === saved.exam_year;
+      setSchools((items) => editingSchool
+        ? (remainsVisible ? items.map((item) => item.id === saved.id ? saved : item) : items.filter((item) => item.id !== saved.id))
+        : (remainsVisible ? [...items, saved] : items));
+      setStatus(`${editingSchool ? "已更新" : "已保存"} ${saved.university} · ${saved.major_code}`);
+      clearSchoolForm();
       setFormOpen(false);
     } catch (error) {
       setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
@@ -1210,10 +1244,10 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => setTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
-    {formOpen && <form className="panel school-form" onSubmit={addSchool}><div className="school-form-heading"><div className="eyebrow">新增目标院校</div><h2>保存可年度复核的招生档案</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => setFormOpen(false)} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存院校档案"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : schools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
+    {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : schools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
   </section>;
 }
 

@@ -197,6 +197,19 @@ export const api = {
     source_url: string;
     notes?: string;
   }) => request<ApiSchoolOption>("/api/v1/schools", { method: "POST", body: JSON.stringify(payload) }),
+  updateSchoolOption: (id: string, payload: Partial<{
+    tier: SchoolTier;
+    university: string;
+    college: string;
+    major_code: string;
+    major_name: string;
+    degree_type: DegreeType;
+    exam_year: number;
+    exam_subjects: string[];
+    location: string;
+    source_url: string;
+    notes: string;
+  }>) => request<ApiSchoolOption>(`/api/v1/schools/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteSchoolOption: (id: string) => request<void>(`/api/v1/schools/${id}`, { method: "DELETE" }),
   createSession: (payload: {
     subject: Subject;
