@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from io import BytesIO
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,7 @@ from app.schemas import (
     TaskUpdate,
     WebSearchRequest,
 )
+from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
 from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
 from app.services.repository import (
     RepositoryConflictError,
@@ -299,6 +300,47 @@ async def delete_career_item(
     if not await repository.delete_career_item(user, item_id):
         raise HTTPException(404, "career item not found")
     return Response(status_code=204)
+
+
+@app.get("/api/v1/export")
+async def export_user_data(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    format: Literal["json", "csv", "markdown"] = "json",
+) -> Response:
+    plans = await repository.list_plans(user)
+    tasks = await repository.list_tasks(user)
+    sessions = await repository.list_sessions(user)
+    mistakes = await repository.list_mistakes(user)
+    schools = await repository.list_school_options(user)
+    career_items = await repository.list_career_items(user)
+    exported_at = datetime.now(UTC).isoformat()
+    payload = {
+        "metadata": {
+            "schema_version": "2026-08-v1",
+            "exported_at": exported_at,
+            "timezone": "Asia/Shanghai",
+        },
+        "data": {
+            "plans": plans,
+            "tasks": tasks,
+            "study_sessions": sessions,
+            "mistake_cards": mistakes,
+            "school_options": schools,
+            "career_items": career_items,
+        },
+    }
+    date_stamp = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    if format == "csv":
+        body, media_type, suffix = render_csv_export(payload), "text/csv; charset=utf-8", "csv"
+    elif format == "markdown":
+        body, media_type, suffix = render_markdown_export(payload), "text/markdown; charset=utf-8", "md"
+    else:
+        body, media_type, suffix = render_json_export(payload), "application/json", "json"
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'},
+    )
 
 
 @app.get("/api/v1/analytics/contributions", response_model=list[ContributionDay])

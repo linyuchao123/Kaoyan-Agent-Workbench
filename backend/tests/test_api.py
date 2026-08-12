@@ -622,6 +622,55 @@ class ApiFlowTests(TestCase):
             404,
         )
 
+    def test_data_export_supports_json_csv_and_markdown(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "导出测试任务", "subject": "math", "planned_minutes": 45},
+        )
+        self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "milestone",
+                "title": "完成个人项目",
+                "status": "completed",
+                "notes": "形成可复盘记录",
+            },
+        )
+
+        json_export = self.client.get("/api/v1/export?format=json")
+        self.assertEqual(json_export.status_code, 200)
+        self.assertIn("attachment; filename=", json_export.headers["content-disposition"])
+        payload = json_export.json()
+        self.assertEqual(payload["metadata"]["timezone"], "Asia/Shanghai")
+        self.assertEqual(payload["data"]["tasks"][0]["title"], "导出测试任务")
+        self.assertEqual(payload["data"]["career_items"][0]["title"], "完成个人项目")
+        self.assertNotIn("user_id", payload["data"]["tasks"][0])
+
+        csv_export = self.client.get("/api/v1/export?format=csv")
+        self.assertEqual(csv_export.status_code, 200)
+        self.assertTrue(csv_export.content.startswith(b"\xef\xbb\xbf"))
+        self.assertIn("学习任务", csv_export.text)
+        self.assertIn("导出测试任务", csv_export.text)
+
+        markdown_export = self.client.get("/api/v1/export?format=markdown")
+        self.assertEqual(markdown_export.status_code, 200)
+        self.assertIn("# 研途学习工作台数据导出", markdown_export.text)
+        self.assertIn("## 求职副线", markdown_export.text)
+
+    def test_data_export_is_limited_to_current_user(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "用户一私有任务", "subject": "cs408", "planned_minutes": 60},
+        )
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        payload = self.client.get("/api/v1/export?format=json").json()
+        self.assertEqual(payload["data"]["tasks"], [])
+        self.assertNotIn("用户一私有任务", str(payload))
+
     def test_missing_and_invalid_tokens_return_401(self):
         main.app.dependency_overrides.clear()
         self.assertEqual(self.client.get("/api/v1/tasks").status_code, 401)
