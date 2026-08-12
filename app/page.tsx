@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiMistakeCard, type ApiPlan, type ApiTask, type ContributionScope, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type ContributionScope, type DegreeType, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1098,14 +1098,123 @@ function SubjectsView() {
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用章节、题目和错题复习衡量真实进度。</p></div><button className="primary-button">＋ 添加学习资源</button></div><div className="subject-card-grid">{cards.map(([title, chapter, count, progress, time], index) => <article className="panel subject-card" key={String(title)}><div className={`subject-icon s${index}`}>{index === 2 ? "408" : String(title).slice(0,1)}</div><span>{time}</span><h2>{title}</h2><p>{chapter}</p><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><div className="subject-bottom"><strong>{count}</strong><small>{progress}%</small></div></article>)}</div><section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button">进入错题本</button></div><div className="knowledge-table"><div><strong>函数极限的等价无穷小替换</strong><span>数学一 · 错误 3 次</span><em>明天复习</em></div><div><strong>二叉树的非递归遍历</strong><span>数据结构 · 错误 2 次</span><em>今天复习</em></div><div><strong>长难句中的同位语从句</strong><span>英语一 · 掌握度 45%</span><em>后天复习</em></div></div></section></section>;
 }
 
-function SchoolsView() {
-  const schools = [
-    { tier: "冲", name: "中国科学技术大学", major: "软件学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "合肥 / 苏州", year: "2026 基线" },
-    { tier: "稳", name: "苏州大学", major: "计算机学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "苏州", year: "2026 基线" },
-    { tier: "稳", name: "南京理工大学", major: "计算机学院 · 085405 软件工程", exams: "英二 · 数二 · 408", city: "南京", year: "2026 基线" },
-    { tier: "保", name: "待调研院校", major: "长三角就业导向专硕", exams: "优先 408", city: "沪苏浙皖", year: "等待补充" },
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button">＋ 添加院校</button></div><div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.name + school.tier}><div className={`tier tier-${school.tier}`}>{school.tier}</div><div className="school-main"><span>{school.year}</span><h2>{school.name}</h2><p>{school.major}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exams}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.city}</strong></div><button className="more-button">查看档案 →</button></article>)}</div></section>;
+const demoSchools: ApiSchoolOption[] = [
+  { id: "demo-ustc", tier: "stretch", university: "中国科学技术大学", college: "软件学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "合肥 / 苏州", source_url: "https://yz.ustc.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+  { id: "demo-suda", tier: "match", university: "苏州大学", college: "计算机科学与技术学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "苏州", source_url: "https://yjs.suda.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+  { id: "demo-njust", tier: "match", university: "南京理工大学", college: "计算机科学与工程学院", major_code: "085405", major_name: "软件工程", degree_type: "professional", exam_year: 2026, exam_subjects: ["英语二", "数学二", "408"], tuition_total: null, duration_years: null, location: "南京", source_url: "https://gs.njust.edu.cn/", source_checked_at: "2026-08-10T00:00:00Z", notes: "演示基线" },
+];
+
+const schoolTierMeta: Record<SchoolTier, { label: string; title: string }> = {
+  stretch: { label: "冲", title: "冲刺" },
+  match: { label: "稳", title: "匹配" },
+  safety: { label: "保", title: "保底" },
+};
+
+function SchoolsView({ isDemo }: { isDemo: boolean }) {
+  const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
+  const [formOpen, setFormOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [tierFilter, setTierFilter] = useState<SchoolTier | "all">("all");
+  const [yearFilter, setYearFilter] = useState("2028");
+  const [tier, setTier] = useState<SchoolTier>("match");
+  const [university, setUniversity] = useState("");
+  const [college, setCollege] = useState("");
+  const [majorCode, setMajorCode] = useState("");
+  const [majorName, setMajorName] = useState("软件工程");
+  const [degreeType, setDegreeType] = useState<DegreeType>("professional");
+  const [examYear, setExamYear] = useState("2028");
+  const [examSubjects, setExamSubjects] = useState("101 政治、201 英语一、301 数学一、408 计算机学科基础");
+  const [location, setLocation] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (isDemo) {
+      setSchools(demoSchools);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    setStatus("正在加载云端院校情报…");
+    void api.listSchoolOptions(tierFilter === "all" ? undefined : tierFilter, Number(yearFilter) || undefined)
+      .then((items) => {
+        if (!active) return;
+        setSchools(items);
+        setStatus(`已从云端加载 ${items.length} 所院校记录`);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setSchools([]);
+        setStatus(error instanceof Error ? `院校情报加载失败：${error.message}` : "院校情报加载失败");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [isDemo, tierFilter, yearFilter]);
+
+  async function addSchool(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (isDemo) {
+      setStatus("离线演示模式不会写入真实院校数据，请登录后使用");
+      return;
+    }
+    setBusy(true);
+    setStatus("正在保存院校情报…");
+    try {
+      const created = await api.createSchoolOption({
+        tier,
+        university: university.trim(),
+        college: college.trim(),
+        major_code: majorCode.trim(),
+        major_name: majorName.trim(),
+        degree_type: degreeType,
+        exam_year: Number(examYear),
+        exam_subjects: examSubjects.split(/[、,，]/).map((item) => item.trim()).filter(Boolean),
+        location: location.trim() || undefined,
+        source_url: sourceUrl.trim(),
+        notes: notes.trim(),
+      });
+      if ((tierFilter === "all" || tierFilter === created.tier) && Number(yearFilter) === created.exam_year) setSchools((items) => [...items, created]);
+      setStatus(`已保存 ${created.university} · ${created.major_code}`);
+      setUniversity("");
+      setCollege("");
+      setMajorCode("");
+      setLocation("");
+      setSourceUrl("");
+      setNotes("");
+      setFormOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSchool(school: ApiSchoolOption) {
+    if (isDemo) {
+      setStatus("演示院校不会被删除");
+      return;
+    }
+    if (!window.confirm(`确认删除 ${school.university} 的 ${school.major_name} 记录吗？`)) return;
+    setBusy(true);
+    try {
+      await api.deleteSchoolOption(school.id);
+      setSchools((items) => items.filter((item) => item.id !== school.id));
+      setStatus(`已删除 ${school.university} 的院校记录`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => setFormOpen((value) => !value)}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
+    <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => setTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
+    {formOpen && <form className="panel school-form" onSubmit={addSchool}><div className="school-form-heading"><div className="eyebrow">新增目标院校</div><h2>保存可年度复核的招生档案</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => setFormOpen(false)} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存院校档案"}</button></div></form>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : schools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
+  </section>;
 }
 
 function MaterialsView({ isDemo }: { isDemo: boolean }) {
@@ -1281,7 +1390,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

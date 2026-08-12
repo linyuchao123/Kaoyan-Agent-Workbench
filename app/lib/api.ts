@@ -4,6 +4,8 @@ export type PlanLevel = "stage" | "week" | "day";
 export type PlanStatus = "draft" | "active" | "completed" | "archived";
 export type MistakeSubject = Exclude<Subject, "career">;
 export type MistakeReviewResult = "again" | "hard" | "good" | "easy";
+export type SchoolTier = "stretch" | "match" | "safety";
+export type DegreeType = "academic" | "professional";
 
 export type ApiTask = {
   id: string;
@@ -45,6 +47,24 @@ export type ApiMistakeCard = {
   mastery: number;
   next_review_at: string;
   review_count: number;
+};
+
+export type ApiSchoolOption = {
+  id: string;
+  tier: SchoolTier;
+  university: string;
+  college: string;
+  major_code: string;
+  major_name: string;
+  degree_type: DegreeType;
+  exam_year: number;
+  exam_subjects: string[];
+  tuition_total: number | null;
+  duration_years: number | null;
+  location: string | null;
+  source_url: string;
+  source_checked_at: string;
+  notes: string;
 };
 
 export type ContributionDay = {
@@ -157,6 +177,27 @@ export const api = {
   }) => request<ApiMistakeCard>("/api/v1/mistakes", { method: "POST", body: JSON.stringify(payload) }),
   reviewMistake: (id: string, result: MistakeReviewResult) =>
     request<ApiMistakeCard>(`/api/v1/mistakes/${id}/reviews`, { method: "POST", body: JSON.stringify({ result }) }),
+  listSchoolOptions: (tier?: SchoolTier, examYear?: number) => {
+    const params = new URLSearchParams();
+    if (tier) params.set("tier", tier);
+    if (examYear) params.set("exam_year", String(examYear));
+    const query = params.size ? `?${params.toString()}` : "";
+    return request<ApiSchoolOption[]>(`/api/v1/schools${query}`);
+  },
+  createSchoolOption: (payload: {
+    tier: SchoolTier;
+    university: string;
+    college: string;
+    major_code: string;
+    major_name: string;
+    degree_type: DegreeType;
+    exam_year: number;
+    exam_subjects: string[];
+    location?: string;
+    source_url: string;
+    notes?: string;
+  }) => request<ApiSchoolOption>("/api/v1/schools", { method: "POST", body: JSON.stringify(payload) }),
+  deleteSchoolOption: (id: string) => request<void>(`/api/v1/schools/${id}`, { method: "DELETE" }),
   createSession: (payload: {
     subject: Subject;
     started_at: string;
