@@ -15,6 +15,7 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
 )
+from app.services.ingestion import chunk_markdown
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -416,6 +417,151 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["user_id"], str(self.user.id))
         self.assertNotIn("access_token", payload)
         self.assertNotIn("access_token", payload)
+
+    async def test_supabase_document_upload_uses_private_user_path_and_persists_chunks(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            if "/storage/v1/object/" in str(request.url):
+                return httpx.Response(200, json={"Key": "stored"})
+            if request.url.path.endswith("/rest/v1/documents"):
+                payload = json.loads(request.content)
+                return httpx.Response(201, json=[payload])
+            return httpx.Response(201, json=[])
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        content = b"# Limits\nDefinition and examples"
+        chunks = chunk_markdown(content.decode())
+        document, duplicate = await repository.persist_document(
+            self.user,
+            document_id=document_id,
+            filename="limits.md",
+            content_type="text/markdown",
+            content=content,
+            digest="abc123",
+            ingestion_status="ready",
+            chunks=chunks,
+        )
+
+        self.assertFalse(duplicate)
+        self.assertEqual(document["storage_path"], f"{self.user.id}/{document_id}/limits.md")
+        storage_request = requests[1]
+        self.assertIn(
+            f"/storage/v1/object/study-materials/{self.user.id}/{document_id}/limits.md",
+            str(storage_request.url),
+        )
+        self.assertEqual(storage_request.headers["authorization"], "Bearer signed-user-jwt")
+        document_payload = json.loads(requests[2].content)
+        self.assertEqual(document_payload["user_id"], str(self.user.id))
+        self.assertNotIn("access_token", document_payload)
+        chunk_payload = json.loads(requests[3].content)[0]
+        self.assertEqual(chunk_payload["document_id"], str(document_id))
+        self.assertEqual(chunk_payload["user_id"], str(self.user.id))
+        self.assertIsNone(chunk_payload["page_number"])
+
+    async def test_supabase_document_upload_reuses_existing_hash(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.endswith("/rest/v1/documents"):
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": str(document_id),
+                            "title": "limits",
+                            "original_filename": "limits.md",
+                            "content_type": "text/markdown",
+                            "byte_size": 20,
+                            "sha256": "abc123",
+                            "storage_path": f"{self.user.id}/{document_id}/limits.md",
+                            "ingestion_status": "ready",
+                        }
+                    ],
+                )
+            return httpx.Response(
+                200,
+                json=[{"id": 1, "flagged_untrusted_instruction": False}],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        document, duplicate = await repository.persist_document(
+            self.user,
+            document_id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            filename="limits.md",
+            content_type="text/markdown",
+            content=b"duplicate",
+            digest="abc123",
+            ingestion_status="ready",
+            chunks=[],
+        )
+
+        self.assertTrue(duplicate)
+        self.assertEqual(document["id"], str(document_id))
+        self.assertEqual(document["chunk_count"], 1)
+        self.assertEqual(len(requests), 2)
+        self.assertFalse(any("/storage/v1/" in str(request.url) for request in requests))
+
+    async def test_supabase_private_search_calls_user_scoped_rpc(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "chunk_id": 9,
+                        "document_id": str(document_id),
+                        "title": "数据结构笔记",
+                        "heading": "线性表",
+                        "page_number": None,
+                        "locator": "线性表 · 片段 1",
+                        "content": "顺序表支持按下标随机访问。",
+                        "score": 1.0,
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        sources = await repository.search_private_knowledge(
+            self.user,
+            "顺序表",
+            limit=5,
+            document_ids=[document_id],
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].locator, "线性表 · 片段 1")
+        self.assertTrue(requests[0].url.path.endswith("/rpc/search_private_document_chunks"))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["query_text"], "顺序表")
+        self.assertEqual(payload["match_count"], 5)
+        self.assertEqual(payload["filter_document_ids"], [str(document_id)])
+        self.assertNotIn("user_id", payload)
 
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
         def handler(_: httpx.Request) -> httpx.Response:

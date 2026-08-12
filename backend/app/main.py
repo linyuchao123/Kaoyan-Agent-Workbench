@@ -31,6 +31,7 @@ from app.schemas import (
     PlanLevel,
     PlanProgress,
     PlanUpdate,
+    PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
     SearchSource,
@@ -67,8 +68,6 @@ import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
 action_proposals: dict[UUID, tuple[UUID, ActionProposal]] = {}
 applied_proposals: set[str] = set()
 agent_graph = build_graph()
-demo_documents: dict[tuple[UUID, UUID], dict] = {}
-document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
 
 
 @app.exception_handler(RepositoryError)
@@ -399,16 +398,12 @@ async def upload_document(
     content = await file.read(25 * 1024 * 1024 + 1)
     if len(content) > 25 * 1024 * 1024:
         raise HTTPException(413, "document exceeds the 25 MB limit")
-    filename = file.filename or "未命名资料"
+    filename = (file.filename or "未命名资料").replace("\\", "/").rsplit("/", 1)[-1]
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if suffix not in {"pdf", "md", "markdown"}:
         raise HTTPException(415, "only PDF and Markdown files are supported")
 
     digest = document_hash(content)
-    existing_id = document_ids_by_hash.get((user.id, digest))
-    if existing_id:
-        return {**demo_documents[(user.id, existing_id)], "duplicate": True}
-
     if suffix == "pdf":
         try:
             pages = [(page.extract_text() or "") for page in PdfReader(BytesIO(content)).pages]
@@ -426,21 +421,45 @@ async def upload_document(
         status = "ready"
 
     document_id = uuid4()
-    item = {
-        "id": document_id,
-        "title": filename.rsplit(".", 1)[0],
-        "original_filename": filename,
-        "content_type": file.content_type or "application/octet-stream",
-        "byte_size": len(content),
-        "sha256": digest,
-        "ingestion_status": status,
-        "chunk_count": len(chunks),
-        "flagged_chunk_count": sum(chunk.flagged_untrusted_instruction for chunk in chunks),
-        "duplicate": False,
-    }
-    demo_documents[(user.id, document_id)] = item
-    document_ids_by_hash[(user.id, digest)] = document_id
-    return item
+    content_type = (
+        "application/pdf"
+        if suffix == "pdf"
+        else "text/markdown"
+    )
+    item, duplicate = await repository.persist_document(
+        user,
+        document_id=document_id,
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        digest=digest,
+        ingestion_status=status,
+        chunks=chunks,
+    )
+    return {**item, "duplicate": duplicate}
+
+
+@app.get("/api/v1/documents")
+async def list_documents(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
+    return await repository.list_documents(user)
+
+
+@app.get(
+    "/api/v1/knowledge/private-search",
+    response_model=list[PrivateKnowledgeSource],
+)
+async def search_private_knowledge(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    query: Annotated[str, Query(min_length=2, max_length=500)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 8,
+    document_id: UUID | None = None,
+) -> list[PrivateKnowledgeSource]:
+    return await repository.search_private_knowledge(
+        user,
+        query,
+        limit,
+        [document_id] if document_id else None,
+    )
 
 
 @app.post("/api/v1/documents/import-proposals/{proposal_id}/approve", response_model=ImportProposal)
@@ -462,7 +481,7 @@ async def approve_import(
 async def ingestion_status(
     document_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
 ) -> dict:
-    document = demo_documents.get((user.id, document_id))
+    document = await repository.get_document(user, document_id)
     if not document:
         raise HTTPException(404, "document not found")
     return {

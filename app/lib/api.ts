@@ -80,6 +80,34 @@ export type ApiCareerItem = {
   notes: string;
 };
 
+export type ApiDocument = {
+  id: string;
+  title: string;
+  original_filename: string | null;
+  source_type: "upload" | "web";
+  source_url: string | null;
+  content_type: string;
+  byte_size: number | null;
+  sha256: string | null;
+  storage_path: string | null;
+  version: number;
+  ingestion_status: "queued" | "processing" | "ocr_required" | "ready" | "failed";
+  ingestion_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiPrivateKnowledgeSource = {
+  chunk_id: number;
+  document_id: string;
+  title: string;
+  heading: string | null;
+  page_number: number | null;
+  locator: string;
+  content: string;
+  score: number;
+};
+
 export type ContributionDay = {
   date: string;
   scope: string;
@@ -274,15 +302,18 @@ export const api = {
     source: "timer" | "manual";
     note: string;
   }) => request("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
+  listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
+  searchPrivateKnowledge: (query: string, documentId?: string) => {
+    const params = new URLSearchParams({ query, limit: "8" });
+    if (documentId) params.set("document_id", documentId);
+    return request<ApiPrivateKnowledgeSource[]>(
+      `/api/v1/knowledge/private-search?${params.toString()}`,
+    );
+  },
   uploadDocument: (file: File) => {
     const body = new FormData();
     body.append("file", file);
-    return request<{
-      id: string;
-      title: string;
-      original_filename: string;
-      byte_size: number;
-      ingestion_status: "ready" | "ocr_required";
+    return request<ApiDocument & {
       chunk_count: number;
       flagged_chunk_count: number;
       duplicate: boolean;

@@ -1,6 +1,7 @@
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from typing import Any, Protocol, cast
+from urllib.parse import quote
 from uuid import UUID
 
 import httpx
@@ -17,12 +18,14 @@ from app.schemas import (
     PlanCreate,
     PlanProgress,
     PlanUpdate,
+    PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
 )
+from app.services.ingestion import TextChunk
 from app.services.store import DemoStore
 
 
@@ -101,6 +104,31 @@ class StudyRepository(Protocol):
 
     async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool: ...
 
+    async def persist_document(
+        self,
+        user: AuthUser,
+        *,
+        document_id: UUID,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        digest: str,
+        ingestion_status: str,
+        chunks: list[TextChunk],
+    ) -> tuple[dict, bool]: ...
+
+    async def list_documents(self, user: AuthUser) -> list[dict]: ...
+
+    async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
+
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]: ...
+
 
 class DemoRepository:
     """User-isolated in-memory repository for tests and offline API development."""
@@ -115,9 +143,15 @@ class DemoRepository:
         self.timezone_name = timezone_name
         self.now_factory = now_factory
         self.stores: dict[UUID, DemoStore] = {}
+        self.documents: dict[tuple[UUID, UUID], dict] = {}
+        self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
+        self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
 
     def clear(self) -> None:
         self.stores.clear()
+        self.documents.clear()
+        self.document_ids_by_hash.clear()
+        self.document_chunks.clear()
 
     def _store(self, user: AuthUser) -> DemoStore:
         return self.stores.setdefault(user.id, DemoStore(self.timezone_name, self.now_factory))
@@ -219,6 +253,85 @@ class DemoRepository:
     async def delete_career_item(self, user: AuthUser, item_id: UUID) -> bool:
         return self._store(user).delete_career_item(item_id)
 
+    async def persist_document(
+        self,
+        user: AuthUser,
+        *,
+        document_id: UUID,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        digest: str,
+        ingestion_status: str,
+        chunks: list[TextChunk],
+    ) -> tuple[dict, bool]:
+        existing_id = self.document_ids_by_hash.get((user.id, digest))
+        if existing_id:
+            return self.documents[(user.id, existing_id)], True
+        item = {
+            "id": document_id,
+            "title": filename.rsplit(".", 1)[0],
+            "original_filename": filename,
+            "content_type": content_type,
+            "byte_size": len(content),
+            "sha256": digest,
+            "storage_path": None,
+            "ingestion_status": ingestion_status,
+            "chunk_count": len(chunks),
+            "flagged_chunk_count": sum(chunk.flagged_untrusted_instruction for chunk in chunks),
+        }
+        self.documents[(user.id, document_id)] = item
+        self.document_ids_by_hash[(user.id, digest)] = document_id
+        self.document_chunks[(user.id, document_id)] = chunks
+        return item, False
+
+    async def list_documents(self, user: AuthUser) -> list[dict]:
+        return [
+            item
+            for (owner_id, _), item in self.documents.items()
+            if owner_id == user.id
+        ]
+
+    async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
+        return self.documents.get((user.id, document_id))
+
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]:
+        normalized = query.casefold().strip()
+        allowed = set(document_ids) if document_ids else None
+        matches: list[PrivateKnowledgeSource] = []
+        chunk_id = 0
+        for (owner_id, document_id), chunks in self.document_chunks.items():
+            if owner_id != user.id or (allowed is not None and document_id not in allowed):
+                continue
+            document = self.documents[(owner_id, document_id)]
+            for chunk in chunks:
+                chunk_id += 1
+                if chunk.flagged_untrusted_instruction:
+                    continue
+                occurrences = chunk.content.casefold().count(normalized)
+                if occurrences == 0:
+                    continue
+                matches.append(
+                    PrivateKnowledgeSource(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        title=str(document["title"]),
+                        heading=chunk.heading,
+                        page_number=chunk.page_number,
+                        locator=chunk.locator,
+                        content=chunk.content,
+                        score=float(1 + occurrences),
+                    )
+                )
+        matches.sort(key=lambda item: item.score, reverse=True)
+        return matches[:limit]
+
 
 class SupabaseRepository:
     """PostgREST repository that executes queries with the user's JWT so RLS applies."""
@@ -231,6 +344,7 @@ class SupabaseRepository:
         if not settings.supabase_url or not settings.supabase_anon_key:
             raise RuntimeError("SUPABASE_URL and SUPABASE_ANON_KEY are required")
         self.rest_url = f"{settings.supabase_url.rstrip('/')}/rest/v1"
+        self.storage_url = f"{settings.supabase_url.rstrip('/')}/storage/v1"
         self.anon_key = settings.supabase_anon_key
         self.transport = transport
 
@@ -278,6 +392,38 @@ class SupabaseRepository:
         if response.status_code == 204 or not response.content:
             return None
         return response.json()
+
+    async def _storage_request(
+        self,
+        user: AuthUser,
+        method: str,
+        path: str,
+        *,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        headers = {
+            "apikey": self.anon_key,
+            "Authorization": f"Bearer {user.access_token}",
+            "Content-Type": content_type,
+            "x-upsert": "false",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
+                response = await client.request(
+                    method,
+                    f"{self.storage_url}/{path}",
+                    content=content,
+                    headers=headers,
+                )
+        except httpx.HTTPError as error:
+            raise RepositoryError("Supabase Storage is unavailable") from error
+        if response.status_code >= 400:
+            try:
+                message = response.json().get("message")
+            except ValueError:
+                message = response.text
+            raise RepositoryError(str(message or "Supabase Storage request failed"))
 
     @staticmethod
     def _task(row: Mapping[str, Any]) -> dict:
@@ -698,6 +844,161 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return bool(rows)
+
+    async def persist_document(
+        self,
+        user: AuthUser,
+        *,
+        document_id: UUID,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        digest: str,
+        ingestion_status: str,
+        chunks: list[TextChunk],
+    ) -> tuple[dict, bool]:
+        existing = await self._request(
+            user,
+            "GET",
+            "documents",
+            params={
+                "select": (
+                    "id,title,original_filename,content_type,byte_size,sha256,storage_path,"
+                    "ingestion_status"
+                ),
+                "user_id": f"eq.{user.id}",
+                "sha256": f"eq.{digest}",
+                "limit": "1",
+            },
+        )
+        if existing:
+            existing_chunks = await self._request(
+                user,
+                "GET",
+                "document_chunks",
+                params={
+                    "select": "id,flagged_untrusted_instruction",
+                    "document_id": f"eq.{existing[0]['id']}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            return {
+                **existing[0],
+                "chunk_count": len(existing_chunks),
+                "flagged_chunk_count": sum(
+                    bool(chunk.get("flagged_untrusted_instruction"))
+                    for chunk in existing_chunks
+                ),
+            }, True
+
+        storage_path = f"{user.id}/{document_id}/{filename}"
+        encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
+        await self._storage_request(
+            user,
+            "POST",
+            f"object/study-materials/{encoded_path}",
+            content=content,
+            content_type=content_type,
+        )
+        document_rows = await self._request(
+            user,
+            "POST",
+            "documents",
+            json={
+                "id": str(document_id),
+                "user_id": str(user.id),
+                "source_type": "upload",
+                "title": filename.rsplit(".", 1)[0],
+                "original_filename": filename,
+                "storage_path": storage_path,
+                "content_type": content_type,
+                "byte_size": len(content),
+                "sha256": digest,
+                "ingestion_status": ingestion_status,
+            },
+            prefer="return=representation",
+        )
+        if chunks:
+            await self._request(
+                user,
+                "POST",
+                "document_chunks",
+                json=[
+                    {
+                        "document_id": str(document_id),
+                        "user_id": str(user.id),
+                        "chunk_index": chunk.index,
+                        "heading": chunk.heading,
+                        "page_number": chunk.page_number,
+                        "locator": chunk.locator,
+                        "content": chunk.content,
+                        "flagged_untrusted_instruction": chunk.flagged_untrusted_instruction,
+                    }
+                    for chunk in chunks
+                ],
+                prefer="return=minimal",
+            )
+        return {
+            **document_rows[0],
+            "chunk_count": len(chunks),
+            "flagged_chunk_count": sum(
+                chunk.flagged_untrusted_instruction for chunk in chunks
+            ),
+        }, False
+
+    async def list_documents(self, user: AuthUser) -> list[dict]:
+        return await self._request(
+            user,
+            "GET",
+            "documents",
+            params={
+                "select": (
+                    "id,title,original_filename,source_type,source_url,content_type,byte_size,"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "order": "created_at.desc",
+            },
+        )
+
+    async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
+        rows = await self._request(
+            user,
+            "GET",
+            "documents",
+            params={
+                "select": (
+                    "id,title,original_filename,source_type,source_url,content_type,byte_size,"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                ),
+                "id": f"eq.{document_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        return rows[0] if rows else None
+
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/search_private_document_chunks",
+            json={
+                "query_text": query,
+                "match_count": limit,
+                "filter_document_ids": (
+                    [str(document_id) for document_id in document_ids]
+                    if document_ids
+                    else None
+                ),
+            },
+        )
+        return [PrivateKnowledgeSource.model_validate(row) for row in rows]
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
