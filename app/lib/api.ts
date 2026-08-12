@@ -8,6 +8,7 @@ export type SchoolTier = "stretch" | "match" | "safety";
 export type DegreeType = "academic" | "professional";
 export type CareerItemType = "milestone" | "resume" | "application" | "interview";
 export type CareerStatus = "planned" | "in_progress" | "submitted" | "interviewing" | "offer" | "rejected" | "completed" | "archived";
+export type ExportFormat = "json" | "csv" | "markdown";
 
 export type ApiTask = {
   id: string;
@@ -150,6 +151,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function download(path: string): Promise<{ blob: Blob; filename: string }> {
+  const headers = new Headers();
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${API_URL}${path}`, { headers });
+  if (!response.ok) {
+    const detail = await responseErrorMessage(response);
+    if (response.status === 401) {
+      accessToken = null;
+      authFailureHandler?.();
+    }
+    throw new ApiError(response.status, detail);
+  }
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "yantu-export.json";
+  return { blob: await response.blob(), filename };
+}
+
 export const api = {
   health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
@@ -247,6 +265,7 @@ export const api = {
     notes: string;
   }>) => request<ApiCareerItem>(`/api/v1/career-items/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCareerItem: (id: string) => request<void>(`/api/v1/career-items/${id}`, { method: "DELETE" }),
+  exportData: (format: ExportFormat) => download(`/api/v1/export?format=${format}`),
   createSession: (payload: {
     subject: Subject;
     started_at: string;

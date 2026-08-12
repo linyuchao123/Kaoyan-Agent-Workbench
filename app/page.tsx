@@ -2,12 +2,12 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiMistakeCard, type ApiPlan, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
 type Scope = ContributionScope;
-type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "agents";
+type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "backup" | "agents";
 
 type StudyDay = {
   date: string;
@@ -49,6 +49,7 @@ const navItems: { key: View; label: string; icon: string }[] = [
   { key: "schools", label: "院校情报", icon: "◎" },
   { key: "career", label: "求职副线", icon: "◫" },
   { key: "materials", label: "资料库", icon: "▱" },
+  { key: "backup", label: "数据备份", icon: "⇩" },
   { key: "agents", label: "双 Agent", icon: "✦" },
 ];
 
@@ -1410,6 +1411,50 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
+const exportFormatMeta: Record<ExportFormat, { label: string; extension: string; detail: string }> = {
+  json: { label: "完整 JSON", extension: ".json", detail: "适合完整备份、恢复准备和后续程序处理" },
+  csv: { label: "通用 CSV", extension: ".csv", detail: "适合用 Excel、Numbers 或数据分析工具查看" },
+  markdown: { label: "复盘 Markdown", extension: ".md", detail: "适合保存到 Obsidian、笔记库或长期归档" },
+};
+
+function BackupView({ isDemo }: { isDemo: boolean }) {
+  const [format, setFormat] = useState<ExportFormat>("json");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState(isDemo ? "离线演示模式不会生成真实账户备份" : "选择格式后即可下载当前账户数据");
+
+  async function exportData() {
+    if (isDemo) {
+      setStatus("请登录 Supabase 账户后导出你的真实数据");
+      return;
+    }
+    setBusy(true);
+    setStatus(`正在生成${exportFormatMeta[format].label}备份…`);
+    try {
+      const result = await api.exportData(format);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = result.filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`下载完成：${result.filename}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? `导出失败：${error.message}` : "导出失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">数据可携带与长期归档</div><h1>数据备份</h1><p>随时导出自己的核心记录，服务器仍是在线使用时的最终事实来源。</p></div></div>
+    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
+    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <article className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></article>)}</div>
+    <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>资料库原始文件和向量索引将在 v0.6 Storage 阶段加入完整备份；当前导出只包含已经云端结构化的核心数据。</p></section>
+  </section>;
+}
+
 function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState([
@@ -1583,7 +1628,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
