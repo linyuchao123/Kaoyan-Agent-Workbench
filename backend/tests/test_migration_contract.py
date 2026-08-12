@@ -48,3 +48,14 @@ class MigrationContractTests(TestCase):
         self.assertIn("to authenticated", school_sql)
         self.assertIn("on public.career_items", career_sql)
         self.assertIn("to authenticated", career_sql)
+
+    def test_private_material_storage_is_user_scoped(self):
+        sql = Path(
+            "supabase/migrations/202608120003_private_material_storage.sql"
+        ).read_text()
+        self.assertIn("'study-materials'", sql)
+        self.assertIn("public = excluded.public", sql)
+        self.assertIn("storage.foldername(name))[1] = auth.uid()::text", sql)
+        self.assertIn("flagged_untrusted_instruction boolean", sql)
+        self.assertIn("on public.documents to authenticated", sql)
+        self.assertIn("on public.document_chunks to authenticated", sql)

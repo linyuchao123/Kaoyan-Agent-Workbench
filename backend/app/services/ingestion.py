@@ -11,6 +11,7 @@ class TextChunk:
     heading: str
     locator: str
     content: str
+    page_number: int | None
     flagged_untrusted_instruction: bool
 
 
@@ -54,6 +55,7 @@ def chunk_markdown(
                         heading=current_heading,
                         locator=f"{current_heading} · 片段 {len(chunks) + 1}",
                         content=part,
+                        page_number=None,
                         flagged_untrusted_instruction=contains_prompt_injection(part),
                     )
                 )
@@ -83,6 +85,7 @@ def chunk_pages(
                         heading=f"第 {page_number} 页",
                         locator=f"第 {page_number} 页 · 片段 {len(chunks) + 1}",
                         content=part,
+                        page_number=page_number,
                         flagged_untrusted_instruction=contains_prompt_injection(part),
                     )
                 )

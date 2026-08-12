@@ -27,8 +27,6 @@ class ApiFlowTests(TestCase):
         main.import_proposals.clear()
         main.action_proposals.clear()
         main.applied_proposals.clear()
-        main.demo_documents.clear()
-        main.document_ids_by_hash.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self):
@@ -715,6 +713,14 @@ class ApiFlowTests(TestCase):
         self.assertEqual(first.status_code, 201)
         self.assertFalse(first.json()["duplicate"])
         self.assertTrue(second.json()["duplicate"])
+        documents = self.client.get("/api/v1/documents")
+        self.assertEqual(documents.status_code, 200)
+        self.assertEqual(len(documents.json()), 1)
+        status = self.client.get(
+            f"/api/v1/documents/{first.json()['id']}/ingestion-status"
+        )
+        self.assertEqual(status.status_code, 200)
+        self.assertEqual(status.json()["status"], "ready")
 
         blocked = self.client.post(
             "/api/v1/documents/import-preview",
