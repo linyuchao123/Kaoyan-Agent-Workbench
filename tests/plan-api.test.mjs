@@ -122,3 +122,70 @@ test("日计划写入时归属于周计划且起止日期一致", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("计划支持修改与删除并正确处理无内容响应", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    if (init?.method === "DELETE") return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      parent_id: null,
+      level: "stage",
+      title: "基础阶段（已调整）",
+      description: "完成第一轮基础",
+      starts_on: "2026-09-01",
+      ends_on: "2027-02-28",
+      status: "active",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const updated = await api.updatePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", {
+      title: "基础阶段（已调整）",
+      status: "completed",
+    });
+    await api.deletePlan("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    assert.equal(updated.title, "基础阶段（已调整）");
+    assert.equal(JSON.parse(requests[0].init.body).status, "completed");
+    assert.equal(requests[0].init.method, "PATCH");
+    assert.equal(requests[1].init.method, "DELETE");
+    assert.match(requests[1].input, /\/api\/v1\/plans\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa$/);
+    for (const request of requests) {
+      assert.equal(
+        new Headers(request.init.headers).get("Authorization"),
+        "Bearer current-user-token",
+      );
+    }
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("按需读取单条计划的完成率与实际学习时长", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = "";
+  globalThis.fetch = async (input) => {
+    capturedUrl = String(input);
+    return new Response(JSON.stringify({
+      plan_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      task_count: 10,
+      completed_tasks: 6,
+      completion_rate: 60,
+      actual_minutes: 720,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  try {
+    const progress = await api.planProgress("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    assert.equal(progress.completion_rate, 60);
+    assert.equal(progress.actual_minutes, 720);
+    assert.match(capturedUrl, /\/api\/v1\/plans\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\/progress$/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

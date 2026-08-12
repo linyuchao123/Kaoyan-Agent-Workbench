@@ -2,9 +2,12 @@ export type Subject = "math" | "english" | "politics" | "cs408" | "career";
 export type ContributionScope = "all" | Subject;
 export type PlanLevel = "stage" | "week" | "day";
 export type PlanStatus = "draft" | "active" | "completed" | "archived";
+export type MistakeSubject = Exclude<Subject, "career">;
+export type MistakeReviewResult = "again" | "hard" | "good" | "easy";
 
 export type ApiTask = {
   id: string;
+  plan_id: string | null;
   title: string;
   subject: Subject;
   planned_minutes: number;
@@ -22,6 +25,26 @@ export type ApiPlan = {
   starts_on: string;
   ends_on: string;
   status: PlanStatus;
+};
+
+export type PlanProgress = {
+  plan_id: string;
+  task_count: number;
+  completed_tasks: number;
+  completion_rate: number;
+  actual_minutes: number;
+};
+
+export type ApiMistakeCard = {
+  id: string;
+  subject: MistakeSubject;
+  title: string;
+  question: string;
+  answer: string;
+  error_reason: string;
+  mastery: number;
+  next_review_at: string;
+  review_count: number;
 };
 
 export type ContributionDay = {
@@ -91,6 +114,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(response.status, detail);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -107,12 +131,32 @@ export const api = {
     ends_on: string;
     status?: PlanStatus;
   }) => request<ApiPlan>("/api/v1/plans", { method: "POST", body: JSON.stringify(payload) }),
+  updatePlan: (id: string, payload: {
+    title?: string;
+    description?: string;
+    starts_on?: string;
+    ends_on?: string;
+    status?: PlanStatus;
+  }) => request<ApiPlan>(`/api/v1/plans/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  planProgress: (id: string) => request<PlanProgress>(`/api/v1/plans/${id}/progress`),
+  deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
-  createTask: (payload: { title: string; subject: Subject; planned_minutes: number }) =>
+  createTask: (payload: { title: string; subject: Subject; planned_minutes: number; plan_id?: string }) =>
     request<ApiTask>("/api/v1/tasks", { method: "POST", body: JSON.stringify(payload) }),
-  updateTask: (id: string, payload: { completed: boolean }) =>
+  updateTask: (id: string, payload: { completed?: boolean; plan_id?: string | null }) =>
     request<ApiTask>(`/api/v1/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  listMistakes: (dueOnly = false) =>
+    request<ApiMistakeCard[]>(`/api/v1/mistakes?due_only=${dueOnly}`),
+  createMistake: (payload: {
+    subject: MistakeSubject;
+    title: string;
+    question: string;
+    answer?: string;
+    error_reason?: string;
+  }) => request<ApiMistakeCard>("/api/v1/mistakes", { method: "POST", body: JSON.stringify(payload) }),
+  reviewMistake: (id: string, result: MistakeReviewResult) =>
+    request<ApiMistakeCard>(`/api/v1/mistakes/${id}/reviews`, { method: "POST", body: JSON.stringify({ result }) }),
   createSession: (payload: {
     subject: Subject;
     started_at: string;

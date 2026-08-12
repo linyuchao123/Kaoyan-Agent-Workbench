@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 Subject = Literal["math", "english", "politics", "cs408", "career"]
+AcademicSubject = Literal["math", "english", "politics", "cs408"]
 PlanLevel = Literal["stage", "week", "day"]
 PlanStatus = Literal["draft", "active", "completed", "archived"]
 
@@ -45,6 +46,7 @@ class TaskCreate(StrictRequestModel):
     subject: Subject
     planned_minutes: int = Field(default=30, ge=1, le=1440)
     due_at: datetime | None = None
+    plan_id: UUID | None = None
 
 
 class TaskUpdate(StrictRequestModel):
@@ -52,6 +54,7 @@ class TaskUpdate(StrictRequestModel):
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None
+    plan_id: UUID | None = None
 
 
 class PlanCreate(StrictRequestModel):
@@ -72,6 +75,40 @@ class PlanCreate(StrictRequestModel):
         if self.level != "stage" and self.parent_id is None:
             raise ValueError("week and day plans require a parent")
         return self
+
+
+class PlanUpdate(StrictRequestModel):
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    status: PlanStatus | None = None
+
+    @model_validator(mode="after")
+    def require_changes(self) -> "PlanUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one plan field must be provided")
+        return self
+
+
+class PlanProgress(BaseModel):
+    plan_id: UUID
+    task_count: int = 0
+    completed_tasks: int = 0
+    completion_rate: int = Field(default=0, ge=0, le=100)
+    actual_minutes: int = 0
+
+
+class MistakeCardCreate(StrictRequestModel):
+    subject: AcademicSubject
+    title: str = Field(min_length=1, max_length=160)
+    question: str = Field(min_length=1, max_length=10000)
+    answer: str = Field(default="", max_length=10000)
+    error_reason: str = Field(default="", max_length=10000)
+
+
+class MistakeReviewCreate(StrictRequestModel):
+    result: Literal["again", "hard", "good", "easy"]
 
 
 class WebSearchRequest(StrictRequestModel):

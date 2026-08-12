@@ -7,7 +7,7 @@ import httpx
 
 from app.auth import AuthUser
 from app.config import Settings
-from app.schemas import PlanCreate, StudySessionCreate, TaskCreate
+from app.schemas import PlanCreate, PlanUpdate, StudySessionCreate, TaskCreate
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -181,6 +181,67 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                     }
                 ],
             )
+
+    async def test_supabase_plan_update_and_delete_are_scoped_to_current_user(self):
+        requests: list[httpx.Request] = []
+        plan_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET" and request.url.params.get("id"):
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": str(plan_id),
+                            "parent_id": None,
+                            "level": "stage",
+                            "title": "基础阶段",
+                            "description": "",
+                            "starts_on": "2026-09-01",
+                            "ends_on": "2027-02-28",
+                            "status": "active",
+                        }
+                    ],
+                )
+            if request.method == "GET":
+                return httpx.Response(200, json=[])
+            if request.method == "PATCH":
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": str(plan_id),
+                            "parent_id": None,
+                            "level": "stage",
+                            "title": "基础阶段（已调整）",
+                            "description": "",
+                            "starts_on": "2026-09-01",
+                            "ends_on": "2027-02-28",
+                            "status": "completed",
+                        }
+                    ],
+                )
+            return httpx.Response(200, json=[{"id": str(plan_id)}])
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        updated = await repository.update_plan(
+            self.user,
+            plan_id,
+            PlanUpdate(title="基础阶段（已调整）", status="completed"),
+        )
+        deleted = await repository.delete_plan(self.user, plan_id)
+
+        self.assertEqual(updated["title"], "基础阶段（已调整）")
+        self.assertEqual(updated["status"], "completed")
+        self.assertTrue(deleted)
+        for request in requests:
+            self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")
 
         settings = Settings(
             supabase_url="https://project.supabase.co",

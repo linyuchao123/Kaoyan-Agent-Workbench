@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime, timedelta
 from unittest import TestCase
 
-from app.schemas import StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
 from app.services.store import DemoStore, SessionOverlapError
 
 
@@ -19,6 +19,42 @@ class DemoStoreTests(TestCase):
         self.assertIsNotNone(updated)
         contribution = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "all")[0]
         self.assertEqual(contribution.completed_tasks, 1)
+
+    def test_task_plan_must_be_a_day_plan(self):
+        stage = self.store.create_plan(
+            PlanCreate(
+                level="stage",
+                title="基础阶段",
+                starts_on=date(2026, 9, 1),
+                ends_on=date(2027, 2, 28),
+            )
+        )
+        week = self.store.create_plan(
+            PlanCreate(
+                parent_id=stage["id"],
+                level="week",
+                title="基础阶段第 1 周",
+                starts_on=date(2026, 9, 1),
+                ends_on=date(2026, 9, 7),
+            )
+        )
+        day = self.store.create_plan(
+            PlanCreate(
+                parent_id=week["id"],
+                level="day",
+                title="9 月 1 日计划",
+                starts_on=date(2026, 9, 1),
+                ends_on=date(2026, 9, 1),
+            )
+        )
+        task = self.store.create_task(
+            TaskCreate(title="极限基础题", subject="math", plan_id=day["id"])
+        )
+        self.assertEqual(task["plan_id"], day["id"])
+        with self.assertRaisesRegex(ValueError, "owned day plan"):
+            self.store.create_task(
+                TaskCreate(title="错误关联", subject="math", plan_id=stage["id"])
+            )
 
     def test_session_contributes_to_subject_and_total(self):
         self.store.create_session(

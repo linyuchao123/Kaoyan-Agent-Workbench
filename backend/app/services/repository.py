@@ -8,7 +8,17 @@ import httpx
 from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
-from app.schemas import ContributionDay, PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import (
+    ContributionDay,
+    MistakeCardCreate,
+    MistakeReviewCreate,
+    PlanCreate,
+    PlanProgress,
+    PlanUpdate,
+    StudySessionCreate,
+    TaskCreate,
+    TaskUpdate,
+)
 from app.services.store import DemoStore
 
 
@@ -31,6 +41,14 @@ class StudyRepository(Protocol):
 
     async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict: ...
 
+    async def update_plan(
+        self, user: AuthUser, plan_id: UUID, payload: PlanUpdate
+    ) -> dict | None: ...
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool: ...
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None: ...
+
     async def list_tasks(self, user: AuthUser) -> list[dict]: ...
 
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict: ...
@@ -46,6 +64,14 @@ class StudyRepository(Protocol):
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
     ) -> list[ContributionDay]: ...
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]: ...
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict: ...
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None: ...
 
 
 class DemoRepository:
@@ -77,14 +103,33 @@ class DemoRepository:
         except ValueError as error:
             raise RepositoryValidationError(str(error)) from error
 
+    async def update_plan(self, user: AuthUser, plan_id: UUID, payload: PlanUpdate) -> dict | None:
+        try:
+            return self._store(user).update_plan(plan_id, payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool:
+        return self._store(user).delete_plan(plan_id)
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None:
+        progress = self._store(user).plan_progress(plan_id)
+        return PlanProgress.model_validate(progress) if progress else None
+
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_tasks()
 
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict:
-        return self._store(user).create_task(payload)
+        try:
+            return self._store(user).create_task(payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
 
     async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
-        return self._store(user).update_task(task_id, payload)
+        try:
+            return self._store(user).update_task(task_id, payload)
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
 
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_sessions()
@@ -96,6 +141,17 @@ class DemoRepository:
         self, user: AuthUser, from_date: date, to_date: date, scope: str
     ) -> list[ContributionDay]:
         return self._store(user).contributions(from_date, to_date, scope)
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
+        return self._store(user).list_mistakes(due_only)
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
+        return self._store(user).create_mistake(payload)
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None:
+        return self._store(user).review_mistake(card_id, payload)
 
 
 class SupabaseRepository:
@@ -148,6 +204,8 @@ class SupabaseRepository:
             if error_payload.get("code") == "23P01":
                 raise RepositoryConflictError("study session overlaps an existing session")
             message = error_payload.get("message") or "Supabase database request failed"
+            if error_payload.get("code") == "23514":
+                raise RepositoryValidationError(str(message))
             raise RepositoryError(str(message))
         if response.status_code == 204 or not response.content:
             return None
@@ -167,31 +225,65 @@ class SupabaseRepository:
             params["level"] = f"eq.{level}"
         return await self._request(user, "GET", "plans", params=params)
 
-    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
-        if payload.parent_id:
+    async def _validate_plan_dates(
+        self,
+        user: AuthUser,
+        *,
+        plan_id: UUID | None,
+        level: str,
+        parent_id: UUID | str | None,
+        starts_on: date,
+        ends_on: date,
+    ) -> None:
+        if parent_id:
             parents = await self._request(
                 user,
                 "GET",
                 "plans",
                 params={
                     "select": "id,level,starts_on,ends_on",
-                    "id": f"eq.{payload.parent_id}",
+                    "id": f"eq.{parent_id}",
                     "user_id": f"eq.{user.id}",
                 },
             )
-            expected_level = "stage" if payload.level == "week" else "week"
+            expected_level = "stage" if level == "week" else "week"
             if not parents:
                 raise RepositoryValidationError("parent plan not found")
             if parents[0]["level"] != expected_level:
-                raise RepositoryValidationError(
-                    f"{payload.level} plan requires a {expected_level} parent"
-                )
+                raise RepositoryValidationError(f"{level} plan requires a {expected_level} parent")
             parent_starts_on = date.fromisoformat(parents[0]["starts_on"])
             parent_ends_on = date.fromisoformat(parents[0]["ends_on"])
-            if payload.starts_on < parent_starts_on or payload.ends_on > parent_ends_on:
+            if starts_on < parent_starts_on or ends_on > parent_ends_on:
                 raise RepositoryValidationError(
                     "child plan dates must stay within parent plan dates"
                 )
+        if plan_id:
+            children = await self._request(
+                user,
+                "GET",
+                "plans",
+                params={
+                    "select": "id,starts_on,ends_on",
+                    "parent_id": f"eq.{plan_id}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            if any(
+                date.fromisoformat(child["starts_on"]) < starts_on
+                or date.fromisoformat(child["ends_on"]) > ends_on
+                for child in children
+            ):
+                raise RepositoryValidationError("parent plan dates must include all child plans")
+
+    async def create_plan(self, user: AuthUser, payload: PlanCreate) -> dict:
+        await self._validate_plan_dates(
+            user,
+            plan_id=None,
+            level=payload.level,
+            parent_id=payload.parent_id,
+            starts_on=payload.starts_on,
+            ends_on=payload.ends_on,
+        )
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)
         rows = await self._request(
@@ -203,20 +295,128 @@ class SupabaseRepository:
         )
         return rows[0]
 
+    async def update_plan(self, user: AuthUser, plan_id: UUID, payload: PlanUpdate) -> dict | None:
+        current = await self._request(
+            user,
+            "GET",
+            "plans",
+            params={
+                "select": "id,parent_id,level,title,description,starts_on,ends_on,status",
+                "id": f"eq.{plan_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        if not current:
+            return None
+        changes = payload.model_dump(mode="json", exclude_unset=True)
+        starts_on = date.fromisoformat(changes.get("starts_on", current[0]["starts_on"]))
+        ends_on = date.fromisoformat(changes.get("ends_on", current[0]["ends_on"]))
+        if ends_on < starts_on:
+            raise RepositoryValidationError("ends_on must not be earlier than starts_on")
+        await self._validate_plan_dates(
+            user,
+            plan_id=plan_id,
+            level=current[0]["level"],
+            parent_id=current[0]["parent_id"],
+            starts_on=starts_on,
+            ends_on=ends_on,
+        )
+        rows = await self._request(
+            user,
+            "PATCH",
+            "plans",
+            params={"id": f"eq.{plan_id}", "user_id": f"eq.{user.id}"},
+            json=changes,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_plan(self, user: AuthUser, plan_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "plans",
+            params={"id": f"eq.{plan_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
+    async def plan_progress(self, user: AuthUser, plan_id: UUID) -> PlanProgress | None:
+        plans = await self.list_plans(user)
+        root = next((plan for plan in plans if plan["id"] == str(plan_id)), None)
+        if not root:
+            return None
+        plan_ids = {str(plan_id)}
+        previous_size = 0
+        while previous_size != len(plan_ids):
+            previous_size = len(plan_ids)
+            plan_ids.update(
+                str(plan["id"])
+                for plan in plans
+                if plan.get("parent_id") in plan_ids
+            )
+        task_rows = await self._request(
+            user,
+            "GET",
+            "tasks",
+            params={
+                "select": "id,completed_at",
+                "user_id": f"eq.{user.id}",
+                "plan_id": f"in.({','.join(sorted(plan_ids))})",
+            },
+        )
+        contribution_rows = await self._request(
+            user,
+            "GET",
+            "daily_study_contributions",
+            params={
+                "select": "effective_minutes",
+                "user_id": f"eq.{user.id}",
+                "study_date": f"gte.{root['starts_on']}",
+                "and": f"(study_date.lte.{root['ends_on']})",
+            },
+        )
+        completed_tasks = sum(row.get("completed_at") is not None for row in task_rows)
+        return PlanProgress(
+            plan_id=plan_id,
+            task_count=len(task_rows),
+            completed_tasks=completed_tasks,
+            completion_rate=(round(completed_tasks / len(task_rows) * 100) if task_rows else 0),
+            actual_minutes=sum(int(row.get("effective_minutes", 0)) for row in contribution_rows),
+        )
+
     async def list_tasks(self, user: AuthUser) -> list[dict]:
         rows = await self._request(
             user,
             "GET",
             "tasks",
             params={
-                "select": "id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
+                "select": "id,plan_id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.asc",
             },
         )
         return [self._task(row) for row in rows]
 
+    async def _validate_task_plan(self, user: AuthUser, plan_id: UUID | None) -> None:
+        if plan_id is None:
+            return
+        plans = await self._request(
+            user,
+            "GET",
+            "plans",
+            params={
+                "select": "id",
+                "id": f"eq.{plan_id}",
+                "user_id": f"eq.{user.id}",
+                "level": "eq.day",
+            },
+        )
+        if not plans:
+            raise RepositoryValidationError("task plan must be an owned day plan")
+
     async def create_task(self, user: AuthUser, payload: TaskCreate) -> dict:
+        await self._validate_task_plan(user, payload.plan_id)
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)
         rows = await self._request(
@@ -230,6 +430,8 @@ class SupabaseRepository:
 
     async def update_task(self, user: AuthUser, task_id: UUID, payload: TaskUpdate) -> dict | None:
         changes = payload.model_dump(mode="json", exclude_unset=True)
+        if "plan_id" in changes:
+            await self._validate_task_plan(user, payload.plan_id)
         completed = changes.pop("completed", None)
         if completed is not None:
             changes["completed_at"] = datetime.now(UTC).isoformat() if completed else None
@@ -239,7 +441,7 @@ class SupabaseRepository:
                 "GET",
                 "tasks",
                 params={
-                    "select": "id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
+                    "select": "id,plan_id,title,subject,planned_minutes,due_at,completed_at,created_at,updated_at",
                     "id": f"eq.{task_id}",
                     "user_id": f"eq.{user.id}",
                 },
@@ -278,6 +480,51 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
+        params = {
+            "select": "id,subject,title,question,answer,error_reason,mastery,next_review_at,review_count,created_at,updated_at",
+            "user_id": f"eq.{user.id}",
+            "order": "next_review_at.asc,created_at.asc",
+        }
+        if due_only:
+            params["next_review_at"] = f"lte.{datetime.now(UTC).isoformat()}"
+        return await self._request(user, "GET", "mistake_cards", params=params)
+
+    async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
+        body = payload.model_dump(mode="json")
+        body.update(user_id=str(user.id), next_review_at=datetime.now(UTC).isoformat())
+        rows = await self._request(
+            user,
+            "POST",
+            "mistake_cards",
+            json=body,
+            prefer="return=representation",
+        )
+        return rows[0]
+
+    async def review_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
+    ) -> dict | None:
+        owned = await self._request(
+            user,
+            "GET",
+            "mistake_cards",
+            params={
+                "select": "id",
+                "id": f"eq.{card_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        if not owned:
+            return None
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/review_mistake_card",
+            json={"p_card_id": str(card_id), "p_result": payload.result},
+        )
+        return rows[0] if rows else None
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

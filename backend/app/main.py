@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
@@ -21,8 +21,12 @@ from app.schemas import (
     ContributionDay,
     ImportPreviewRequest,
     ImportProposal,
+    MistakeCardCreate,
+    MistakeReviewCreate,
     PlanCreate,
     PlanLevel,
+    PlanProgress,
+    PlanUpdate,
     SearchSource,
     StudySessionCreate,
     TaskCreate,
@@ -113,6 +117,39 @@ async def create_plan(
     return await repository.create_plan(user, payload)
 
 
+@app.patch("/api/v1/plans/{plan_id}")
+async def update_plan(
+    plan_id: UUID,
+    payload: PlanUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    plan = await repository.update_plan(user, plan_id, payload)
+    if not plan:
+        raise HTTPException(404, "plan not found")
+    return plan
+
+
+@app.delete("/api/v1/plans/{plan_id}", status_code=204)
+async def delete_plan(
+    plan_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_plan(user, plan_id):
+        raise HTTPException(404, "plan not found")
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/plans/{plan_id}/progress")
+async def get_plan_progress(
+    plan_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> PlanProgress:
+    progress = await repository.plan_progress(user, plan_id)
+    if not progress:
+        raise HTTPException(404, "plan not found")
+    return progress
+
+
 @app.post("/api/v1/tasks", status_code=201)
 async def create_task(
     payload: TaskCreate, user: Annotated[AuthUser, Depends(get_current_user)]
@@ -148,6 +185,34 @@ async def create_session(
         return await repository.create_session(user, payload)
     except SessionOverlapError as error:
         raise HTTPException(409, str(error)) from error
+
+
+@app.get("/api/v1/mistakes")
+async def list_mistakes(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    due_only: bool = False,
+) -> list[dict]:
+    return await repository.list_mistakes(user, due_only)
+
+
+@app.post("/api/v1/mistakes", status_code=201)
+async def create_mistake(
+    payload: MistakeCardCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    return await repository.create_mistake(user, payload)
+
+
+@app.post("/api/v1/mistakes/{card_id}/reviews")
+async def review_mistake(
+    card_id: UUID,
+    payload: MistakeReviewCreate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    card = await repository.review_mistake(user, card_id, payload)
+    if not card:
+        raise HTTPException(404, "mistake card not found")
+    return card
 
 
 @app.get("/api/v1/analytics/contributions", response_model=list[ContributionDay])

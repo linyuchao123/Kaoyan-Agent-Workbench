@@ -5,7 +5,16 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from app.domain.contributions import StudyInterval, aggregate_daily_minutes, intensity_level
-from app.schemas import ContributionDay, PlanCreate, StudySessionCreate, TaskCreate, TaskUpdate
+from app.schemas import (
+    ContributionDay,
+    MistakeCardCreate,
+    MistakeReviewCreate,
+    PlanCreate,
+    PlanUpdate,
+    StudySessionCreate,
+    TaskCreate,
+    TaskUpdate,
+)
 
 
 class SessionOverlapError(ValueError):
@@ -25,6 +34,8 @@ class DemoStore:
         self.tasks: dict[UUID, dict] = {}
         self.sessions: dict[UUID, dict] = {}
         self.plans: dict[UUID, dict] = {}
+        self.mistake_cards: dict[UUID, dict] = {}
+        self.review_events: dict[UUID, dict] = {}
 
     def list_plans(self, level: str | None = None) -> list[dict]:
         plans = [item for item in self.plans.values() if level is None or item["level"] == level]
@@ -50,10 +61,68 @@ class DemoStore:
         self.plans[item["id"]] = item
         return item
 
+    def update_plan(self, plan_id: UUID, payload: PlanUpdate) -> dict | None:
+        item = self.plans.get(plan_id)
+        if not item:
+            return None
+        changes = payload.model_dump(exclude_unset=True)
+        starts_on = changes.get("starts_on", item["starts_on"])
+        ends_on = changes.get("ends_on", item["ends_on"])
+        if ends_on < starts_on:
+            raise ValueError("ends_on must not be earlier than starts_on")
+        if item["parent_id"]:
+            parent = self.plans[item["parent_id"]]
+            if starts_on < parent["starts_on"] or ends_on > parent["ends_on"]:
+                raise ValueError("child plan dates must stay within parent plan dates")
+        children = [plan for plan in self.plans.values() if plan["parent_id"] == plan_id]
+        if any(child["starts_on"] < starts_on or child["ends_on"] > ends_on for child in children):
+            raise ValueError("parent plan dates must include all child plans")
+        item.update(changes)
+        item["updated_at"] = self.now()
+        return item
+
+    def delete_plan(self, plan_id: UUID) -> bool:
+        if plan_id not in self.plans:
+            return False
+        pending = [plan_id]
+        while pending:
+            current = pending.pop()
+            pending.extend(
+                plan["id"] for plan in self.plans.values() if plan["parent_id"] == current
+            )
+            self.plans.pop(current, None)
+        return True
+
+    def plan_progress(self, plan_id: UUID) -> dict | None:
+        plan = self.plans.get(plan_id)
+        if not plan:
+            return None
+        plan_ids = {plan_id}
+        previous_size = 0
+        while previous_size != len(plan_ids):
+            previous_size = len(plan_ids)
+            plan_ids.update(
+                item["id"] for item in self.plans.values() if item["parent_id"] in plan_ids
+            )
+        tasks = [item for item in self.tasks.values() if item.get("plan_id") in plan_ids]
+        completed_tasks = sum(item["completed_at"] is not None for item in tasks)
+        actual_minutes = sum(
+            day.effective_minutes
+            for day in self.contributions(plan["starts_on"], plan["ends_on"], "all")
+        )
+        return {
+            "plan_id": plan_id,
+            "task_count": len(tasks),
+            "completed_tasks": completed_tasks,
+            "completion_rate": round(completed_tasks / len(tasks) * 100) if tasks else 0,
+            "actual_minutes": actual_minutes,
+        }
+
     def list_tasks(self) -> list[dict]:
         return sorted(self.tasks.values(), key=lambda item: item["created_at"])
 
     def create_task(self, payload: TaskCreate) -> dict:
+        self._validate_task_plan(payload.plan_id)
         now = self.now()
         item = {
             "id": uuid4(),
@@ -71,11 +140,20 @@ class DemoStore:
         if not item:
             return None
         changes = payload.model_dump(exclude_unset=True)
+        if "plan_id" in changes:
+            self._validate_task_plan(changes["plan_id"])
         if "completed" in changes:
             changes["completed_at"] = self.now() if changes["completed"] else None
         item.update(changes)
         item["updated_at"] = self.now()
         return item
+
+    def _validate_task_plan(self, plan_id: UUID | None) -> None:
+        if plan_id is None:
+            return
+        plan = self.plans.get(plan_id)
+        if not plan or plan["level"] != "day":
+            raise ValueError("task plan must be an owned day plan")
 
     def list_sessions(self) -> list[dict]:
         return sorted(self.sessions.values(), key=lambda item: item["started_at"])
@@ -91,6 +169,59 @@ class DemoStore:
         item = {"id": uuid4(), **payload.model_dump(), "created_at": now, "updated_at": now}
         self.sessions[item["id"]] = item
         return item
+
+    def list_mistakes(self, due_only: bool = False) -> list[dict]:
+        now = self.now()
+        cards = list(self.mistake_cards.values())
+        if due_only:
+            cards = [card for card in cards if card["next_review_at"] <= now]
+        return sorted(cards, key=lambda card: (card["next_review_at"], card["created_at"]))
+
+    def create_mistake(self, payload: MistakeCardCreate) -> dict:
+        now = self.now()
+        card = {
+            "id": uuid4(),
+            **payload.model_dump(),
+            "mastery": 1,
+            "next_review_at": now,
+            "review_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.mistake_cards[card["id"]] = card
+        return card
+
+    def review_mistake(self, card_id: UUID, payload: MistakeReviewCreate) -> dict | None:
+        card = self.mistake_cards.get(card_id)
+        if not card:
+            return None
+        result_settings = {
+            "again": (-1, 1),
+            "hard": (0, 3),
+            "good": (1, 7),
+            "easy": (2, 14),
+        }
+        mastery_delta, interval_days = result_settings[payload.result]
+        mastery_before = card["mastery"]
+        mastery_after = max(1, min(5, mastery_before + mastery_delta))
+        now = self.now()
+        event = {
+            "id": uuid4(),
+            "mistake_card_id": card_id,
+            "result": payload.result,
+            "mastery_before": mastery_before,
+            "mastery_after": mastery_after,
+            "reviewed_at": now,
+            "created_at": now,
+        }
+        self.review_events[event["id"]] = event
+        card.update(
+            mastery=mastery_after,
+            review_count=card["review_count"] + 1,
+            next_review_at=now + timedelta(days=interval_days),
+            updated_at=now,
+        )
+        return card
 
     def contributions(self, from_date: date, to_date: date, scope: str) -> list[ContributionDay]:
         sessions = self.list_sessions()
@@ -124,6 +255,10 @@ class DemoStore:
             if item.get("completed_at"):
                 completed_tasks[item["completed_at"].astimezone(self.timezone).date()] += 1
 
+        mistake_counts: dict[date, int] = defaultdict(int)
+        for item in self.mistake_cards.values():
+            mistake_counts[item["created_at"].astimezone(self.timezone).date()] += 1
+
         result: list[ContributionDay] = []
         cursor = from_date
         while cursor <= to_date:
@@ -143,7 +278,7 @@ class DemoStore:
                     ),
                     session_count=session_days[cursor],
                     completed_tasks=completed_tasks[cursor],
-                    mistake_count=0,
+                    mistake_count=mistake_counts[cursor],
                     subject_minutes=subject_minutes,
                 )
             )
