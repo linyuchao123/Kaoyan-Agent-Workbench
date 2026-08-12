@@ -77,3 +77,35 @@ test("资料上传使用 multipart 表单并携带当前登录身份", async () 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("私有资料检索编码查询参数并携带当前登录身份", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify([{
+      chunk_id: 9,
+      document_id: documentRecord.id,
+      title: "408 数据结构笔记",
+      heading: "线性表",
+      page_number: null,
+      locator: "线性表 · 片段 1",
+      content: "顺序表支持按下标随机访问。",
+      score: 1,
+    }]), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const sources = await api.searchPrivateKnowledge("顺序表 随机访问", documentRecord.id);
+    const url = new URL(request.input);
+    assert.equal(sources[0].locator, "线性表 · 片段 1");
+    assert.equal(url.pathname, "/api/v1/knowledge/private-search");
+    assert.equal(url.searchParams.get("query"), "顺序表 随机访问");
+    assert.equal(url.searchParams.get("document_id"), documentRecord.id);
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

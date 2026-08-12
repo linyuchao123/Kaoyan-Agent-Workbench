@@ -97,6 +97,17 @@ export type ApiDocument = {
   updated_at: string;
 };
 
+export type ApiPrivateKnowledgeSource = {
+  chunk_id: number;
+  document_id: string;
+  title: string;
+  heading: string | null;
+  page_number: number | null;
+  locator: string;
+  content: string;
+  score: number;
+};
+
 export type ContributionDay = {
   date: string;
   scope: string;
@@ -292,6 +303,13 @@ export const api = {
     note: string;
   }) => request("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
   listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
+  searchPrivateKnowledge: (query: string, documentId?: string) => {
+    const params = new URLSearchParams({ query, limit: "8" });
+    if (documentId) params.set("document_id", documentId);
+    return request<ApiPrivateKnowledgeSource[]>(
+      `/api/v1/knowledge/private-search?${params.toString()}`,
+    );
+  },
   uploadDocument: (file: File) => {
     const body = new FormData();
     body.append("file", file);
