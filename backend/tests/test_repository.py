@@ -518,6 +518,51 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertFalse(any("/storage/v1/" in str(request.url) for request in requests))
 
+    async def test_supabase_private_search_calls_user_scoped_rpc(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "chunk_id": 9,
+                        "document_id": str(document_id),
+                        "title": "数据结构笔记",
+                        "heading": "线性表",
+                        "page_number": None,
+                        "locator": "线性表 · 片段 1",
+                        "content": "顺序表支持按下标随机访问。",
+                        "score": 1.0,
+                    }
+                ],
+            )
+
+        settings = Settings(
+            supabase_url="https://project.supabase.co",
+            supabase_anon_key="public-anon-key",
+            demo_mode=False,
+        )
+        repository = SupabaseRepository(settings, httpx.MockTransport(handler))
+        sources = await repository.search_private_knowledge(
+            self.user,
+            "顺序表",
+            limit=5,
+            document_ids=[document_id],
+        )
+
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0].locator, "线性表 · 片段 1")
+        self.assertTrue(requests[0].url.path.endswith("/rpc/search_private_document_chunks"))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["query_text"], "顺序表")
+        self.assertEqual(payload["match_count"], 5)
+        self.assertEqual(payload["filter_document_ids"], [str(document_id)])
+        self.assertNotIn("user_id", payload)
+
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(

@@ -18,6 +18,7 @@ from app.schemas import (
     PlanCreate,
     PlanProgress,
     PlanUpdate,
+    PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
     StudySessionCreate,
@@ -120,6 +121,14 @@ class StudyRepository(Protocol):
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
 
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]: ...
+
 
 class DemoRepository:
     """User-isolated in-memory repository for tests and offline API development."""
@@ -136,11 +145,13 @@ class DemoRepository:
         self.stores: dict[UUID, DemoStore] = {}
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
+        self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
 
     def clear(self) -> None:
         self.stores.clear()
         self.documents.clear()
         self.document_ids_by_hash.clear()
+        self.document_chunks.clear()
 
     def _store(self, user: AuthUser) -> DemoStore:
         return self.stores.setdefault(user.id, DemoStore(self.timezone_name, self.now_factory))
@@ -271,6 +282,7 @@ class DemoRepository:
         }
         self.documents[(user.id, document_id)] = item
         self.document_ids_by_hash[(user.id, digest)] = document_id
+        self.document_chunks[(user.id, document_id)] = chunks
         return item, False
 
     async def list_documents(self, user: AuthUser) -> list[dict]:
@@ -282,6 +294,43 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]:
+        normalized = query.casefold().strip()
+        allowed = set(document_ids) if document_ids else None
+        matches: list[PrivateKnowledgeSource] = []
+        chunk_id = 0
+        for (owner_id, document_id), chunks in self.document_chunks.items():
+            if owner_id != user.id or (allowed is not None and document_id not in allowed):
+                continue
+            document = self.documents[(owner_id, document_id)]
+            for chunk in chunks:
+                chunk_id += 1
+                if chunk.flagged_untrusted_instruction:
+                    continue
+                occurrences = chunk.content.casefold().count(normalized)
+                if occurrences == 0:
+                    continue
+                matches.append(
+                    PrivateKnowledgeSource(
+                        chunk_id=chunk_id,
+                        document_id=document_id,
+                        title=str(document["title"]),
+                        heading=chunk.heading,
+                        page_number=chunk.page_number,
+                        locator=chunk.locator,
+                        content=chunk.content,
+                        score=float(1 + occurrences),
+                    )
+                )
+        matches.sort(key=lambda item: item.score, reverse=True)
+        return matches[:limit]
 
 
 class SupabaseRepository:
@@ -927,6 +976,29 @@ class SupabaseRepository:
             },
         )
         return rows[0] if rows else None
+
+    async def search_private_knowledge(
+        self,
+        user: AuthUser,
+        query: str,
+        limit: int = 8,
+        document_ids: list[UUID] | None = None,
+    ) -> list[PrivateKnowledgeSource]:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/search_private_document_chunks",
+            json={
+                "query_text": query,
+                "match_count": limit,
+                "filter_document_ids": (
+                    [str(document_id) for document_id in document_ids]
+                    if document_ids
+                    else None
+                ),
+            },
+        )
+        return [PrivateKnowledgeSource.model_validate(row) for row in rows]
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

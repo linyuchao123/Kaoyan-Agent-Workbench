@@ -214,6 +214,17 @@ class ImportProposal(BaseModel):
     status: Literal["pending", "approved", "rejected"] = "pending"
 
 
+class PrivateKnowledgeSource(BaseModel):
+    chunk_id: int
+    document_id: UUID
+    title: str
+    heading: str | None = None
+    page_number: int | None = None
+    locator: str
+    content: str
+    score: float = Field(ge=0)
+
+
 class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: str | None = None

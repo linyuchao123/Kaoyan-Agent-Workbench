@@ -31,6 +31,7 @@ from app.schemas import (
     PlanLevel,
     PlanProgress,
     PlanUpdate,
+    PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
     SearchSource,
@@ -441,6 +442,24 @@ async def upload_document(
 @app.get("/api/v1/documents")
 async def list_documents(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
     return await repository.list_documents(user)
+
+
+@app.get(
+    "/api/v1/knowledge/private-search",
+    response_model=list[PrivateKnowledgeSource],
+)
+async def search_private_knowledge(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    query: Annotated[str, Query(min_length=2, max_length=500)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 8,
+    document_id: UUID | None = None,
+) -> list[PrivateKnowledgeSource]:
+    return await repository.search_private_knowledge(
+        user,
+        query,
+        limit,
+        [document_id] if document_id else None,
+    )
 
 
 @app.post("/api/v1/documents/import-proposals/{proposal_id}/approve", response_model=ImportProposal)

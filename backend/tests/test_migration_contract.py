@@ -59,3 +59,13 @@ class MigrationContractTests(TestCase):
         self.assertIn("flagged_untrusted_instruction boolean", sql)
         self.assertIn("on public.documents to authenticated", sql)
         self.assertIn("on public.document_chunks to authenticated", sql)
+
+    def test_private_keyword_search_uses_auth_owner_and_excludes_flagged_chunks(self):
+        sql = Path(
+            "supabase/migrations/202608120004_private_keyword_search.sql"
+        ).read_text()
+        self.assertIn("search_private_document_chunks", sql)
+        self.assertIn("dc.user_id = auth.uid()", sql)
+        self.assertIn("not dc.flagged_untrusted_instruction", sql)
+        self.assertIn("filter_document_ids", sql)
+        self.assertIn("to authenticated", sql)
