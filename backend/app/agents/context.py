@@ -4,6 +4,7 @@ from typing import Any, Literal, TypedDict
 
 from app.auth import AuthUser
 from app.services.repository import StudyRepository
+from app.services.search import WebSearchProvider
 
 
 class AgentContext(TypedDict):
@@ -12,6 +13,8 @@ class AgentContext(TypedDict):
     recent_sessions: list[dict[str, Any]]
     due_mistakes: list[dict[str, Any]]
     private_sources: list[dict[str, Any]]
+    web_sources: list[dict[str, Any]]
+    web_search_status: Literal["not_requested", "unconfigured", "success", "failed"]
     recent_effective_minutes: int
 
 
@@ -36,6 +39,7 @@ async def build_agent_context(
     message: str,
     route: Literal["coach", "tutor", "combined"],
     retrieval_mode: Literal["private", "web", "hybrid"],
+    search_provider: WebSearchProvider | None = None,
 ) -> AgentContext:
     """Build a small, read-only and user-isolated context for one Agent run."""
 
@@ -44,6 +48,10 @@ async def build_agent_context(
     sessions_task = None
     mistakes_task = None
     sources_task = None
+    web_task = None
+    web_search_status: Literal["not_requested", "unconfigured", "success", "failed"] = (
+        "not_requested"
+    )
 
     if route in {"coach", "combined"}:
         plans_task = asyncio.create_task(repository.list_plans(user))
@@ -54,12 +62,24 @@ async def build_agent_context(
         sources_task = asyncio.create_task(
             repository.search_private_knowledge(user, message, limit=4)
         )
+    if route in {"tutor", "combined"} and retrieval_mode in {"web", "hybrid"}:
+        if search_provider and search_provider.configured:
+            web_task = asyncio.create_task(search_provider.search(message))
+        else:
+            web_search_status = "unconfigured"
 
     plans = await plans_task if plans_task else []
     tasks = await tasks_task if tasks_task else []
     sessions = await sessions_task if sessions_task else []
     mistakes = await mistakes_task if mistakes_task else []
     sources = await sources_task if sources_task else []
+    web_results = []
+    if web_task:
+        try:
+            web_results = await web_task
+            web_search_status = "success"
+        except (OSError, RuntimeError, TimeoutError):
+            web_search_status = "failed"
 
     active_plans = [plan for plan in plans if plan.get("status") == "active"][:6]
     pending_tasks = [
@@ -77,11 +97,22 @@ async def build_agent_context(
         }
         for source in sources[:4]
     ]
+    web_sources = [
+        {
+            "title": result.title,
+            "url": result.url,
+            "snippet": result.snippet[:600],
+            "accessed_at": result.accessed_at.isoformat(),
+        }
+        for result in web_results[:4]
+    ]
     return {
         "active_plans": active_plans,
         "pending_tasks": pending_tasks,
         "recent_sessions": recent_sessions,
         "due_mistakes": due_mistakes,
         "private_sources": private_sources,
+        "web_sources": web_sources,
+        "web_search_status": web_search_status,
         "recent_effective_minutes": sum(_effective_minutes(session) for session in recent_sessions),
     }

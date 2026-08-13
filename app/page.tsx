@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1592,7 +1592,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
 function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
+  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string; sources?: AgentSource[] }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -1613,7 +1613,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       setThreadId(result.thread_id);
       setProposal(result.proposal);
       const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
-      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}` }]);
+      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, sources: result.sources }]);
     } catch {
       const fallback = mode === "coach"
         ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"
@@ -1641,7 +1641,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
+  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><div className="message-body"><p>{message.text}</p>{message.sources && message.sources.length > 0 && <div className="agent-sources"><strong>本次回答来源</strong>{message.sources.map((source) => source.url ? <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer"><span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small></a> : <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>)}</div>}</div></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
 function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {

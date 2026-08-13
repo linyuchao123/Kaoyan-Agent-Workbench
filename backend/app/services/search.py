@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from langchain_tavily._utilities import TavilySearchAPIWrapper
+
 from app.config import Settings
 
 
@@ -14,6 +16,9 @@ class WebResult:
 
 
 class WebSearchProvider(Protocol):
+    @property
+    def configured(self) -> bool: ...
+
     async def search(
         self, query: str, include_domains: list[str] | None = None
     ) -> list[WebResult]: ...
@@ -25,12 +30,20 @@ class TavilySearchProvider:
     def __init__(self, settings: Settings):
         if not settings.tavily_api_key:
             raise RuntimeError("TAVILY_API_KEY is required for live web search")
-        self.api_key = settings.tavily_api_key
+        self.api_wrapper = TavilySearchAPIWrapper(tavily_api_key=settings.tavily_api_key)
+
+    @property
+    def configured(self) -> bool:
+        return True
 
     async def search(self, query: str, include_domains: list[str] | None = None) -> list[WebResult]:
         from langchain_tavily import TavilySearch
 
-        tool = TavilySearch(max_results=6, include_domains=include_domains or None)
+        tool = TavilySearch(
+            max_results=6,
+            include_domains=include_domains or None,
+            api_wrapper=self.api_wrapper,
+        )
         response = await tool.ainvoke({"query": query})
         raw_results = response.get("results", []) if isinstance(response, dict) else []
         now = datetime.now(UTC)
@@ -48,20 +61,17 @@ class TavilySearchProvider:
     async def extract(self, url: str) -> str:
         from langchain_tavily import TavilyExtract
 
-        response = await TavilyExtract().ainvoke({"urls": [url]})
+        response = await TavilyExtract(api_wrapper=self.api_wrapper).ainvoke({"urls": [url]})
         return str(response)
 
 
 class DemoSearchProvider:
+    @property
+    def configured(self) -> bool:
+        return False
+
     async def search(self, query: str, include_domains: list[str] | None = None) -> list[WebResult]:
-        return [
-            WebResult(
-                title="演示搜索结果：请配置 Tavily API Key",
-                url="https://docs.tavily.com/documentation/integrations/langchain",
-                snippet=f"当前为演示模式。查询“{query}”未发送到外部搜索服务。",
-                accessed_at=datetime.now(UTC),
-            )
-        ]
+        return []
 
     async def extract(self, url: str) -> str:
         return f"Demo extraction for {url}"

@@ -134,8 +134,11 @@ class ApiFlowTests(TestCase):
         )
 
         self.assertEqual(run.status_code, 200)
-        self.assertIn("数据结构笔记", run.json()["answer"])
-        self.assertIn("顺序表支持按下标随机访问", run.json()["answer"])
+        body = run.json()
+        self.assertIn("数据结构笔记", body["answer"])
+        self.assertIn("顺序表支持按下标随机访问", body["answer"])
+        self.assertEqual(body["sources"][0]["source_type"], "private")
+        self.assertEqual(body["sources"][0]["title"], "数据结构笔记")
 
     def test_agent_proposal_isolated_from_other_user(self):
         run = self.client.post(

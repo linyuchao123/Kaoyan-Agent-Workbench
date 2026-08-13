@@ -61,17 +61,29 @@ def coach_fallback(state: WorkbenchState) -> str:
 
 def tutor_fallback(state: WorkbenchState) -> str:
     mode = state.get("retrieval_mode", "private")
-    sources = state.get("context", {}).get("private_sources", [])
+    context = state.get("context", {})
+    sources = context.get("private_sources", [])
+    web_sources = context.get("web_sources", [])
+    sections = []
     if sources:
         citations = "\n".join(
             f"- 《{source['title']}》{source['locator']}：{source['content']}" for source in sources
         )
-        answer = f"资料导师在你的私有资料中找到 {len(sources)} 个相关片段：\n{citations}"
-    else:
-        answer = "资料导师未在你的私有资料中找到足够证据，因此不会自行补全答案。"
+        sections.append(f"个人资料来源（{len(sources)}）：\n{citations}")
+    if web_sources:
+        web_citations = "\n".join(
+            f"- {source['title']}（{source['url']}，访问时间 {source['accessed_at']}）："
+            f"{source['snippet']}"
+            for source in web_sources
+        )
+        sections.append(f"网络来源（{len(web_sources)}）：\n{web_citations}")
+    if sections:
+        return "资料导师找到以下可回溯证据：\n" + "\n".join(sections)
     if mode in {"web", "hybrid"}:
-        answer += "\n该问题还需要联网来源；当前结果仅包含已核验的个人资料证据。"
-    return answer
+        status = context.get("web_search_status", "unconfigured")
+        reason = "尚未配置 Tavily API Key" if status == "unconfigured" else "联网检索失败"
+        return f"资料导师没有取得可核验的网络来源（{reason}），因此不会自行补全答案。"
+    return "资料导师未在你的私有资料中找到足够证据，因此不会自行补全答案。"
 
 
 def choose_branch(state: WorkbenchState) -> str:
@@ -95,8 +107,8 @@ def build_graph(model: AgentModel):
 
     async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = tutor_fallback(state)
-        sources = state.get("context", {}).get("private_sources", [])
-        if not sources:
+        context = state.get("context", {})
+        if not context.get("private_sources") and not context.get("web_sources"):
             return {"answer": fallback, "model_status": "fallback"}
         question = str(state["messages"][-1].content)
         answer = await model.generate(

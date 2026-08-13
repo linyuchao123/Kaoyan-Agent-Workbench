@@ -70,6 +70,7 @@ repository = build_repository(settings)
 import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
 agent_model = OpenAICompatibleAgentModel(settings)
 agent_graph = build_graph(agent_model)
+search_provider = get_search_provider(settings)
 
 
 @app.exception_handler(RepositoryError)
@@ -368,8 +369,7 @@ async def contributions(
 async def web_search(
     payload: WebSearchRequest, _: Annotated[AuthUser, Depends(get_current_user)]
 ) -> list[SearchSource]:
-    provider = get_search_provider(settings)
-    results = await provider.search(payload.query, payload.include_domains)
+    results = await search_provider.search(payload.query, payload.include_domains)
     return [
         SearchSource(
             title=item.title, url=item.url, snippet=item.snippet, accessed_at=item.accessed_at
@@ -511,6 +511,7 @@ async def run_agent(
         message=payload.message,
         route=agent,
         retrieval_mode=retrieval_mode,
+        search_provider=search_provider,
     )
     result = await agent_graph.ainvoke(
         {
@@ -554,6 +555,26 @@ async def run_agent(
         "route": result.get("route", agent),
         "retrieval_mode": result.get("retrieval_mode", "private"),
         "model_status": result.get("model_status", "fallback"),
+        "sources": [
+            {
+                "source_type": "private",
+                "title": source["title"],
+                "locator": source["locator"],
+                "url": None,
+                "accessed_at": None,
+            }
+            for source in context["private_sources"]
+        ]
+        + [
+            {
+                "source_type": "web",
+                "title": source["title"],
+                "locator": source["url"],
+                "url": source["url"],
+                "accessed_at": source["accessed_at"],
+            }
+            for source in context["web_sources"]
+        ],
         "proposal": proposal,
         "created_at": datetime.now(UTC),
     }

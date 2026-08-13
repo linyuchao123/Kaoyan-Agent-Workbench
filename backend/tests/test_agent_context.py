@@ -6,6 +6,24 @@ from app.agents.context import build_agent_context
 from app.auth import AuthUser
 from app.schemas import MistakeCardCreate, PlanCreate, StudySessionCreate, TaskCreate
 from app.services.repository import DemoRepository
+from app.services.search import WebResult
+
+
+class FakeSearchProvider:
+    configured = True
+
+    async def search(self, query, include_domains=None):
+        return [
+            WebResult(
+                title="某大学 2028 招生简章",
+                url="https://example.edu/admission",
+                snippet=f"查询 {query} 的官方招生信息",
+                accessed_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+            )
+        ]
+
+    async def extract(self, url):
+        return url
 
 
 class AgentContextTests(IsolatedAsyncioTestCase):
@@ -83,3 +101,17 @@ class AgentContextTests(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(context["pending_tasks"], [])
+
+    async def test_web_context_keeps_traceable_sources(self):
+        context = await build_agent_context(
+            self.repository,
+            self.user,
+            message="最新招生简章",
+            route="tutor",
+            retrieval_mode="web",
+            search_provider=FakeSearchProvider(),
+        )
+
+        self.assertEqual(context["web_search_status"], "success")
+        self.assertEqual(context["web_sources"][0]["title"], "某大学 2028 招生简章")
+        self.assertEqual(context["web_sources"][0]["url"], "https://example.edu/admission")

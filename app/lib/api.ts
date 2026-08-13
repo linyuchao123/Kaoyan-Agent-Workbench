@@ -125,6 +125,14 @@ export type ActionProposal = {
   status: "pending" | "approved" | "edited" | "rejected" | "applied" | "failed";
 };
 
+export type AgentSource = {
+  source_type: "private" | "web";
+  title: string;
+  locator: string;
+  url: string | null;
+  accessed_at: string | null;
+};
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 let accessToken: string | null = null;
 let authFailureHandler: (() => void) | null = null;
@@ -330,6 +338,7 @@ export const api = {
       route: string;
       retrieval_mode: string;
       model_status: "generated" | "fallback";
+      sources: AgentSource[];
       proposal: ActionProposal;
     }>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",

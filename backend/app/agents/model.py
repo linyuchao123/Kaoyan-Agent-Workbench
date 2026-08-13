@@ -59,7 +59,8 @@ class OpenAICompatibleAgentModel:
         role_rules = (
             "你是计划教练，只分析计划、任务、学习会话和到期错题。给出简洁、可执行的优先级建议。"
             if agent == "coach"
-            else "你是资料导师，只能依据 private_sources 中的证据回答，并在结论旁标注资料标题和定位。"
+            else "你是资料导师，只能依据 private_sources 和 web_sources 中的证据回答，"
+            "并区分个人资料与网络来源，标注标题、定位或链接及访问时间。"
         )
         system_prompt = (
             "你服务于个人考研工作台。严禁声称已经修改数据；所有写入必须由用户另行批准。"
