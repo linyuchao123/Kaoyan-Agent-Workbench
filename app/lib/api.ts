@@ -133,6 +133,16 @@ export type AgentSource = {
   accessed_at: string | null;
 };
 
+export type ImportProposal = {
+  id: string;
+  url: string;
+  title: string;
+  summary: string;
+  content_type: string;
+  estimated_bytes: number | null;
+  status: "pending" | "approved" | "rejected";
+};
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 let accessToken: string | null = null;
 let authFailureHandler: (() => void) | null = null;
@@ -327,10 +337,15 @@ export const api = {
       duplicate: boolean;
     }>("/api/v1/documents/upload", { method: "POST", body });
   },
-  previewImport: (url: string) => request<{ id: string; title: string; summary: string; status: string }>(
+  previewImport: (url: string) => request<ImportProposal>(
     "/api/v1/documents/import-preview",
     { method: "POST", body: JSON.stringify({ url }) },
   ),
+  approveImport: (id: string) => request<{
+    proposal: ImportProposal;
+    document: ApiDocument;
+    duplicate: boolean;
+  }>(`/api/v1/documents/import-proposals/${id}/approve`, { method: "POST" }),
   runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string) =>
     request<{
       thread_id: string;

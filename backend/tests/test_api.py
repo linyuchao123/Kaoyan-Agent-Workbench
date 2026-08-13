@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from unittest import TestCase
+from unittest.mock import patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
 from app.services.repository import DemoRepository
+from app.services.web_import import DownloadedWebDocument
 
 
 class ApiFlowTests(TestCase):
@@ -24,7 +26,6 @@ class ApiFlowTests(TestCase):
             return self.current_user
 
         main.app.dependency_overrides[get_current_user] = authenticated_user
-        main.import_proposals.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self):
@@ -782,6 +783,45 @@ class ApiFlowTests(TestCase):
             json={"url": "http://127.0.0.1/private"},
         )
         self.assertEqual(blocked.status_code, 422)
+
+    def test_web_import_requires_approval_then_persists_searchable_document(self):
+        preview = self.client.post(
+            "/api/v1/documents/import-preview",
+            json={"url": "https://example.edu/guide"},
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/documents").json(), [])
+        downloaded = DownloadedWebDocument(
+            final_url="https://example.edu/guide",
+            title="2028 招生指南",
+            filename="2028 招生指南.md",
+            content_type="text/markdown",
+            content="# 2028 招生指南\n\n软件工程考试科目说明。".encode(),
+        )
+        with patch("app.main.download_public_document", return_value=downloaded):
+            approved = self.client.post(
+                f"/api/v1/documents/import-proposals/{preview.json()['id']}/approve"
+            )
+
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["proposal"]["status"], "approved")
+        self.assertEqual(approved.json()["document"]["source_type"], "web")
+        search = self.client.get("/api/v1/knowledge/private-search", params={"query": "考试科目"})
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.json()[0]["title"], "2028 招生指南")
+
+    def test_web_import_proposal_is_isolated_from_another_user(self):
+        preview = self.client.post(
+            "/api/v1/documents/import-preview",
+            json={"url": "https://example.edu/private-guide"},
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        response = self.client.post(f"/api/v1/documents/import-proposals/{preview['id']}/approve")
+        self.assertEqual(response.status_code, 404)
 
     def test_private_knowledge_search_returns_citations_and_isolates_users(self):
         uploaded = self.client.post(

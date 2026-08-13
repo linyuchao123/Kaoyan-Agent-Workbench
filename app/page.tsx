@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1494,6 +1494,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [importProposal, setImportProposal] = useState<ImportProposal | null>(null);
   const [importStatus, setImportStatus] = useState(isDemo ? "当前显示离线演示资料" : "正在加载云端资料库…");
   const [loading, setLoading] = useState(!isDemo);
   const [busy, setBusy] = useState(false);
@@ -1554,9 +1555,26 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     try {
       const preview = await api.previewImport(sourceUrl.trim());
       setImportStatus(`已生成待确认提案：${preview.summary}`);
-      setSourceUrl("");
+      setImportProposal(preview);
     } catch (error) {
       setImportStatus(error instanceof Error ? `链接预览失败：${error.message}` : "链接预览失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approveUrlImport() {
+    if (!importProposal || busy) return;
+    setBusy(true);
+    setImportStatus("正在安全下载、解析并写入个人资料库…");
+    try {
+      const result = await api.approveImport(importProposal.id);
+      setDocs((items) => [result.document, ...items.filter((item) => item.id !== result.document.id)]);
+      setImportProposal(null);
+      setSourceUrl("");
+      setImportStatus(result.duplicate ? "该内容已存在，已复用原资料" : "网页资料已确认并完成入库");
+    } catch (error) {
+      setImportStatus(error instanceof Error ? `网页入库失败：${error.message}` : "网页入库失败");
     } finally {
       setBusy(false);
     }
@@ -1586,7 +1604,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
 
   const ingestionLabels: Record<ApiDocument["ingestion_status"], string> = { queued: "等待处理", processing: "正在处理", ocr_required: "等待 OCR", ready: "索引就绪", failed: "处理失败" };
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>当前先使用关键词全文检索；Embedding 接入后会自动升级为混合检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：顺序表的随机访问" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><p>{source.content}</p><small>{source.locator}</small></article>)}</div>}</section></section>;
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setImportProposal(null); }} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small>{importProposal && <div className="import-confirm"><strong>待确认网络资料</strong><span>{importProposal.url}</span><p>{importProposal.summary}</p><button type="button" disabled={busy} onClick={() => void approveUrlImport()}>确认下载并入库</button></div>}</section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>当前先使用关键词全文检索；Embedding 接入后会自动升级为混合检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：顺序表的随机访问" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><p>{source.content}</p><small>{source.locator}</small></article>)}</div>}</section></section>;
 }
 
 function AgentsView({ isDemo }: { isDemo: boolean }) {

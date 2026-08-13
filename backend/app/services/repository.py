@@ -14,6 +14,7 @@ from app.schemas import (
     CareerItemCreate,
     CareerItemUpdate,
     ContributionDay,
+    ImportProposal,
     MistakeCardCreate,
     MistakeReviewCreate,
     PlanCreate,
@@ -116,11 +117,25 @@ class StudyRepository(Protocol):
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]: ...
 
     async def list_documents(self, user: AuthUser) -> list[dict]: ...
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal: ...
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None: ...
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None: ...
 
     async def search_private_knowledge(
         self,
@@ -164,6 +179,7 @@ class DemoRepository:
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
+        self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
         self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
         self.action_proposals: dict[tuple[UUID, UUID], ActionProposal] = {}
         self.proposal_ids_by_key: dict[tuple[UUID, str], UUID] = {}
@@ -174,6 +190,7 @@ class DemoRepository:
         self.documents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
+        self.import_proposals.clear()
         self.agent_threads.clear()
         self.action_proposals.clear()
         self.proposal_ids_by_key.clear()
@@ -290,13 +307,17 @@ class DemoRepository:
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]:
         existing_id = self.document_ids_by_hash.get((user.id, digest))
         if existing_id:
             return self.documents[(user.id, existing_id)], True
         item = {
             "id": document_id,
-            "title": filename.rsplit(".", 1)[0],
+            "source_type": "web" if source_url else "upload",
+            "source_url": source_url,
+            "title": title or filename.rsplit(".", 1)[0],
             "original_filename": filename,
             "content_type": content_type,
             "byte_size": len(content),
@@ -320,6 +341,27 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal:
+        self.import_proposals[(user.id, proposal.id)] = proposal
+        return proposal
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        return self.import_proposals.get((user.id, proposal_id))
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        proposal = self.import_proposals.get((user.id, proposal_id))
+        if not proposal:
+            return None
+        approved = proposal.model_copy(update={"status": "approved"})
+        self.import_proposals[(user.id, proposal_id)] = approved
+        return approved
 
     async def search_private_knowledge(
         self,
@@ -955,6 +997,8 @@ class SupabaseRepository:
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]:
         existing = await self._request(
             user,
@@ -990,6 +1034,24 @@ class SupabaseRepository:
                 ),
             }, True
 
+        if source_url:
+            same_url = await self._request(
+                user,
+                "GET",
+                "documents",
+                params={
+                    "select": (
+                        "id,title,original_filename,source_type,source_url,content_type,"
+                        "byte_size,sha256,storage_path,ingestion_status"
+                    ),
+                    "user_id": f"eq.{user.id}",
+                    "source_url": f"eq.{source_url}",
+                    "limit": "1",
+                },
+            )
+            if same_url:
+                return {**same_url[0], "chunk_count": 0, "flagged_chunk_count": 0}, True
+
         storage_path = f"{user.id}/{document_id}/{filename}"
         encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
         await self._storage_request(
@@ -1006,8 +1068,9 @@ class SupabaseRepository:
             json={
                 "id": str(document_id),
                 "user_id": str(user.id),
-                "source_type": "upload",
-                "title": filename.rsplit(".", 1)[0],
+                "source_type": "web" if source_url else "upload",
+                "source_url": source_url,
+                "title": title or filename.rsplit(".", 1)[0],
                 "original_filename": filename,
                 "storage_path": storage_path,
                 "content_type": content_type,
@@ -1075,6 +1138,67 @@ class SupabaseRepository:
             },
         )
         return rows[0] if rows else None
+
+    @staticmethod
+    def _import_proposal(row: Mapping[str, Any]) -> ImportProposal:
+        return ImportProposal(
+            id=row["id"],
+            url=row["source_url"],
+            title=row["title"],
+            summary=row["summary"],
+            content_type=row.get("content_type") or "text/html",
+            estimated_bytes=row.get("estimated_bytes"),
+            status=row["status"],
+        )
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal:
+        rows = await self._request(
+            user,
+            "POST",
+            "import_proposals",
+            json={
+                "id": str(proposal.id),
+                "user_id": str(user.id),
+                "source_url": str(proposal.url),
+                "title": proposal.title,
+                "summary": proposal.summary,
+                "content_type": proposal.content_type,
+                "estimated_bytes": proposal.estimated_bytes,
+                "status": proposal.status,
+            },
+            prefer="return=representation",
+        )
+        return self._import_proposal(rows[0])
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        rows = await self._request(
+            user,
+            "GET",
+            "import_proposals",
+            params={
+                "select": "*",
+                "id": f"eq.{proposal_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        return self._import_proposal(rows[0]) if rows else None
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        rows = await self._request(
+            user,
+            "PATCH",
+            "import_proposals",
+            params={"id": f"eq.{proposal_id}", "user_id": f"eq.{user.id}"},
+            json={"status": "approved", "decided_at": datetime.now(UTC).isoformat()},
+            prefer="return=representation",
+        )
+        return self._import_proposal(rows[0]) if rows else None
 
     async def search_private_knowledge(
         self,

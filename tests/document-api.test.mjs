@@ -109,3 +109,42 @@ test("私有资料检索编码查询参数并携带当前登录身份", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test("网页资料只有确认后才调用批准入库接口", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    if (String(input).endsWith("/api/v1/documents/import-preview")) {
+      return new Response(JSON.stringify({
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        url: "https://example.edu/guide",
+        title: "待导入网络资料",
+        summary: "确认后导入",
+        content_type: "text/html",
+        estimated_bytes: null,
+        status: "pending",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      proposal: { id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", status: "approved" },
+      document: { ...documentRecord, source_type: "web", source_url: "https://example.edu/guide" },
+      duplicate: false,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const preview = await api.previewImport("https://example.edu/guide");
+    assert.equal(requests.length, 1, "生成预览时不应自动批准下载");
+    await api.approveImport(preview.id);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1].input, /\/import-proposals\/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\/approve$/);
+    assert.equal(requests[1].init.method, "POST");
+    assert.equal(new Headers(requests[1].init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.doesNotMatch(String(requests[1].init.body), /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

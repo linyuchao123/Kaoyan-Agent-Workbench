@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -54,6 +55,7 @@ from app.services.repository import (
 from app.services.search import get_search_provider
 from app.services.security import UnsafeUrlError, validate_public_url
 from app.services.store import SessionOverlapError
+from app.services.web_import import download_public_document
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -67,7 +69,6 @@ app.add_middleware(
 )
 
 repository = build_repository(settings)
-import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
 agent_model = OpenAICompatibleAgentModel(settings)
 agent_graph = build_graph(agent_model)
 search_provider = get_search_provider(settings)
@@ -94,6 +95,23 @@ async def health() -> dict[str, str]:
         if settings.supabase_url and settings.supabase_anon_key
         else "unconfigured",
     }
+
+
+def prepare_document_chunks(content: bytes, content_type: str):
+    if content_type == "application/pdf":
+        try:
+            pages = [(page.extract_text() or "") for page in PdfReader(BytesIO(content)).pages]
+        except Exception as error:
+            raise HTTPException(422, "PDF could not be parsed") from error
+        chunks = chunk_pages(pages)
+        text_chars = sum(len(page.strip()) for page in pages)
+        status = "ocr_required" if text_chars < max(120, len(pages) * 40) else "ready"
+        return chunks, status
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise HTTPException(422, "text document must be UTF-8 encoded") from error
+    return chunk_markdown(text), "ready"
 
 
 @app.get("/api/v1/today")
@@ -394,8 +412,7 @@ async def preview_import(
         summary="系统将在批准后下载、去重、解析并建立混合检索索引。",
         content_type="text/html",
     )
-    import_proposals[proposal.id] = (user.id, proposal)
-    return proposal
+    return await repository.create_import_proposal(user, proposal)
 
 
 @app.post("/api/v1/documents/upload", status_code=201)
@@ -411,32 +428,15 @@ async def upload_document(
     if suffix not in {"pdf", "md", "markdown"}:
         raise HTTPException(415, "only PDF and Markdown files are supported")
 
-    digest = document_hash(content)
-    if suffix == "pdf":
-        try:
-            pages = [(page.extract_text() or "") for page in PdfReader(BytesIO(content)).pages]
-        except Exception as error:
-            raise HTTPException(422, "PDF could not be parsed") from error
-        chunks = chunk_pages(pages)
-        text_chars = sum(len(page.strip()) for page in pages)
-        status = "ocr_required" if text_chars < max(120, len(pages) * 40) else "ready"
-    else:
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise HTTPException(422, "Markdown must be UTF-8 encoded") from error
-        chunks = chunk_markdown(text)
-        status = "ready"
-
-    document_id = uuid4()
     content_type = "application/pdf" if suffix == "pdf" else "text/markdown"
+    chunks, status = prepare_document_chunks(content, content_type)
     item, duplicate = await repository.persist_document(
         user,
-        document_id=document_id,
+        document_id=uuid4(),
         filename=filename,
         content_type=content_type,
         content=content,
-        digest=digest,
+        digest=document_hash(content),
         ingestion_status=status,
         chunks=chunks,
     )
@@ -466,19 +466,40 @@ async def search_private_knowledge(
     )
 
 
-@app.post("/api/v1/documents/import-proposals/{proposal_id}/approve", response_model=ImportProposal)
+@app.post("/api/v1/documents/import-proposals/{proposal_id}/approve")
 async def approve_import(
     proposal_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
-) -> ImportProposal:
-    owned = import_proposals.get(proposal_id)
-    if not owned or owned[0] != user.id:
+) -> dict:
+    proposal = await repository.get_import_proposal(user, proposal_id)
+    if not proposal:
         raise HTTPException(404, "import proposal not found")
-    proposal = owned[1]
-    if proposal.status == "approved":
-        return proposal
-    approved = proposal.model_copy(update={"status": "approved"})
-    import_proposals[proposal_id] = (user.id, approved)
-    return approved
+    try:
+        downloaded = await download_public_document(str(proposal.url))
+    except UnsafeUrlError as error:
+        raise HTTPException(422, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(502, "web document download failed") from error
+
+    filename = downloaded.filename.replace("\\", "_").replace("/", "_")[:180]
+    chunks, status = prepare_document_chunks(downloaded.content, downloaded.content_type)
+    document, duplicate = await repository.persist_document(
+        user,
+        document_id=uuid4(),
+        filename=filename,
+        content_type=downloaded.content_type,
+        content=downloaded.content,
+        digest=document_hash(downloaded.content),
+        ingestion_status=status,
+        chunks=chunks,
+        source_url=downloaded.final_url,
+        title=downloaded.title,
+    )
+    approved = await repository.approve_import_proposal(user, proposal_id)
+    if not approved:
+        raise HTTPException(404, "import proposal not found")
+    return {"proposal": approved, "document": document, "duplicate": duplicate}
 
 
 @app.get("/api/v1/documents/{document_id}/ingestion-status")

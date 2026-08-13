@@ -83,3 +83,9 @@ class MigrationContractTests(TestCase):
         self.assertIn("insert into public.tasks", sql)
         self.assertIn("security definer", sql)
         self.assertIn("to authenticated", sql)
+
+    def test_import_proposals_are_granted_with_existing_owner_rls(self):
+        sql = Path(
+            "supabase/migrations/202608130002_import_proposal_permissions.sql"
+        ).read_text()
+        self.assertIn("on public.import_proposals to authenticated", sql)
