@@ -148,3 +148,41 @@ test("网页资料只有确认后才调用批准入库接口", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Agent 提案编辑只提交允许修改的任务字段", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      agent: "coach",
+      action: "create_review_task",
+      payload: { title: "线性代数错题复盘", subject: "math", planned_minutes: 75 },
+      summary: "创建复习任务",
+      idempotency_key: "proposal-key",
+      status: "edited",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.decideProposal("cccccccc-cccc-cccc-cccc-cccccccccccc", "edit", {
+      title: "线性代数错题复盘",
+      subject: "math",
+      planned_minutes: 75,
+    });
+    assert.match(request.input, /\/api\/v1\/proposals\/cccccccc-cccc-cccc-cccc-cccccccccccc\/edit$/);
+    assert.equal(request.init.method, "POST");
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.deepEqual(JSON.parse(request.init.body), {
+      title: "线性代数错题复盘",
+      subject: "math",
+      planned_minutes: 75,
+    });
+    assert.doesNotMatch(request.init.body, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

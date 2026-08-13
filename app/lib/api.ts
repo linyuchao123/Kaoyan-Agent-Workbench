@@ -121,9 +121,19 @@ export type ContributionDay = {
 
 export type ActionProposal = {
   id: string;
+  agent: "coach" | "tutor";
+  action: string;
+  payload: {
+    title: string;
+    subject: Subject;
+    planned_minutes: number;
+  };
   summary: string;
+  idempotency_key: string;
   status: "pending" | "approved" | "edited" | "rejected" | "applied" | "failed";
 };
+
+export type AgentProposalEdit = ActionProposal["payload"];
 
 export type AgentSource = {
   source_type: "private" | "web";
@@ -359,6 +369,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),
     }),
-  decideProposal: (id: string, decision: "approve" | "edit" | "reject") =>
-    request<ActionProposal>(`/api/v1/proposals/${id}/${decision}`, { method: "POST" }),
+  decideProposal: (
+    id: string,
+    decision: "approve" | "edit" | "reject",
+    editedPayload?: AgentProposalEdit,
+  ) => request<ActionProposal>(`/api/v1/proposals/${id}/${decision}`, {
+    method: "POST",
+    body: editedPayload ? JSON.stringify(editedPayload) : undefined,
+  }),
 };

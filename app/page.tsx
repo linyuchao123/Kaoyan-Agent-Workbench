@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1607,11 +1607,18 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setImportProposal(null); }} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small>{importProposal && <div className="import-confirm"><strong>待确认网络资料</strong><span>{importProposal.url}</span><p>{importProposal.summary}</p><button type="button" disabled={busy} onClick={() => void approveUrlImport()}>确认下载并入库</button></div>}</section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>当前先使用关键词全文检索；Embedding 接入后会自动升级为混合检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：顺序表的随机访问" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><p>{source.content}</p><small>{source.locator}</small></article>)}</div>}</section></section>;
 }
 
+function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onStartEdit, onCancelEdit, onSaveEdit, onApprove, onReject }: { proposal: ActionProposal; draft: AgentProposalEdit | null; editing: boolean; busy: boolean; onDraftChange: (draft: AgentProposalEdit) => void; onStartEdit: () => void; onCancelEdit: () => void; onSaveEdit: (event: FormEvent) => void; onApprove: () => void; onReject: () => void }) {
+  const canDecide = proposal.status === "pending" || proposal.status === "edited";
+  return <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.payload.title} · {subjectMeta[proposal.payload.subject].label} · {proposal.payload.planned_minutes} 分钟</p></div>{editing && draft ? <form className="agent-proposal-edit" onSubmit={onSaveEdit}><label>任务标题<input required maxLength={160} value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} /></label><label>科目<select value={draft.subject} onChange={(event) => onDraftChange({ ...draft, subject: event.target.value as Subject })}>{scopes.filter((item) => item.key !== "all").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>计划分钟<input required type="number" min={1} max={1440} value={draft.planned_minutes} onChange={(event) => onDraftChange({ ...draft, planned_minutes: Number(event.target.value) })} /></label><div><button className="approve" disabled={busy} type="submit">保存编辑</button><button className="text-button" disabled={busy} type="button" onClick={onCancelEdit}>取消</button></div></form> : canDecide && <div><button className="approve" disabled={busy} onClick={onApprove}>批准写入</button><button className="outline-button" disabled={busy} onClick={onStartEdit}>编辑</button><button className="text-button" disabled={busy} onClick={onReject}>拒绝</button></div>}</div>;
+}
+
 function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [query, setQuery] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string; sources?: AgentSource[] }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
+  const [proposalDraft, setProposalDraft] = useState<AgentProposalEdit | null>(null);
+  const [editingProposal, setEditingProposal] = useState(false);
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -1630,6 +1637,8 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       const result = await api.runAgent(mode, text, threadId);
       setThreadId(result.thread_id);
       setProposal(result.proposal);
+      setProposalDraft(result.proposal.payload);
+      setEditingProposal(false);
       const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
       setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, sources: result.sources }]);
     } catch {
@@ -1644,12 +1653,13 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  async function decide(decision: "approve" | "edit" | "reject") {
+  async function decide(decision: "approve" | "reject") {
     if (!proposal) return;
     setBusy(true);
     try {
       const updated = await api.decideProposal(proposal.id, decision);
       setProposal(updated);
+      setEditingProposal(false);
       const resultText = updated.status === "applied" ? "提案已批准并幂等写入任务清单。" : updated.status === "rejected" ? "提案已拒绝，没有修改学习数据。" : "提案已进入编辑状态。";
       setMessages((items) => [...items, { role: "agent", text: resultText }]);
     } catch {
@@ -1659,7 +1669,24 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><div className="message-body"><p>{message.text}</p>{message.sources && message.sources.length > 0 && <div className="agent-sources"><strong>本次回答来源</strong>{message.sources.map((source) => source.url ? <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer"><span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small></a> : <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>)}</div>}</div></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
+  async function saveProposalEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!proposal || !proposalDraft || busy) return;
+    setBusy(true);
+    try {
+      const updated = await api.decideProposal(proposal.id, "edit", proposalDraft);
+      setProposal(updated);
+      setProposalDraft(updated.payload);
+      setEditingProposal(false);
+      setMessages((items) => [...items, { role: "agent", text: "提案内容已更新，仍未写入任务。请再次确认后批准。" }]);
+    } catch {
+      setMessages((items) => [...items, { role: "agent", text: "提案编辑保存失败，原提案未执行。" }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><div className="message-body"><p>{message.text}</p>{message.sources && message.sources.length > 0 && <div className="agent-sources"><strong>本次回答来源</strong>{message.sources.map((source) => source.url ? <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer"><span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small></a> : <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>)}</div>}</div></div>)}</div>{proposal && <AgentProposalCard proposal={proposal} draft={proposalDraft} editing={editingProposal} busy={busy} onDraftChange={setProposalDraft} onStartEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(true); }} onCancelEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(false); }} onSaveEdit={saveProposalEdit} onApprove={() => void decide("approve")} onReject={() => void decide("reject")} />}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
 function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {

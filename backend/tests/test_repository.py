@@ -668,12 +668,20 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             ),
             httpx.MockTransport(handler),
         )
-        saved = await repository.decide_agent_proposal(self.user, proposal_id, "approve")
+        edited_payload = {
+            "title": "数据结构二刷",
+            "subject": "cs408",
+            "planned_minutes": 60,
+        }
+        saved = await repository.decide_agent_proposal(
+            self.user, proposal_id, "edit", edited_payload
+        )
 
         self.assertIsNotNone(saved)
         self.assertEqual(saved.status, "applied")
         self.assertTrue(requests[0].url.path.endswith("/rpc/decide_agent_proposal"))
         payload = json.loads(requests[0].content)
         self.assertEqual(payload["requested_proposal_id"], str(proposal_id))
-        self.assertEqual(payload["requested_decision"], "approve")
+        self.assertEqual(payload["requested_decision"], "edit")
+        self.assertEqual(payload["edited_payload"], edited_payload)
         self.assertNotIn("user_id", payload)

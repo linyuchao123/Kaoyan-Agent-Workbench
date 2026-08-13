@@ -238,3 +238,9 @@ class ActionProposal(BaseModel):
     summary: str
     idempotency_key: str
     status: Literal["pending", "approved", "edited", "rejected", "applied", "failed"] = "pending"
+
+
+class AgentProposalEditRequest(StrictRequestModel):
+    title: str = Field(min_length=1, max_length=160)
+    subject: Subject
+    planned_minutes: int = Field(ge=1, le=1440)

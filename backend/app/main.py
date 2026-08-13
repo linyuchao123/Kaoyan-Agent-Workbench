@@ -20,6 +20,7 @@ from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.schemas import (
     ActionProposal,
+    AgentProposalEditRequest,
     AgentRunRequest,
     CareerItemCreate,
     CareerItemType,
@@ -606,10 +607,18 @@ async def decide_proposal(
     proposal_id: UUID,
     decision: str,
     user: Annotated[AuthUser, Depends(get_current_user)],
+    payload: AgentProposalEditRequest | None = None,
 ) -> ActionProposal:
     if decision not in {"approve", "edit", "reject"}:
         raise HTTPException(422, "decision must be approve, edit or reject")
-    proposal = await repository.decide_agent_proposal(user, proposal_id, decision)
+    if decision == "edit" and payload is None:
+        raise HTTPException(422, "edited proposal payload is required")
+    proposal = await repository.decide_agent_proposal(
+        user,
+        proposal_id,
+        decision,
+        payload.model_dump(mode="json") if payload else None,
+    )
     if not proposal:
         raise HTTPException(404, "proposal not found")
     return proposal

@@ -96,6 +96,44 @@ class ApiFlowTests(TestCase):
         self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
         self.assertEqual(self.task_count(), 2)
 
+    def test_agent_proposal_can_be_edited_before_approval(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个复习任务"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+
+        missing_payload = self.client.post(f"/api/v1/proposals/{proposal_id}/edit")
+        self.assertEqual(missing_payload.status_code, 422)
+        edited = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={"title": "线性代数错题复盘", "subject": "math", "planned_minutes": 75},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()["status"], "edited")
+        self.assertEqual(edited.json()["payload"]["planned_minutes"], 75)
+        self.assertEqual(self.task_count(), 0)
+
+        approved = self.client.post(f"/api/v1/proposals/{proposal_id}/approve")
+        self.assertEqual(approved.json()["status"], "applied")
+        tasks = self.client.get("/api/v1/tasks").json()
+        self.assertEqual(tasks[0]["title"], "线性代数错题复盘")
+        self.assertEqual(tasks[0]["subject"], "math")
+        self.assertEqual(tasks[0]["planned_minutes"], 75)
+
+    def test_agent_proposal_edit_rejects_invalid_task_fields(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个复习任务"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+        response = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={"title": "", "subject": "other", "planned_minutes": 0},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.task_count(), 0)
+
     def test_coach_answer_and_proposal_use_real_learning_context(self):
         self.client.post(
             "/api/v1/mistakes",
