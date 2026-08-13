@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
+from app.agents.context import build_agent_context
 from app.agents.graph import build_graph
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
@@ -42,6 +43,7 @@ from app.schemas import (
 )
 from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
 from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
+from app.services.rag import choose_retrieval_mode
 from app.services.repository import (
     RepositoryConflictError,
     RepositoryError,
@@ -330,13 +332,19 @@ async def export_user_data(
     if format == "csv":
         body, media_type, suffix = render_csv_export(payload), "text/csv; charset=utf-8", "csv"
     elif format == "markdown":
-        body, media_type, suffix = render_markdown_export(payload), "text/markdown; charset=utf-8", "md"
+        body, media_type, suffix = (
+            render_markdown_export(payload),
+            "text/markdown; charset=utf-8",
+            "md",
+        )
     else:
         body, media_type, suffix = render_json_export(payload), "application/json", "json"
     return Response(
         content=body,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'
+        },
     )
 
 
@@ -419,11 +427,7 @@ async def upload_document(
         status = "ready"
 
     document_id = uuid4()
-    content_type = (
-        "application/pdf"
-        if suffix == "pdf"
-        else "text/markdown"
-    )
+    content_type = "application/pdf" if suffix == "pdf" else "text/markdown"
     item, duplicate = await repository.persist_document(
         user,
         document_id=document_id,
@@ -498,23 +502,41 @@ async def run_agent(
 ) -> dict:
     if agent not in {"coach", "tutor", "combined"}:
         raise HTTPException(404, "unknown agent")
+    retrieval_mode = choose_retrieval_mode(payload.message)
+    context = await build_agent_context(
+        repository,
+        user,
+        message=payload.message,
+        route=agent,
+        retrieval_mode=retrieval_mode,
+    )
     result = await agent_graph.ainvoke(
         {
             "messages": [HumanMessage(content=payload.message)],
             "requested_route": agent,
             "user_id": str(user.id),
+            "context": context,
         }
     )
     proposal_id = uuid4()
     idempotency_key = sha256(
         f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
     ).hexdigest()
+    priority = (
+        context["due_mistakes"][0]
+        if context["due_mistakes"]
+        else context["pending_tasks"][0]
+        if context["pending_tasks"]
+        else None
+    )
+    proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
+    proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
     proposal = ActionProposal(
         id=proposal_id,
         agent="coach" if agent in {"coach", "combined"} else "tutor",
         action="create_review_task",
-        payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
-        summary="创建一个 45 分钟的数据结构错题复习任务",
+        payload={"title": proposal_title, "subject": proposal_subject, "planned_minutes": 45},
+        summary=f"创建一个 45 分钟的「{proposal_title}」任务",
         idempotency_key=idempotency_key,
     )
     thread_id, proposal = await repository.create_agent_proposal(

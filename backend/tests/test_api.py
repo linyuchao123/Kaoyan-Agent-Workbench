@@ -94,6 +94,48 @@ class ApiFlowTests(TestCase):
         self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
         self.assertEqual(self.task_count(), 2)
 
+    def test_coach_answer_and_proposal_use_real_learning_context(self):
+        self.client.post(
+            "/api/v1/mistakes",
+            json={
+                "subject": "math",
+                "title": "洛必达使用条件",
+                "question": "何时可以使用洛必达法则？",
+            },
+        )
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "根据我的错题安排今天的复习"},
+        )
+
+        self.assertEqual(run.status_code, 200)
+        body = run.json()
+        self.assertIn("到期错题 1 道", body["answer"])
+        self.assertIn("洛必达使用条件", body["answer"])
+        self.assertEqual(body["proposal"]["payload"]["subject"], "math")
+        self.assertIn("洛必达使用条件", body["proposal"]["summary"])
+
+    def test_tutor_answer_cites_matching_private_material(self):
+        self.client.post(
+            "/api/v1/documents/upload",
+            files={
+                "file": (
+                    "数据结构笔记.md",
+                    "# 线性表\n顺序表支持按下标随机访问。".encode(),
+                    "text/markdown",
+                )
+            },
+        )
+
+        run = self.client.post(
+            "/api/v1/agents/tutor/runs",
+            json={"message": "顺序表"},
+        )
+
+        self.assertEqual(run.status_code, 200)
+        self.assertIn("数据结构笔记", run.json()["answer"])
+        self.assertIn("顺序表支持按下标随机访问", run.json()["answer"])
+
     def test_agent_proposal_isolated_from_other_user(self):
         run = self.client.post(
             "/api/v1/agents/coach/runs", json={"message": "安排明天的 408 复习"}
@@ -727,9 +769,7 @@ class ApiFlowTests(TestCase):
         documents = self.client.get("/api/v1/documents")
         self.assertEqual(documents.status_code, 200)
         self.assertEqual(len(documents.json()), 1)
-        status = self.client.get(
-            f"/api/v1/documents/{first.json()['id']}/ingestion-status"
-        )
+        status = self.client.get(f"/api/v1/documents/{first.json()['id']}/ingestion-status")
         self.assertEqual(status.status_code, 200)
         self.assertEqual(status.json()["status"], "ready")
 
