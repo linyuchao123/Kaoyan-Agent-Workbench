@@ -8,13 +8,34 @@ from fastapi.testclient import TestClient
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
 from app.services.repository import DemoRepository
+from app.services.search import WebResult
 from app.services.web_import import DownloadedWebDocument
+
+
+class FakeSearchProvider:
+    name = "fake-search"
+    configured = True
+
+    async def search(self, query, include_domains=None):
+        return [
+            WebResult(
+                title="某大学官方招生网",
+                url="https://example.edu/admission",
+                snippet=f"{query} 的招生信息",
+                accessed_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+            )
+        ]
+
+    async def extract(self, url):
+        return url
 
 
 class ApiFlowTests(TestCase):
     def setUp(self):
         self.previous_repository = main.repository
+        self.previous_search_provider = main.search_provider
         main.repository = DemoRepository(now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC))
+        main.search_provider = FakeSearchProvider()
         self.user = AuthUser(
             id=UUID("11111111-1111-1111-1111-111111111111"),
             email="one@example.com",
@@ -31,6 +52,7 @@ class ApiFlowTests(TestCase):
     def tearDown(self):
         main.app.dependency_overrides.clear()
         main.repository = self.previous_repository
+        main.search_provider = self.previous_search_provider
 
     def task_count(self) -> int:
         return len(self.client.get("/api/v1/tasks").json())
@@ -65,6 +87,26 @@ class ApiFlowTests(TestCase):
         ).json()[0]
         self.assertEqual(contribution["effective_minutes"], 80)
         self.assertEqual(contribution["completed_tasks"], 1)
+
+    def test_web_search_history_is_persisted_and_user_isolated(self):
+        searched = self.client.post(
+            "/api/v1/search/web",
+            json={"query": "2028 软件工程招生简章"},
+        )
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(searched.json()[0]["title"], "某大学官方招生网")
+
+        history = self.client.get("/api/v1/search/web/history").json()
+        self.assertEqual(history[0]["query"], "2028 软件工程招生简章")
+        self.assertEqual(history[0]["provider"], "fake-search")
+        self.assertEqual(history[0]["results"][0]["url"], "https://example.edu/admission")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/search/web/history").json(), [])
 
     def test_agent_write_requires_approval_and_is_idempotent(self):
         run = self.client.post(

@@ -3,7 +3,8 @@ from datetime import datetime
 from typing import Any, Literal, TypedDict
 
 from app.auth import AuthUser
-from app.services.repository import StudyRepository
+from app.schemas import SearchSource
+from app.services.repository import RepositoryError, StudyRepository
 from app.services.search import WebSearchProvider
 
 
@@ -80,6 +81,25 @@ async def build_agent_context(
             web_search_status = "success"
         except (OSError, RuntimeError, TimeoutError):
             web_search_status = "failed"
+        else:
+            try:
+                await repository.record_web_search(
+                    user,
+                    query=message,
+                    provider=search_provider.name,
+                    results=[
+                        SearchSource(
+                            title=result.title,
+                            url=result.url,
+                            snippet=result.snippet,
+                            accessed_at=result.accessed_at,
+                        )
+                        for result in web_results
+                    ],
+                )
+            except RepositoryError:
+                # Search answers remain usable when optional history persistence is unavailable.
+                pass
 
     active_plans = [plan for plan in plans if plan.get("status") == "active"][:6]
     pending_tasks = [

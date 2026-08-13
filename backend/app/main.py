@@ -42,6 +42,7 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
+    WebSearchRecord,
     WebSearchRequest,
 )
 from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
@@ -388,15 +389,33 @@ async def contributions(
 
 @app.post("/api/v1/search/web", response_model=list[SearchSource])
 async def web_search(
-    payload: WebSearchRequest, _: Annotated[AuthUser, Depends(get_current_user)]
+    payload: WebSearchRequest, user: Annotated[AuthUser, Depends(get_current_user)]
 ) -> list[SearchSource]:
     results = await search_provider.search(payload.query, payload.include_domains)
-    return [
+    sources = [
         SearchSource(
             title=item.title, url=item.url, snippet=item.snippet, accessed_at=item.accessed_at
         )
         for item in results
     ]
+    try:
+        await repository.record_web_search(
+            user,
+            query=payload.query,
+            provider=search_provider.name,
+            results=sources,
+        )
+    except RepositoryError:
+        logger.warning("Web search succeeded but its history record could not be persisted")
+    return sources
+
+
+@app.get("/api/v1/search/web/history", response_model=list[WebSearchRecord])
+async def web_search_history(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[WebSearchRecord]:
+    return await repository.list_web_search_records(user, limit)
 
 
 @app.post("/api/v1/documents/import-preview", response_model=ImportProposal)

@@ -23,9 +23,11 @@ from app.schemas import (
     PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
+    SearchSource,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
+    WebSearchRecord,
 )
 from app.services.ingestion import TextChunk
 from app.services.store import DemoStore
@@ -145,6 +147,19 @@ class StudyRepository(Protocol):
         document_ids: list[UUID] | None = None,
     ) -> list[PrivateKnowledgeSource]: ...
 
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord: ...
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]: ...
+
     async def create_agent_proposal(
         self,
         user: AuthUser,
@@ -193,6 +208,7 @@ class DemoRepository:
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
         self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
+        self.web_search_records: dict[tuple[UUID, UUID], WebSearchRecord] = {}
         self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
         self.action_proposals: dict[tuple[UUID, UUID], ActionProposal] = {}
         self.proposal_ids_by_key: dict[tuple[UUID, str], UUID] = {}
@@ -204,6 +220,7 @@ class DemoRepository:
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
         self.import_proposals.clear()
+        self.web_search_records.clear()
         self.agent_threads.clear()
         self.action_proposals.clear()
         self.proposal_ids_by_key.clear()
@@ -412,6 +429,34 @@ class DemoRepository:
                 )
         matches.sort(key=lambda item: item.score, reverse=True)
         return matches[:limit]
+
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord:
+        record = WebSearchRecord(
+            id=uuid4(),
+            query=query,
+            provider=provider,
+            results=results,
+            searched_at=datetime.now(UTC),
+        )
+        self.web_search_records[(user.id, record.id)] = record
+        return record
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]:
+        records = [
+            record
+            for (owner_id, _), record in reversed(self.web_search_records.items())
+            if owner_id == user.id
+        ]
+        return records[:limit]
 
     async def create_agent_proposal(
         self,
@@ -1260,6 +1305,44 @@ class SupabaseRepository:
             },
         )
         return [PrivateKnowledgeSource.model_validate(row) for row in rows]
+
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord:
+        rows = await self._request(
+            user,
+            "POST",
+            "web_search_records",
+            json={
+                "user_id": str(user.id),
+                "query": query,
+                "provider": provider,
+                "results": [result.model_dump(mode="json") for result in results],
+            },
+            prefer="return=representation",
+        )
+        return WebSearchRecord.model_validate(rows[0])
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]:
+        rows = await self._request(
+            user,
+            "GET",
+            "web_search_records",
+            params={
+                "select": "id,query,provider,results,searched_at",
+                "user_id": f"eq.{user.id}",
+                "order": "searched_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [WebSearchRecord.model_validate(row) for row in rows]
 
     async def create_agent_proposal(
         self,

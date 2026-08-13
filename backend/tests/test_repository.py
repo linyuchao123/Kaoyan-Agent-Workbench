@@ -13,6 +13,7 @@ from app.schemas import (
     PlanCreate,
     PlanUpdate,
     SchoolOptionCreate,
+    SearchSource,
     StudySessionCreate,
     TaskCreate,
 )
@@ -745,3 +746,48 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
         self.assertIn("status=in.%28pending%2Cedited%29", str(requests[0].url))
         self.assertIn(f"user_id=eq.{self.user.id}", str(requests[0].url))
+
+    async def test_supabase_web_search_history_uses_user_jwt_and_owner_filter(self):
+        requests: list[httpx.Request] = []
+        record_id = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        source = SearchSource(
+            title="官方招生网",
+            url="https://example.edu/admission",
+            snippet="招生简章",
+            accessed_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            row = {
+                "id": str(record_id),
+                "query": "2028 招生简章",
+                "provider": "tavily",
+                "results": [source.model_dump(mode="json")],
+                "searched_at": "2026-08-13T09:00:00Z",
+            }
+            return httpx.Response(201 if request.method == "POST" else 200, json=[row])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved = await repository.record_web_search(
+            self.user,
+            query="2028 招生简章",
+            provider="tavily",
+            results=[source],
+        )
+        history = await repository.list_web_search_records(self.user, limit=5)
+
+        self.assertEqual(saved.id, record_id)
+        self.assertEqual(history[0].results[0].title, "官方招生网")
+        insert_payload = json.loads(requests[0].content)
+        self.assertEqual(insert_payload["user_id"], str(self.user.id))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+        self.assertIn("limit=5", str(requests[1].url))

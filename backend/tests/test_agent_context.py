@@ -10,6 +10,7 @@ from app.services.search import WebResult
 
 
 class FakeSearchProvider:
+    name = "fake-search"
     configured = True
 
     async def search(self, query, include_domains=None):
@@ -115,3 +116,6 @@ class AgentContextTests(IsolatedAsyncioTestCase):
         self.assertEqual(context["web_search_status"], "success")
         self.assertEqual(context["web_sources"][0]["title"], "某大学 2028 招生简章")
         self.assertEqual(context["web_sources"][0]["url"], "https://example.edu/admission")
+        history = await self.repository.list_web_search_records(self.user)
+        self.assertEqual(history[0].provider, "fake-search")
+        self.assertEqual(history[0].results[0].title, "某大学 2028 招生简章")

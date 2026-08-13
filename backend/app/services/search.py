@@ -17,6 +17,9 @@ class WebResult:
 
 class WebSearchProvider(Protocol):
     @property
+    def name(self) -> str: ...
+
+    @property
     def configured(self) -> bool: ...
 
     async def search(
@@ -31,6 +34,10 @@ class TavilySearchProvider:
         if not settings.tavily_api_key:
             raise RuntimeError("TAVILY_API_KEY is required for live web search")
         self.api_wrapper = TavilySearchAPIWrapper(tavily_api_key=settings.tavily_api_key)
+
+    @property
+    def name(self) -> str:
+        return "tavily"
 
     @property
     def configured(self) -> bool:
@@ -66,6 +73,10 @@ class TavilySearchProvider:
 
 
 class DemoSearchProvider:
+    @property
+    def name(self) -> str:
+        return "demo"
+
     @property
     def configured(self) -> bool:
         return False

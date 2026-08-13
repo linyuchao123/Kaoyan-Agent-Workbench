@@ -200,6 +200,14 @@ class SearchSource(BaseModel):
     source_type: Literal["web", "private"] = "web"
 
 
+class WebSearchRecord(BaseModel):
+    id: UUID
+    query: str
+    provider: str
+    results: list[SearchSource]
+    searched_at: datetime
+
+
 class ImportPreviewRequest(StrictRequestModel):
     url: HttpUrl
 
