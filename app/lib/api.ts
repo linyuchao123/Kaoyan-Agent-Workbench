@@ -364,7 +364,7 @@ export const api = {
       retrieval_mode: string;
       model_status: "generated" | "fallback";
       sources: AgentSource[];
-      proposal: ActionProposal;
+      proposal: ActionProposal | null;
     }>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),

@@ -178,6 +178,17 @@ class ApiFlowTests(TestCase):
         self.assertIn("顺序表支持按下标随机访问", body["answer"])
         self.assertEqual(body["sources"][0]["source_type"], "private")
         self.assertEqual(body["sources"][0]["title"], "数据结构笔记")
+        self.assertIsNone(body["proposal"])
+        self.assertEqual(self.task_count(), 0)
+
+    def test_combined_knowledge_question_does_not_create_write_proposal(self):
+        run = self.client.post(
+            "/api/v1/agents/combined/runs",
+            json={"message": "请解释当前 408 数据结构中的顺序表"},
+        )
+        self.assertEqual(run.status_code, 200)
+        self.assertIsNone(run.json()["proposal"])
+        self.assertEqual(self.task_count(), 0)
 
     def test_agent_proposal_isolated_from_other_user(self):
         run = self.client.post(

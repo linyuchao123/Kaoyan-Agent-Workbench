@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from typing import Any, Protocol, cast
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -153,6 +153,15 @@ class StudyRepository(Protocol):
         mode: str,
         proposal: ActionProposal,
     ) -> tuple[UUID, ActionProposal]: ...
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID: ...
 
     async def decide_agent_proposal(
         self,
@@ -422,6 +431,21 @@ class DemoRepository:
             {"user_id": user.id, "proposal_id": proposal.id, "event_type": "proposal_created"}
         )
         return thread_id, proposal
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID:
+        if thread_id is None:
+            thread_id = uuid4()
+            self.agent_threads[(user.id, thread_id)] = {"mode": mode, "title": title}
+        elif (user.id, thread_id) not in self.agent_threads:
+            raise RepositoryValidationError("agent thread not found")
+        return thread_id
 
     async def decide_agent_proposal(
         self,
@@ -1249,6 +1273,29 @@ class SupabaseRepository:
             raise RepositoryError("Agent proposal was not persisted")
         row = rows[0]
         return UUID(str(row["thread_id"])), ActionProposal.model_validate(row["proposal"])
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID:
+        row = await self._request(
+            user,
+            "POST",
+            "rpc/ensure_agent_thread",
+            json={
+                "requested_thread_id": str(thread_id) if thread_id else None,
+                "requested_mode": mode,
+                "requested_title": title,
+            },
+        )
+        value = row[0] if isinstance(row, list) else row
+        if not value:
+            raise RepositoryError("Agent thread was not persisted")
+        return UUID(str(value))
 
     async def decide_agent_proposal(
         self,

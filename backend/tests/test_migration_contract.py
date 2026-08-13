@@ -89,3 +89,12 @@ class MigrationContractTests(TestCase):
             "supabase/migrations/202608130002_import_proposal_permissions.sql"
         ).read_text()
         self.assertIn("on public.import_proposals to authenticated", sql)
+
+    def test_read_only_agent_thread_rpc_uses_authenticated_owner(self):
+        sql = Path(
+            "supabase/migrations/202608130003_agent_thread_persistence.sql"
+        ).read_text()
+        self.assertIn("create or replace function public.ensure_agent_thread", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("user_id = owner_id", sql)
+        self.assertIn("to authenticated", sql)

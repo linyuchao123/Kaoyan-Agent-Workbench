@@ -685,3 +685,33 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_decision"], "edit")
         self.assertEqual(payload["edited_payload"], edited_payload)
         self.assertNotIn("user_id", payload)
+
+    async def test_supabase_read_only_agent_run_persists_thread_without_owner_input(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=str(thread_id))
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved = await repository.ensure_agent_thread(
+            self.user,
+            thread_id=None,
+            mode="tutor",
+            title="解释顺序表",
+        )
+
+        self.assertEqual(saved, thread_id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/ensure_agent_thread"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_mode"], "tutor")
+        self.assertEqual(payload["requested_title"], "解释顺序表")
+        self.assertNotIn("user_id", payload)

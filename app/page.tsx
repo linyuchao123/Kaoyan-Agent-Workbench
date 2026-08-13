@@ -1637,7 +1637,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       const result = await api.runAgent(mode, text, threadId);
       setThreadId(result.thread_id);
       setProposal(result.proposal);
-      setProposalDraft(result.proposal.payload);
+      setProposalDraft(result.proposal?.payload ?? null);
       setEditingProposal(false);
       const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
       setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, sources: result.sources }]);

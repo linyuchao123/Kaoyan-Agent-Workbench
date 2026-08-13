@@ -74,6 +74,8 @@ agent_model = OpenAICompatibleAgentModel(settings)
 agent_graph = build_graph(agent_model)
 search_provider = get_search_provider(settings)
 
+WRITE_INTENT_MARKERS = ("安排", "创建", "添加", "生成任务", "调整计划", "写入", "建立任务")
+
 
 @app.exception_handler(RepositoryError)
 async def repository_error_handler(_: Request, error: RepositoryError) -> JSONResponse:
@@ -543,33 +545,45 @@ async def run_agent(
             "context": context,
         }
     )
-    proposal_id = uuid4()
-    idempotency_key = sha256(
-        f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
-    ).hexdigest()
-    priority = (
-        context["due_mistakes"][0]
-        if context["due_mistakes"]
-        else context["pending_tasks"][0]
-        if context["pending_tasks"]
-        else None
+    wants_write = agent == "coach" or (
+        agent == "combined" and any(marker in payload.message for marker in WRITE_INTENT_MARKERS)
     )
-    proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
-    proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
-    proposal = ActionProposal(
-        id=proposal_id,
-        agent="coach" if agent in {"coach", "combined"} else "tutor",
-        action="create_review_task",
-        payload={"title": proposal_title, "subject": proposal_subject, "planned_minutes": 45},
-        summary=f"创建一个 45 分钟的「{proposal_title}」任务",
-        idempotency_key=idempotency_key,
-    )
-    thread_id, proposal = await repository.create_agent_proposal(
-        user,
-        thread_id=payload.thread_id,
-        mode=agent,
-        proposal=proposal,
-    )
+    proposal: ActionProposal | None = None
+    if wants_write:
+        proposal_id = uuid4()
+        idempotency_key = sha256(
+            f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
+        ).hexdigest()
+        priority = (
+            context["due_mistakes"][0]
+            if context["due_mistakes"]
+            else context["pending_tasks"][0]
+            if context["pending_tasks"]
+            else None
+        )
+        proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
+        proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
+        requested_proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": proposal_title, "subject": proposal_subject, "planned_minutes": 45},
+            summary=f"创建一个 45 分钟的「{proposal_title}」任务",
+            idempotency_key=idempotency_key,
+        )
+        thread_id, proposal = await repository.create_agent_proposal(
+            user,
+            thread_id=payload.thread_id,
+            mode=agent,
+            proposal=requested_proposal,
+        )
+    else:
+        thread_id = await repository.ensure_agent_thread(
+            user,
+            thread_id=payload.thread_id,
+            mode=agent,
+            title=payload.message[:160],
+        )
     return {
         "thread_id": thread_id,
         "agent": agent,
