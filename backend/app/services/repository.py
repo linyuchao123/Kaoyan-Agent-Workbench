@@ -163,6 +163,10 @@ class StudyRepository(Protocol):
         title: str,
     ) -> UUID: ...
 
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]: ...
+
     async def decide_agent_proposal(
         self,
         user: AuthUser,
@@ -446,6 +450,16 @@ class DemoRepository:
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         return thread_id
+
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]:
+        proposals = [
+            proposal
+            for (owner_id, _), proposal in reversed(self.action_proposals.items())
+            if owner_id == user.id and proposal.status in {"pending", "edited"}
+        ]
+        return proposals[:limit]
 
     async def decide_agent_proposal(
         self,
@@ -1296,6 +1310,23 @@ class SupabaseRepository:
         if not value:
             raise RepositoryError("Agent thread was not persisted")
         return UUID(str(value))
+
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]:
+        rows = await self._request(
+            user,
+            "GET",
+            "action_proposals",
+            params={
+                "select": "id,agent,action,payload,summary,idempotency_key,status",
+                "user_id": f"eq.{user.id}",
+                "status": "in.(pending,edited)",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [ActionProposal.model_validate(row) for row in rows]
 
     async def decide_agent_proposal(
         self,

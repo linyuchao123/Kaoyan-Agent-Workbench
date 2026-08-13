@@ -186,3 +186,26 @@ test("Agent 提案编辑只提交允许修改的任务字段", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Agent 页面可读取当前账户的待审批提案", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.listPendingProposals();
+    assert.match(request.input, /\/api\/v1\/proposals\?limit=10$/);
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.doesNotMatch(request.input, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

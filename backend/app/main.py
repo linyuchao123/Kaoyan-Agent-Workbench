@@ -616,6 +616,14 @@ async def run_agent(
     }
 
 
+@app.get("/api/v1/proposals", response_model=list[ActionProposal])
+async def list_pending_proposals(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> list[ActionProposal]:
+    return await repository.list_pending_agent_proposals(user, limit)
+
+
 @app.post("/api/v1/proposals/{proposal_id}/{decision}", response_model=ActionProposal)
 async def decide_proposal(
     proposal_id: UUID,

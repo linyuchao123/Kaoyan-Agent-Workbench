@@ -369,6 +369,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),
     }),
+  listPendingProposals: () => request<ActionProposal[]>("/api/v1/proposals?limit=10"),
   decideProposal: (
     id: string,
     decision: "approve" | "edit" | "reject",

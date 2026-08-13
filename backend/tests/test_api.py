@@ -134,6 +134,22 @@ class ApiFlowTests(TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.task_count(), 0)
 
+    def test_pending_agent_proposals_can_be_restored_and_are_user_isolated(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个 408 复习任务"},
+        ).json()
+        restored = self.client.get("/api/v1/proposals").json()
+        self.assertEqual(restored[0]["id"], run["proposal"]["id"])
+        self.assertEqual(restored[0]["status"], "pending")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/proposals").json(), [])
+
     def test_coach_answer_and_proposal_use_real_learning_context(self):
         self.client.post(
             "/api/v1/mistakes",

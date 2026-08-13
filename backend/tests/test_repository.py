@@ -715,3 +715,33 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_mode"], "tutor")
         self.assertEqual(payload["requested_title"], "解释顺序表")
         self.assertNotIn("user_id", payload)
+
+    async def test_supabase_pending_proposals_are_read_with_user_jwt(self):
+        requests: list[httpx.Request] = []
+        proposal = ActionProposal(
+            id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "408 复习", "subject": "cs408", "planned_minutes": 45},
+            summary="创建复习任务",
+            idempotency_key="pending-proposal-key",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[proposal.model_dump(mode="json")])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        restored = await repository.list_pending_agent_proposals(self.user)
+
+        self.assertEqual(restored[0].id, proposal.id)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn("status=in.%28pending%2Cedited%29", str(requests[0].url))
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[0].url))

@@ -1622,6 +1622,18 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
 
+  useEffect(() => {
+    if (isDemo) return;
+    let cancelled = false;
+    void api.listPendingProposals().then((items) => {
+      if (cancelled || items.length === 0) return;
+      setProposal(items[0]);
+      setProposalDraft(items[0].payload);
+      setMessages((messages) => [...messages, { role: "agent", text: "已恢复你上次未处理的 Agent 提案，请继续批准、编辑或拒绝。" }]);
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [isDemo]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!query.trim() || busy) return;
