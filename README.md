@@ -2,7 +2,7 @@
 
 面向 2028 考研的个人 AI 学习工作台。它把任务、专注计时、GitHub 风格学习热力图、错题复习、院校情报、私有资料 RAG 与双 Agent 学习助手放在同一个可追踪的学习闭环中。
 
-> 当前状态：`v0.3` 云端学习闭环代码已完成。Supabase Auth、用户 JWT、PostgreSQL Repository、RLS、任务/计时/热力图云端读写和离线演示模式已接通；创建 Supabase 项目并配置密钥后启用真实持久化。真实模型/Embedding、OCR worker 和 Tavily 密钥配置仍是后续开发项。
+> 当前状态：`v0.6` 私有资料库已经合并，`v0.7` 双 Agent 与联网搜索正在开发。登录、任务与计时、热力图、三级计划、错题复习、院校情报、求职副线、数据导出、私有 Storage 和关键词检索均已接通真实云端数据；模型回答、Embedding 混合检索、OCR worker、联网资料确认入库和 Agent 持久化仍在完善。
 
 ## 产品能力
 
@@ -11,9 +11,9 @@
 - 三级计划：阶段、周、日计划及计划偏差。
 - 学科与错题：章节进度、薄弱点和复习安排。
 - 院校情报：信息精确到学院、专业代码、招生年份和官方来源。
-- 双 Agent：计划教练与资料导师使用 LangGraph 编排，写入前必须确认。
-- 混合 RAG：PDF/Markdown 上传、文件哈希去重、按标题或页码切分、全文 + 向量检索契约。
-- 联网搜索：Tavily 搜索结果默认临时使用，确认后才能导入资料库。
+- 双 Agent（开发中）：计划教练与资料导师已有 LangGraph 路由和人工确认界面，正在接入真实上下文、模型与持久化提案。
+- 私有 RAG：PDF/Markdown 上传、文件哈希去重、按标题或页码切分和关键词全文检索已经可用；向量混合检索待接入。
+- 联网搜索（开发中）：已有 Tavily Provider 与搜索接口，正在补齐来源引用、确认下载与永久入库。
 - 安全边界：阻止内网 URL 导入、标记资料中的提示词注入、Agent 批准写入使用幂等键。
 
 ## 技术栈
@@ -67,7 +67,7 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 3. 在根目录 `.env.local` 填写 `NEXT_PUBLIC_SUPABASE_URL`、`NEXT_PUBLIC_SUPABASE_ANON_KEY` 和 API 地址。
 4. 在 `backend/.env` 填写相同项目的 `SUPABASE_URL`、`SUPABASE_ANON_KEY`，并设置 `DEMO_MODE=false`。
 5. 在 Supabase Auth 中启用 Email provider；开发阶段可按需要决定是否强制邮箱确认。
-6. 后续接资料云存储时再创建私有 Storage bucket；v0.3 不上传原文件到云端。
+6. 执行 `202608120003_private_material_storage.sql` 后会创建私有 `study-materials` Storage bucket；资料原文件使用当前用户编号作为私有目录。
 
 迁移包含学习任务、会话、错题、院校、资料分块、导入提案、Agent 提案、审计日志、RLS 和学习贡献聚合视图。
 
@@ -75,11 +75,12 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 
 ```bash
 npm run build
+npm run lint
 backend/.venv/bin/ruff check backend
 backend/.venv/bin/pytest -q backend/tests
 ```
 
-## v0.3 已完成的真实流程
+## v0.6 已完成的真实流程
 
 1. 使用 Supabase Auth 注册、登录、恢复会话和退出，FastAPI 拒绝缺失、过期或无效 Token。
 2. 在今日工作台创建任务，并通过用户 JWT 写入 PostgreSQL；云端配置完成后，服务重启数据仍然存在。
@@ -88,6 +89,18 @@ backend/.venv/bin/pytest -q backend/tests
 5. 热力图从只读聚合视图读取年度和科目统计，不单独维护积分数据。
 6. 不同用户无法读取或修改彼此的任务、会话、资料记录或 Agent 提案。
 7. 未配置 Supabase 时保留离线演示界面，但不会伪装成云端同步。
+8. 阶段、周、日计划支持增删改查、状态流转、任务关联以及计划与实际统计。
+9. 错题卡支持录入、到期筛选、复习反馈和下次复习时间更新。
+10. 院校情报与求职副线按当前用户隔离，并支持 JSON、CSV、Markdown 导出。
+11. PDF/Markdown 原文件写入私有 Storage，按哈希去重并保留页码或标题定位。
+12. 私有资料关键词检索只返回当前用户且未被标记为恶意指令的文档片段。
+
+## v0.7 正在开发
+
+- 将 Agent 会话、操作提案、审批决定、幂等执行结果和审计日志持久化到 PostgreSQL。
+- 让计划教练读取真实计划、任务、学习会话和错题，让资料导师读取私有资料与网络来源。
+- 通过 OpenAI-compatible 模型生成真实回答，并在资料不足或来源冲突时明确拒答。
+- 联网搜索结果仅用于当次回答；用户批准后才下载、解析、去重并永久入库。
 
 ## 安全约定
 

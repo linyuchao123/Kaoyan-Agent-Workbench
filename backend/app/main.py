@@ -54,7 +54,7 @@ from app.services.store import SessionOverlapError
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-app = FastAPI(title="研途 API", version="0.3.0", docs_url="/docs")
+app = FastAPI(title="研途 API", version="0.7.0", docs_url="/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,

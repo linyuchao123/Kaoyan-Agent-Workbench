@@ -44,11 +44,15 @@ LangGraph 主路由
 
 ## 当前实现层级
 
-- `v0.3`：前端已接入 Supabase 邮箱密码登录、会话恢复与退出；FastAPI 通过 Supabase Auth 验证 Bearer Token，并将任务、会话和贡献统计切换到可配置的 Supabase Repository。
+- `v0.3`：完成 Supabase 邮箱密码登录、JWT 验证以及任务、会话和贡献统计云端持久化。
+- `v0.4`：完成三级计划、日计划关联任务、计划统计和错题间隔复习闭环。
+- `v0.5`：完成院校情报、求职副线和 JSON/CSV/Markdown 数据导出。
+- `v0.6`：完成私有 Storage、PDF/Markdown 上传、哈希去重、按页或标题切分以及关键词全文检索。
+- `v0.7`（开发中）：已有 LangGraph 路由、Tavily Provider 和人工确认界面；正在补齐真实模型回答、用户上下文、来源引用、云端提案与审计持久化。
 - 仓库边界：Demo Repository 用于测试和离线联调；Supabase Repository 使用用户 JWT 访问 PostgREST，不使用前端提交的 `user_id`，云端模式下数据可跨设备持久化。
 - 数据迁移：覆盖计划、任务、会话、知识点、做题记录、错题复习、院校、求职、资料、搜索、Agent 和审计实体。
 - 私有资料：Markdown 按标题切分，PDF 按页切分；低文本密度 PDF 标记为 `ocr_required`，待接入正式 OCR worker。
-- 联网资料：预览阶段校验公开 URL，默认不保存；批准导入后才进入下载、解析和向量化队列。
+- 联网资料：预览阶段已校验公开 URL，默认不保存；批准后的真实下载、解析和向量化队列仍在 v0.7 开发中。
 
 ## Agent 路由
 
