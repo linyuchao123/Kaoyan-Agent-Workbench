@@ -1612,7 +1612,8 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       const result = await api.runAgent(mode, text, threadId);
       setThreadId(result.thread_id);
       setProposal(result.proposal);
-      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode}` }]);
+      const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
+      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}` }]);
     } catch {
       const fallback = mode === "coach"
         ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"

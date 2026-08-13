@@ -74,6 +74,7 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertEqual(body["route"], "combined")
         self.assertEqual(body["retrieval_mode"], "hybrid")
+        self.assertEqual(body["model_status"], "fallback")
         self.assertEqual(self.task_count(), 0)
 
         proposal_id = body["proposal"]["id"]

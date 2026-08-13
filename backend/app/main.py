@@ -14,6 +14,7 @@ from pypdf import PdfReader
 
 from app.agents.context import build_agent_context
 from app.agents.graph import build_graph
+from app.agents.model import OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.schemas import (
@@ -67,7 +68,8 @@ app.add_middleware(
 
 repository = build_repository(settings)
 import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
-agent_graph = build_graph()
+agent_model = OpenAICompatibleAgentModel(settings)
+agent_graph = build_graph(agent_model)
 
 
 @app.exception_handler(RepositoryError)
@@ -551,6 +553,7 @@ async def run_agent(
         "answer": result.get("answer", "已完成分析。写入动作已转换为待确认提案。"),
         "route": result.get("route", agent),
         "retrieval_mode": result.get("retrieval_mode", "private"),
+        "model_status": result.get("model_status", "fallback"),
         "proposal": proposal,
         "created_at": datetime.now(UTC),
     }

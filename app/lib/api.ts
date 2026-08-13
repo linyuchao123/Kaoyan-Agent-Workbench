@@ -329,6 +329,7 @@ export const api = {
       answer: string;
       route: string;
       retrieval_mode: string;
+      model_status: "generated" | "fallback";
       proposal: ActionProposal;
     }>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",

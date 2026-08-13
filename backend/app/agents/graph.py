@@ -6,6 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from app.agents.context import AgentContext
+from app.agents.model import AgentModel
 from app.services.rag import choose_retrieval_mode
 
 
@@ -17,6 +18,7 @@ class WorkbenchState(TypedDict, total=False):
     user_id: str
     context: AgentContext
     answer: str
+    model_status: Literal["generated", "fallback"]
     proposal_ids: list[str]
 
 
@@ -36,7 +38,7 @@ def route_request(state: WorkbenchState) -> WorkbenchState:
     return {"route": route, "retrieval_mode": choose_retrieval_mode(text)}
 
 
-async def coach_subgraph(state: WorkbenchState) -> WorkbenchState:
+def coach_fallback(state: WorkbenchState) -> str:
     context = state.get("context", {})
     plans = context.get("active_plans", [])
     tasks = context.get("pending_tasks", [])
@@ -54,10 +56,10 @@ async def coach_subgraph(state: WorkbenchState) -> WorkbenchState:
         advice = f"当前建议先完成「{tasks[0]['title']}」，避免继续扩大计划与实际偏差。"
     else:
         advice = "目前没有待处理任务或到期错题，可以先建立今天最重要的一项学习任务。"
-    return {"answer": f"{summary}\n{advice}\n任何写入仍会先生成待确认提案。"}
+    return f"{summary}\n{advice}\n任何写入仍会先生成待确认提案。"
 
 
-async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
+def tutor_fallback(state: WorkbenchState) -> str:
     mode = state.get("retrieval_mode", "private")
     sources = state.get("context", {}).get("private_sources", [])
     if sources:
@@ -69,19 +71,54 @@ async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
         answer = "资料导师未在你的私有资料中找到足够证据，因此不会自行补全答案。"
     if mode in {"web", "hybrid"}:
         answer += "\n该问题还需要联网来源；当前结果仅包含已核验的个人资料证据。"
-    return {"answer": answer}
-
-
-async def combined_subgraph(state: WorkbenchState) -> WorkbenchState:
-    coach, tutor = await asyncio.gather(coach_subgraph(state), tutor_subgraph(state))
-    return {"answer": f"{coach['answer']}\n{tutor['answer']}"}
+    return answer
 
 
 def choose_branch(state: WorkbenchState) -> str:
     return state.get("route", "tutor")
 
 
-def build_graph():
+def build_graph(model: AgentModel):
+    async def coach_subgraph(state: WorkbenchState) -> WorkbenchState:
+        fallback = coach_fallback(state)
+        question = str(state["messages"][-1].content)
+        answer = await model.generate(
+            agent="coach",
+            question=question,
+            context=state.get("context", {}),
+            fallback=fallback,
+        )
+        return {
+            "answer": answer or fallback,
+            "model_status": "generated" if answer else "fallback",
+        }
+
+    async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
+        fallback = tutor_fallback(state)
+        sources = state.get("context", {}).get("private_sources", [])
+        if not sources:
+            return {"answer": fallback, "model_status": "fallback"}
+        question = str(state["messages"][-1].content)
+        answer = await model.generate(
+            agent="tutor",
+            question=question,
+            context=state.get("context", {}),
+            fallback=fallback,
+        )
+        return {
+            "answer": answer or fallback,
+            "model_status": "generated" if answer else "fallback",
+        }
+
+    async def combined_subgraph(state: WorkbenchState) -> WorkbenchState:
+        coach, tutor = await asyncio.gather(coach_subgraph(state), tutor_subgraph(state))
+        model_status = (
+            "generated"
+            if "generated" in {coach["model_status"], tutor["model_status"]}
+            else "fallback"
+        )
+        return {"answer": f"{coach['answer']}\n{tutor['answer']}", "model_status": model_status}
+
     graph = StateGraph(WorkbenchState)
     graph.add_node("route", route_request)
     graph.add_node("coach", coach_subgraph)
