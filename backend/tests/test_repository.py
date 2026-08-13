@@ -8,6 +8,7 @@ import httpx
 from app.auth import AuthUser
 from app.config import Settings
 from app.schemas import (
+    ActionProposal,
     CareerItemCreate,
     PlanCreate,
     PlanUpdate,
@@ -592,3 +593,87 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                     ended_at=started_at + timedelta(hours=1),
                 ),
             )
+
+    async def test_supabase_agent_proposal_uses_authenticated_rpc_without_owner_input(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        proposal_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
+            summary="创建一个 45 分钟的数据结构错题复习任务",
+            idempotency_key="agent-idempotency-key",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "thread_id": str(thread_id),
+                        "proposal": proposal.model_dump(mode="json"),
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved_thread_id, saved_proposal = await repository.create_agent_proposal(
+            self.user,
+            thread_id=None,
+            mode="coach",
+            proposal=proposal,
+        )
+
+        self.assertEqual(saved_thread_id, thread_id)
+        self.assertEqual(saved_proposal.id, proposal_id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/create_agent_proposal"))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        payload = json.loads(requests[0].content)
+        self.assertIsNone(payload["requested_thread_id"])
+        self.assertEqual(payload["requested_mode"], "coach")
+        self.assertNotIn("user_id", payload)
+
+    async def test_supabase_agent_decision_uses_atomic_rpc(self):
+        requests: list[httpx.Request] = []
+        proposal_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        response_proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
+            summary="创建一个 45 分钟的数据结构错题复习任务",
+            idempotency_key="agent-idempotency-key",
+            status="applied",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=response_proposal.model_dump(mode="json"))
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved = await repository.decide_agent_proposal(self.user, proposal_id, "approve")
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.status, "applied")
+        self.assertTrue(requests[0].url.path.endswith("/rpc/decide_agent_proposal"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_proposal_id"], str(proposal_id))
+        self.assertEqual(payload["requested_decision"], "approve")
+        self.assertNotIn("user_id", payload)

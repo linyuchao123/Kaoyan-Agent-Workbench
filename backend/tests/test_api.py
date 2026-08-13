@@ -25,8 +25,6 @@ class ApiFlowTests(TestCase):
 
         main.app.dependency_overrides[get_current_user] = authenticated_user
         main.import_proposals.clear()
-        main.action_proposals.clear()
-        main.applied_proposals.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self):
@@ -95,6 +93,19 @@ class ApiFlowTests(TestCase):
         self.client.post(f"/api/v1/proposals/{first['proposal']['id']}/approve")
         self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
         self.assertEqual(self.task_count(), 2)
+
+    def test_agent_proposal_isolated_from_other_user(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs", json={"message": "安排明天的 408 复习"}
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        response = self.client.post(f"/api/v1/proposals/{run['proposal']['id']}/approve")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.task_count(), 0)
 
     def test_users_cannot_read_or_modify_each_others_tasks(self):
         first = self.client.post(

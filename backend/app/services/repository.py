@@ -10,6 +10,7 @@ from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
+    ActionProposal,
     CareerItemCreate,
     CareerItemUpdate,
     ContributionDay,
@@ -129,6 +130,23 @@ class StudyRepository(Protocol):
         document_ids: list[UUID] | None = None,
     ) -> list[PrivateKnowledgeSource]: ...
 
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]: ...
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None: ...
+
 
 class DemoRepository:
     """User-isolated in-memory repository for tests and offline API development."""
@@ -146,12 +164,20 @@ class DemoRepository:
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
+        self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
+        self.action_proposals: dict[tuple[UUID, UUID], ActionProposal] = {}
+        self.proposal_ids_by_key: dict[tuple[UUID, str], UUID] = {}
+        self.audit_logs: list[dict[str, Any]] = []
 
     def clear(self) -> None:
         self.stores.clear()
         self.documents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
+        self.agent_threads.clear()
+        self.action_proposals.clear()
+        self.proposal_ids_by_key.clear()
+        self.audit_logs.clear()
 
     def _store(self, user: AuthUser) -> DemoStore:
         return self.stores.setdefault(user.id, DemoStore(self.timezone_name, self.now_factory))
@@ -331,6 +357,79 @@ class DemoRepository:
                 )
         matches.sort(key=lambda item: item.score, reverse=True)
         return matches[:limit]
+
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]:
+        if thread_id is None:
+            thread_id = UUID(int=len(self.agent_threads) + 1)
+            self.agent_threads[(user.id, thread_id)] = {"mode": mode, "title": proposal.summary}
+        elif (user.id, thread_id) not in self.agent_threads:
+            raise RepositoryValidationError("agent thread not found")
+        existing_id = self.proposal_ids_by_key.get((user.id, proposal.idempotency_key))
+        if existing_id:
+            return thread_id, self.action_proposals[(user.id, existing_id)]
+        self.action_proposals[(user.id, proposal.id)] = proposal
+        self.proposal_ids_by_key[(user.id, proposal.idempotency_key)] = proposal.id
+        self.audit_logs.append(
+            {"user_id": user.id, "proposal_id": proposal.id, "event_type": "proposal_created"}
+        )
+        return thread_id, proposal
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None:
+        proposal = self.action_proposals.get((user.id, proposal_id))
+        if not proposal:
+            return None
+        if decision == "approve" and proposal.status == "applied":
+            self.audit_logs.append(
+                {
+                    "user_id": user.id,
+                    "proposal_id": proposal.id,
+                    "event_type": "proposal_approval_replayed",
+                }
+            )
+            return proposal
+        if proposal.status not in {"pending", "edited"}:
+            return proposal
+        if decision == "approve":
+            if proposal.action != "create_review_task":
+                raise RepositoryValidationError("unsupported proposal action")
+            await self.create_task(
+                user,
+                TaskCreate(
+                    title=str(proposal.payload.get("title", "Agent 复习任务")),
+                    subject=str(proposal.payload.get("subject", "cs408")),
+                    planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
+                ),
+            )
+            status = "applied"
+        elif decision == "edit":
+            status = "edited"
+        else:
+            status = "rejected"
+        updated = proposal.model_copy(
+            update={"status": status, "payload": edited_payload or proposal.payload}
+        )
+        self.action_proposals[(user.id, proposal_id)] = updated
+        self.audit_logs.append(
+            {
+                "user_id": user.id,
+                "proposal_id": proposal.id,
+                "event_type": f"proposal_{decision}",
+            }
+        )
+        return updated
 
 
 class SupabaseRepository:
@@ -999,6 +1098,55 @@ class SupabaseRepository:
             },
         )
         return [PrivateKnowledgeSource.model_validate(row) for row in rows]
+
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/create_agent_proposal",
+            json={
+                "requested_thread_id": str(thread_id) if thread_id else None,
+                "requested_mode": mode,
+                "requested_agent": proposal.agent,
+                "requested_action": proposal.action,
+                "requested_payload": proposal.payload,
+                "requested_summary": proposal.summary,
+                "requested_idempotency_key": proposal.idempotency_key,
+            },
+        )
+        if not rows:
+            raise RepositoryError("Agent proposal was not persisted")
+        row = rows[0]
+        return UUID(str(row["thread_id"])), ActionProposal.model_validate(row["proposal"])
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None:
+        row = await self._request(
+            user,
+            "POST",
+            "rpc/decide_agent_proposal",
+            json={
+                "requested_proposal_id": str(proposal_id),
+                "requested_decision": decision,
+                "edited_payload": edited_payload,
+            },
+        )
+        if not row:
+            return None
+        payload = row[0] if isinstance(row, list) else row
+        return ActionProposal.model_validate(payload)
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

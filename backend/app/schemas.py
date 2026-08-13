@@ -227,7 +227,7 @@ class PrivateKnowledgeSource(BaseModel):
 
 class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
-    thread_id: str | None = None
+    thread_id: UUID | None = None
 
 
 class ActionProposal(BaseModel):

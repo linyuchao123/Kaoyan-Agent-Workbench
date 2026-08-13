@@ -65,8 +65,6 @@ app.add_middleware(
 
 repository = build_repository(settings)
 import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
-action_proposals: dict[UUID, tuple[UUID, ActionProposal]] = {}
-applied_proposals: set[str] = set()
 agent_graph = build_graph()
 
 
@@ -507,20 +505,24 @@ async def run_agent(
             "user_id": str(user.id),
         }
     )
-    thread_id = payload.thread_id or str(uuid4())
     proposal_id = uuid4()
     idempotency_key = sha256(
-        f"{thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
+        f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
     ).hexdigest()
     proposal = ActionProposal(
         id=proposal_id,
         agent="coach" if agent in {"coach", "combined"} else "tutor",
         action="create_review_task",
-        payload={"title": "数据结构错题回顾", "planned_minutes": 45},
+        payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
         summary="创建一个 45 分钟的数据结构错题复习任务",
         idempotency_key=idempotency_key,
     )
-    action_proposals[proposal.id] = (user.id, proposal)
+    thread_id, proposal = await repository.create_agent_proposal(
+        user,
+        thread_id=payload.thread_id,
+        mode=agent,
+        proposal=proposal,
+    )
     return {
         "thread_id": thread_id,
         "agent": agent,
@@ -540,22 +542,7 @@ async def decide_proposal(
 ) -> ActionProposal:
     if decision not in {"approve", "edit", "reject"}:
         raise HTTPException(422, "decision must be approve, edit or reject")
-    owned = action_proposals.get(proposal_id)
-    if not owned or owned[0] != user.id:
+    proposal = await repository.decide_agent_proposal(user, proposal_id, decision)
+    if not proposal:
         raise HTTPException(404, "proposal not found")
-    proposal = owned[1]
-    if decision == "approve":
-        if proposal.idempotency_key not in applied_proposals:
-            task_payload = TaskCreate(
-                title=str(proposal.payload.get("title", "Agent 复习任务")),
-                subject="cs408",
-                planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
-            )
-            await repository.create_task(user, task_payload)
-            applied_proposals.add(proposal.idempotency_key)
-        status = "applied"
-    else:
-        status = {"edit": "edited", "reject": "rejected"}[decision]
-    updated = proposal.model_copy(update={"status": status})
-    action_proposals[proposal_id] = (user.id, updated)
-    return updated
+    return proposal
