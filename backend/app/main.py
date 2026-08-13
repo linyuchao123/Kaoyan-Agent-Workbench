@@ -20,8 +20,10 @@ from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.schemas import (
     ActionProposal,
+    AgentCitation,
     AgentProposalEditRequest,
     AgentRunRequest,
+    AgentThreadHistory,
     CareerItemCreate,
     CareerItemType,
     CareerItemUpdate,
@@ -603,36 +605,57 @@ async def run_agent(
             mode=agent,
             title=payload.message[:160],
         )
+    answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
+    sources = [
+        AgentCitation(
+            source_type="private",
+            title=source["title"],
+            locator=source["locator"],
+        )
+        for source in context["private_sources"]
+    ] + [
+        AgentCitation(
+            source_type="web",
+            title=source["title"],
+            locator=source["url"],
+            url=source["url"],
+            accessed_at=source["accessed_at"],
+        )
+        for source in context["web_sources"]
+    ]
+    try:
+        await repository.append_agent_exchange(
+            user,
+            thread_id=thread_id,
+            user_message=payload.message,
+            agent_message=answer,
+            sources=sources,
+            metadata={
+                "route": result.get("route", agent),
+                "retrieval_mode": result.get("retrieval_mode", "private"),
+                "model_status": result.get("model_status", "fallback"),
+            },
+        )
+    except RepositoryError:
+        logger.warning("Agent run succeeded but its message history could not be persisted")
     return {
         "thread_id": thread_id,
         "agent": agent,
-        "answer": result.get("answer", "已完成分析。写入动作已转换为待确认提案。"),
+        "answer": answer,
         "route": result.get("route", agent),
         "retrieval_mode": result.get("retrieval_mode", "private"),
         "model_status": result.get("model_status", "fallback"),
-        "sources": [
-            {
-                "source_type": "private",
-                "title": source["title"],
-                "locator": source["locator"],
-                "url": None,
-                "accessed_at": None,
-            }
-            for source in context["private_sources"]
-        ]
-        + [
-            {
-                "source_type": "web",
-                "title": source["title"],
-                "locator": source["url"],
-                "url": source["url"],
-                "accessed_at": source["accessed_at"],
-            }
-            for source in context["web_sources"]
-        ],
+        "sources": sources,
         "proposal": proposal,
         "created_at": datetime.now(UTC),
     }
+
+
+@app.get("/api/v1/agents/threads/latest", response_model=AgentThreadHistory | None)
+async def latest_agent_thread(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AgentThreadHistory | None:
+    return await repository.latest_agent_thread(user)
 
 
 @app.get("/api/v1/proposals", response_model=list[ActionProposal])

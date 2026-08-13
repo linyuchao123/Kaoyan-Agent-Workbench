@@ -209,3 +209,27 @@ test("Agent 页面可读取当前账户的待审批提案", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Agent 页面可恢复当前账户最近一次对话", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response("null", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("agent-history-token");
+
+  try {
+    const history = await api.latestAgentThread();
+    assert.equal(history, null);
+    assert.match(request.input, /\/api\/v1\/agents\/threads\/latest$/);
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer agent-history-token");
+    assert.doesNotMatch(request.input, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

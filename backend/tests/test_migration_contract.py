@@ -98,3 +98,14 @@ class MigrationContractTests(TestCase):
         self.assertIn("owner_id uuid := auth.uid()", sql)
         self.assertIn("user_id = owner_id", sql)
         self.assertIn("to authenticated", sql)
+
+    def test_agent_message_history_is_owner_scoped_and_written_by_rpc(self):
+        sql = Path(
+            "supabase/migrations/202608130005_agent_message_history.sql"
+        ).read_text()
+        self.assertIn("create table if not exists public.agent_messages", sql)
+        self.assertIn("alter table public.agent_messages enable row level security", sql)
+        self.assertIn("using (user_id = auth.uid())", sql)
+        self.assertIn("create or replace function public.append_agent_exchange", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("grant execute on function public.append_agent_exchange", sql)

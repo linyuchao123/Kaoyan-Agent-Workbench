@@ -143,6 +143,22 @@ export type AgentSource = {
   accessed_at: string | null;
 };
 
+export type AgentMessage = {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  sources: AgentSource[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentThreadHistory = {
+  id: string;
+  mode: "coach" | "tutor" | "combined";
+  title: string;
+  messages: AgentMessage[];
+};
+
 export type ImportProposal = {
   id: string;
   url: string;
@@ -369,6 +385,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),
     }),
+  latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
   listPendingProposals: () => request<ActionProposal[]>("/api/v1/proposals?limit=10"),
   decideProposal: (
     id: string,

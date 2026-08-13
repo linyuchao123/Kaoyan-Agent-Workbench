@@ -127,6 +127,27 @@ class ApiFlowTests(TestCase):
         self.assertEqual(second.json()["status"], "applied")
         self.assertEqual(self.task_count(), 1)
 
+    def test_latest_agent_thread_restores_messages_and_is_user_isolated(self):
+        run = self.client.post(
+            "/api/v1/agents/tutor/runs",
+            json={"message": "解释二叉树的遍历"},
+        ).json()
+
+        history = self.client.get("/api/v1/agents/threads/latest")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()["id"], run["thread_id"])
+        self.assertEqual(history.json()["mode"], "tutor")
+        self.assertEqual(history.json()["messages"][0]["role"], "user")
+        self.assertEqual(history.json()["messages"][0]["content"], "解释二叉树的遍历")
+        self.assertEqual(history.json()["messages"][1]["role"], "agent")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertIsNone(self.client.get("/api/v1/agents/threads/latest").json())
+
     def test_separate_agent_runs_do_not_share_idempotency_key(self):
         payload = {"message": "安排明天的 408 复习"}
         first = self.client.post("/api/v1/agents/coach/runs", json=payload).json()

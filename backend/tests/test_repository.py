@@ -717,6 +717,61 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_title"], "解释顺序表")
         self.assertNotIn("user_id", payload)
 
+    async def test_supabase_agent_exchange_uses_controlled_rpc_and_restores_owned_thread(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        message_id = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.endswith("/rpc/append_agent_exchange"):
+                return httpx.Response(204)
+            if request.url.path.endswith("/agent_threads"):
+                return httpx.Response(
+                    200,
+                    json=[{"id": str(thread_id), "mode": "tutor", "title": "解释顺序表"}],
+                )
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": str(message_id),
+                        "role": "user",
+                        "content": "解释顺序表",
+                        "sources": [],
+                        "metadata": {},
+                        "created_at": "2026-08-13T09:00:00Z",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        await repository.append_agent_exchange(
+            self.user,
+            thread_id=thread_id,
+            user_message="解释顺序表",
+            agent_message="顺序表使用连续存储空间。",
+            sources=[],
+            metadata={"route": "tutor"},
+        )
+        history = await repository.latest_agent_thread(self.user)
+
+        self.assertEqual(history.id, thread_id)
+        self.assertEqual(history.messages[0].content, "解释顺序表")
+        rpc_payload = json.loads(requests[0].content)
+        self.assertEqual(rpc_payload["requested_thread_id"], str(thread_id))
+        self.assertNotIn("user_id", rpc_payload)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+        self.assertIn(f"thread_id=eq.{thread_id}", str(requests[2].url))
+
     async def test_supabase_pending_proposals_are_read_with_user_jwt(self):
         requests: list[httpx.Request] = []
         proposal = ActionProposal(

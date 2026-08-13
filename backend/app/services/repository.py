@@ -11,6 +11,9 @@ from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
     ActionProposal,
+    AgentCitation,
+    AgentMessage,
+    AgentThreadHistory,
     CareerItemCreate,
     CareerItemUpdate,
     ContributionDay,
@@ -178,6 +181,19 @@ class StudyRepository(Protocol):
         title: str,
     ) -> UUID: ...
 
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None: ...
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None: ...
+
     async def list_pending_agent_proposals(
         self, user: AuthUser, limit: int = 10
     ) -> list[ActionProposal]: ...
@@ -210,6 +226,7 @@ class DemoRepository:
         self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
         self.web_search_records: dict[tuple[UUID, UUID], WebSearchRecord] = {}
         self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
+        self.agent_messages: dict[tuple[UUID, UUID], list[AgentMessage]] = {}
         self.action_proposals: dict[tuple[UUID, UUID], ActionProposal] = {}
         self.proposal_ids_by_key: dict[tuple[UUID, str], UUID] = {}
         self.audit_logs: list[dict[str, Any]] = []
@@ -222,6 +239,7 @@ class DemoRepository:
         self.import_proposals.clear()
         self.web_search_records.clear()
         self.agent_threads.clear()
+        self.agent_messages.clear()
         self.action_proposals.clear()
         self.proposal_ids_by_key.clear()
         self.audit_logs.clear()
@@ -495,6 +513,57 @@ class DemoRepository:
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         return thread_id
+
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            raise RepositoryValidationError("agent thread not found")
+        now = datetime.now(UTC)
+        messages = self.agent_messages.setdefault((user.id, thread_id), [])
+        messages.extend(
+            [
+                AgentMessage(
+                    id=uuid4(), role="user", content=user_message, created_at=now
+                ),
+                AgentMessage(
+                    id=uuid4(),
+                    role="agent",
+                    content=agent_message,
+                    sources=sources,
+                    metadata=metadata,
+                    created_at=now,
+                ),
+            ]
+        )
+        thread["updated_at"] = now
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
+        owned = [
+            (thread_id, thread)
+            for (owner_id, thread_id), thread in self.agent_threads.items()
+            if owner_id == user.id
+        ]
+        if not owned:
+            return None
+        thread_id, thread = max(
+            owned,
+            key=lambda item: item[1].get("updated_at", datetime.min.replace(tzinfo=UTC)),
+        )
+        return AgentThreadHistory(
+            id=thread_id,
+            mode=thread["mode"],
+            title=thread["title"],
+            messages=self.agent_messages.get((user.id, thread_id), []),
+        )
 
     async def list_pending_agent_proposals(
         self, user: AuthUser, limit: int = 10
@@ -1393,6 +1462,60 @@ class SupabaseRepository:
         if not value:
             raise RepositoryError("Agent thread was not persisted")
         return UUID(str(value))
+
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/append_agent_exchange",
+            json={
+                "requested_thread_id": str(thread_id),
+                "user_content": user_message,
+                "agent_content": agent_message,
+                "agent_sources": [source.model_dump(mode="json") for source in sources],
+                "agent_metadata": metadata,
+            },
+        )
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
+        threads = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title",
+                "user_id": f"eq.{user.id}",
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        if not threads:
+            return None
+        thread = threads[0]
+        messages = await self._request(
+            user,
+            "GET",
+            "agent_messages",
+            params={
+                "select": "id,role,content,sources,metadata,created_at",
+                "user_id": f"eq.{user.id}",
+                "thread_id": f"eq.{thread['id']}",
+                "order": "created_at.asc,id.asc",
+            },
+        )
+        return AgentThreadHistory(
+            **thread,
+            messages=[AgentMessage.model_validate(message) for message in messages],
+        )
 
     async def list_pending_agent_proposals(
         self, user: AuthUser, limit: int = 10

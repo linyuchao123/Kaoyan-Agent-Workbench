@@ -1625,11 +1625,29 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   useEffect(() => {
     if (isDemo) return;
     let cancelled = false;
-    void api.listPendingProposals().then((items) => {
-      if (cancelled || items.length === 0) return;
-      setProposal(items[0]);
-      setProposalDraft(items[0].payload);
-      setMessages((messages) => [...messages, { role: "agent", text: "已恢复你上次未处理的 Agent 提案，请继续批准、编辑或拒绝。" }]);
+    void Promise.all([api.latestAgentThread(), api.listPendingProposals()]).then(([thread, items]) => {
+      if (cancelled) return;
+      const restoredMessages = thread?.messages.length
+        ? thread.messages.map((message) => ({
+            role: message.role,
+            text: message.content,
+            sources: message.sources,
+          }))
+        : null;
+      if (thread) {
+        setThreadId(thread.id);
+        setMode(thread.mode);
+      }
+      if (items.length > 0) {
+        setProposal(items[0]);
+        setProposalDraft(items[0].payload);
+      }
+      if (restoredMessages || items.length > 0) {
+        setMessages([
+          ...(restoredMessages ?? []),
+          ...(items.length > 0 ? [{ role: "agent" as const, text: "已恢复你上次未处理的 Agent 提案，请继续批准、编辑或拒绝。" }] : []),
+        ]);
+      }
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [isDemo]);

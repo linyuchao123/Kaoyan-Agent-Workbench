@@ -238,6 +238,30 @@ class AgentRunRequest(StrictRequestModel):
     thread_id: UUID | None = None
 
 
+class AgentCitation(BaseModel):
+    source_type: Literal["private", "web"]
+    title: str
+    locator: str
+    url: HttpUrl | None = None
+    accessed_at: datetime | None = None
+
+
+class AgentMessage(BaseModel):
+    id: UUID
+    role: Literal["user", "agent"]
+    content: str
+    sources: list[AgentCitation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AgentThreadHistory(BaseModel):
+    id: UUID
+    mode: Literal["coach", "tutor", "combined"]
+    title: str
+    messages: list[AgentMessage]
+
+
 class ActionProposal(BaseModel):
     id: UUID
     agent: Literal["coach", "tutor"]
