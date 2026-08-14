@@ -88,7 +88,12 @@ class MigrationContractTests(TestCase):
         self.assertIn("using (user_id = auth.uid())", sql)
         self.assertIn("enqueue_document_ocr", sql)
         self.assertIn("claim_document_ocr", sql)
+        self.assertIn("complete_document_ocr", sql)
+        self.assertIn("fail_document_ocr", sql)
         self.assertIn("for update skip locked", sql)
+        self.assertIn("delete from public.document_chunks", sql)
+        self.assertIn("ingestion_status = 'ready'", sql)
+        self.assertIn("should_retry", sql)
         self.assertIn("service role required", sql)
         self.assertIn("to service_role", sql)
 

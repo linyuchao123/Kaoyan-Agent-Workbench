@@ -102,7 +102,128 @@ begin
 end;
 $$;
 
+create or replace function public.complete_document_ocr(
+  requested_job_id uuid,
+  extracted_chunks jsonb
+)
+returns void
+language plpgsql security definer
+set search_path = public, extensions
+as $$
+declare
+  current_job public.ocr_jobs;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'service role required';
+  end if;
+
+  select * into current_job
+  from public.ocr_jobs
+  where id = requested_job_id
+  for update;
+
+  if current_job.id is null or current_job.status <> 'processing' then
+    raise exception 'processing OCR job not found';
+  end if;
+
+  delete from public.document_chunks
+  where document_id = current_job.document_id and user_id = current_job.user_id;
+
+  insert into public.document_chunks (
+    document_id,
+    user_id,
+    chunk_index,
+    heading,
+    page_number,
+    locator,
+    content,
+    flagged_untrusted_instruction,
+    embedding
+  )
+  select
+    current_job.document_id,
+    current_job.user_id,
+    (item ->> 'chunk_index')::integer,
+    nullif(item ->> 'heading', ''),
+    nullif(item ->> 'page_number', '')::integer,
+    item ->> 'locator',
+    item ->> 'content',
+    coalesce((item ->> 'flagged_untrusted_instruction')::boolean, false),
+    case
+      when item -> 'embedding' is null or item -> 'embedding' = 'null'::jsonb then null
+      else (item ->> 'embedding')::extensions.vector(1536)
+    end
+  from jsonb_array_elements(extracted_chunks) item;
+
+  update public.documents
+  set ingestion_status = 'ready', ingestion_error = null, updated_at = now()
+  where id = current_job.document_id and user_id = current_job.user_id;
+
+  update public.ocr_jobs
+  set
+    status = 'completed',
+    completed_at = now(),
+    locked_at = null,
+    last_error = null,
+    updated_at = now()
+  where id = current_job.id;
+end;
+$$;
+
+create or replace function public.fail_document_ocr(
+  requested_job_id uuid,
+  failure_message text
+)
+returns void
+language plpgsql security definer
+set search_path = public
+as $$
+declare
+  current_job public.ocr_jobs;
+  should_retry boolean;
+begin
+  if auth.role() <> 'service_role' then
+    raise exception 'service role required';
+  end if;
+
+  select * into current_job
+  from public.ocr_jobs
+  where id = requested_job_id
+  for update;
+
+  if current_job.id is null or current_job.status <> 'processing' then
+    raise exception 'processing OCR job not found';
+  end if;
+
+  should_retry := current_job.attempts < current_job.max_attempts;
+  update public.ocr_jobs
+  set
+    status = case when should_retry then 'queued' else 'failed' end,
+    available_at = case
+      when should_retry then now() + make_interval(
+        mins => least(30, power(2, greatest(current_job.attempts - 1, 0))::integer)
+      )
+      else available_at
+    end,
+    locked_at = null,
+    last_error = left(failure_message, 1000),
+    updated_at = now()
+  where id = current_job.id;
+
+  update public.documents
+  set
+    ingestion_status = case when should_retry then 'ocr_required' else 'failed' end,
+    ingestion_error = left(failure_message, 1000),
+    updated_at = now()
+  where id = current_job.document_id and user_id = current_job.user_id;
+end;
+$$;
+
 revoke all on function public.enqueue_document_ocr(uuid) from public;
 grant execute on function public.enqueue_document_ocr(uuid) to authenticated;
 revoke all on function public.claim_document_ocr() from public;
 grant execute on function public.claim_document_ocr() to service_role;
+revoke all on function public.complete_document_ocr(uuid, jsonb) from public;
+grant execute on function public.complete_document_ocr(uuid, jsonb) to service_role;
+revoke all on function public.fail_document_ocr(uuid, text) from public;
+grant execute on function public.fail_document_ocr(uuid, text) to service_role;

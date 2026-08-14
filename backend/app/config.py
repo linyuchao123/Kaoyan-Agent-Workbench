@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     chat_model: str = "gpt-5-mini"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
+    ocr_model: str = "gpt-5-mini"
+    ocr_max_pages: int = 100
+    ocr_poll_seconds: float = 5.0
+    pdftoppm_path: str = "pdftoppm"
     tavily_api_key: str = ""
     demo_mode: bool = True
 
