@@ -1697,21 +1697,41 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       setMessages((items) => [...items, { role: "agent", text: "当前为离线演示模式。登录并连接 Supabase 后，Agent 才能读取你的个人学习数据。" }]);
       return;
     }
+    setMessages((items) => [...items, { role: "agent", text: "正在准备回答…" }]);
+    let streamedAnswer = "";
+    const updateStreamingMessage = (message: string, sources?: AgentSource[]) => {
+      setMessages((items) => {
+        const updated = [...items];
+        const index = updated.length - 1;
+        if (index >= 0 && updated[index].role === "agent") {
+          updated[index] = { role: "agent", text: message, sources };
+        }
+        return updated;
+      });
+    };
     const controller = new AbortController();
     agentRequest.current = controller;
     setBusy(true);
     try {
-      const result = await api.runAgent(mode, text, threadId, controller.signal);
+      const result = await api.runAgentStream(mode, text, threadId, {
+        onStatus: (message) => {
+          if (!streamedAnswer) updateStreamingMessage(`${message}…`);
+        },
+        onDelta: (delta) => {
+          streamedAnswer += delta;
+          updateStreamingMessage(streamedAnswer);
+        },
+      }, controller.signal);
       setThreadId(result.thread_id);
       void api.listAgentThreads().then(setThreads).catch(() => undefined);
       setProposal(result.proposal);
       setProposalDraft(result.proposal?.payload ?? null);
       setEditingProposal(false);
       const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
-      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, sources: result.sources }]);
+      updateStreamingMessage(`${streamedAnswer || result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, result.sources);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setMessages((items) => [...items, { role: "agent", text: "已停止等待本次回答。服务端可能仍在安全完成分析，你可以稍后从历史对话中恢复结果；没有经过确认的提案不会写入学习数据。" }]);
+        updateStreamingMessage(`${streamedAnswer}${streamedAnswer ? "\n\n" : ""}已停止生成。本次未完整回答不会写入对话历史；没有经过确认的提案不会写入学习数据。`);
         return;
       }
       const fallback = mode === "coach"
@@ -1719,7 +1739,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
         : mode === "tutor"
           ? "资料导师当前无法连接检索服务。为避免无依据回答，我暂不补全事实。"
           : "双 Agent API 尚未连接；当前消息没有写入任何学习数据。";
-      setMessages((items) => [...items, { role: "agent", text: fallback }]);
+      updateStreamingMessage(fallback);
     } finally {
       if (agentRequest.current === controller) {
         agentRequest.current = null;

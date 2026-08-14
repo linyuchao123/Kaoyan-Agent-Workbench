@@ -21,11 +21,12 @@ test("Agent 页面展示历史对话并允许读取指定线程", () => {
   assert.match(pageSource, /api\.getAgentThread\(selectedThreadId\)/);
 });
 
-test("Agent 长请求可以停止等待且不会宣称服务端已经终止", () => {
+test("Agent 流式请求可以停止生成且不会写入未完成回答", () => {
   assert.match(pageSource, /new AbortController\(\)/);
   assert.match(pageSource, /agentRequest\.current\?\.abort\(\)/);
   assert.match(pageSource, /停止等待/);
-  assert.match(pageSource, /服务端可能仍在安全完成分析/);
+  assert.match(pageSource, /本次未完整回答不会写入对话历史/);
+  assert.match(pageSource, /api\.runAgentStream/);
 });
 
 test("Agent 新消息自动滚动并支持复制回答", () => {
