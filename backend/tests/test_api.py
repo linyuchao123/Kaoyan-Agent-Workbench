@@ -72,6 +72,22 @@ class ApiFlowTests(TestCase):
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("token", serialized)
 
+    def test_agent_sse_stream_reports_status_delta_and_persisted_done_event(self):
+        response = self.client.post(
+            "/api/v1/agents/tutor/runs/stream",
+            json={"message": "解释一个资料库里没有的概念"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertIn("event: status", response.text)
+        self.assertIn("event: delta", response.text)
+        self.assertIn("event: done", response.text)
+        self.assertIn('"model_status": "fallback"', response.text)
+        history = self.client.get("/api/v1/agents/threads/latest").json()
+        self.assertEqual(history["messages"][0]["role"], "user")
+        self.assertEqual(history["messages"][1]["role"], "agent")
+
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
             "/api/v1/tasks",

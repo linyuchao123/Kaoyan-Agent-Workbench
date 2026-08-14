@@ -1,6 +1,6 @@
 from unittest import IsolatedAsyncioTestCase
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.agents.model import OpenAICompatibleAgentModel
 from app.config import Settings
@@ -16,6 +16,13 @@ class FakeChatModel:
         if isinstance(self.response, Exception):
             raise self.response
         return AIMessage(content=self.response)
+
+    async def astream(self, messages):
+        self.messages = messages
+        if isinstance(self.response, Exception):
+            raise self.response
+        for text in ("先复习", "极限错题。"):
+            yield AIMessageChunk(content=text)
 
 
 class AgentModelTests(IsolatedAsyncioTestCase):
@@ -94,3 +101,30 @@ class AgentModelTests(IsolatedAsyncioTestCase):
         )
 
         self.assertIsNone(answer)
+
+    async def test_model_stream_yields_provider_deltas(self):
+        model = OpenAICompatibleAgentModel(Settings(openai_api_key="test-key"))
+        fake = FakeChatModel("unused")
+        model.client = fake
+
+        chunks = [
+            chunk
+            async for chunk in model.stream(
+                agent="coach",
+                question="安排任务",
+                context={
+                    "active_plans": [],
+                    "pending_tasks": [],
+                    "recent_sessions": [],
+                    "due_mistakes": [],
+                    "private_sources": [],
+                    "web_sources": [],
+                    "web_search_status": "not_requested",
+                    "recent_effective_minutes": 0,
+                },
+                fallback="保底回答",
+            )
+        ]
+
+        self.assertEqual(chunks, ["先复习", "极限错题。"])
+        self.assertIn("所有写入必须由用户另行批准", fake.messages[0][1])

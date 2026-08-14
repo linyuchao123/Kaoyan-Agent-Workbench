@@ -1,20 +1,22 @@
+import asyncio
+import json
 import logging
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from io import BytesIO
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
-from app.agents.context import build_agent_context
-from app.agents.graph import build_graph
+from app.agents.context import AgentContext, build_agent_context
+from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
@@ -607,14 +609,11 @@ async def retry_document_ocr(
     return await repository.enqueue_document_ocr(user, document_id)
 
 
-@app.post("/api/v1/agents/{agent}/runs")
-async def run_agent(
-    agent: str,
+async def prepare_agent_execution(
+    agent: Literal["coach", "tutor", "combined"],
     payload: AgentRunRequest,
-    user: Annotated[AuthUser, Depends(get_current_user)],
-) -> dict:
-    if agent not in {"coach", "tutor", "combined"}:
-        raise HTTPException(404, "unknown agent")
+    user: AuthUser,
+) -> tuple[str, AgentContext, UUID, ActionProposal | None]:
     retrieval_mode = choose_retrieval_mode(payload.message)
     query_embedding = (
         await embedding_provider.embed_query(payload.message)
@@ -630,16 +629,9 @@ async def run_agent(
         search_provider=search_provider,
         query_embedding=query_embedding,
     )
-    result = await agent_graph.ainvoke(
-        {
-            "messages": [HumanMessage(content=payload.message)],
-            "requested_route": agent,
-            "user_id": str(user.id),
-            "context": context,
-        }
-    )
     wants_write = agent == "coach" or (
-        agent == "combined" and any(marker in payload.message for marker in WRITE_INTENT_MARKERS)
+        agent == "combined"
+        and any(marker in payload.message for marker in WRITE_INTENT_MARKERS)
     )
     proposal: ActionProposal | None = None
     if wants_write:
@@ -660,7 +652,11 @@ async def run_agent(
             id=proposal_id,
             agent="coach",
             action="create_review_task",
-            payload={"title": proposal_title, "subject": proposal_subject, "planned_minutes": 45},
+            payload={
+                "title": proposal_title,
+                "subject": proposal_subject,
+                "planned_minutes": 45,
+            },
             summary=f"创建一个 45 分钟的「{proposal_title}」任务",
             idempotency_key=idempotency_key,
         )
@@ -677,8 +673,11 @@ async def run_agent(
             mode=agent,
             title=payload.message[:160],
         )
-    answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
-    sources = [
+    return retrieval_mode, context, thread_id, proposal
+
+
+def agent_citations(context: AgentContext) -> list[AgentCitation]:
+    return [
         AgentCitation(
             source_type="private",
             title=source["title"],
@@ -695,32 +694,191 @@ async def run_agent(
         )
         for source in context["web_sources"]
     ]
+
+
+async def persist_agent_exchange(
+    *,
+    user: AuthUser,
+    thread_id: UUID,
+    message: str,
+    answer: str,
+    sources: list[AgentCitation],
+    route: str,
+    retrieval_mode: str,
+    model_status: str,
+) -> None:
     try:
         await repository.append_agent_exchange(
             user,
             thread_id=thread_id,
-            user_message=payload.message,
+            user_message=message,
             agent_message=answer,
             sources=sources,
             metadata={
-                "route": result.get("route", agent),
-                "retrieval_mode": result.get("retrieval_mode", "private"),
-                "model_status": result.get("model_status", "fallback"),
+                "route": route,
+                "retrieval_mode": retrieval_mode,
+                "model_status": model_status,
             },
         )
     except RepositoryError:
         logger.warning("Agent run succeeded but its message history could not be persisted")
+
+
+@app.post("/api/v1/agents/{agent}/runs")
+async def run_agent(
+    agent: str,
+    payload: AgentRunRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    if agent not in {"coach", "tutor", "combined"}:
+        raise HTTPException(404, "unknown agent")
+    requested_agent = cast(Literal["coach", "tutor", "combined"], agent)
+    retrieval_mode, context, thread_id, proposal = await prepare_agent_execution(
+        requested_agent, payload, user
+    )
+    result = await agent_graph.ainvoke(
+        {
+            "messages": [HumanMessage(content=payload.message)],
+            "requested_route": requested_agent,
+            "user_id": str(user.id),
+            "context": context,
+        }
+    )
+    answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
+    sources = agent_citations(context)
+    route = result.get("route", requested_agent)
+    model_status = result.get("model_status", "fallback")
+    await persist_agent_exchange(
+        user=user,
+        thread_id=thread_id,
+        message=payload.message,
+        answer=answer,
+        sources=sources,
+        route=route,
+        retrieval_mode=retrieval_mode,
+        model_status=model_status,
+    )
     return {
         "thread_id": thread_id,
-        "agent": agent,
+        "agent": requested_agent,
         "answer": answer,
-        "route": result.get("route", agent),
-        "retrieval_mode": result.get("retrieval_mode", "private"),
-        "model_status": result.get("model_status", "fallback"),
+        "route": route,
+        "retrieval_mode": retrieval_mode,
+        "model_status": model_status,
         "sources": sources,
         "proposal": proposal,
         "created_at": datetime.now(UTC),
     }
+
+
+def encode_sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+@app.post("/api/v1/agents/{agent}/runs/stream")
+async def stream_agent(
+    agent: str,
+    payload: AgentRunRequest,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> StreamingResponse:
+    if agent not in {"coach", "tutor", "combined"}:
+        raise HTTPException(404, "unknown agent")
+    requested_agent = cast(Literal["coach", "tutor", "combined"], agent)
+
+    async def event_stream():
+        try:
+            yield encode_sse(
+                "status", {"stage": "context", "message": "正在读取学习记录与资料来源"}
+            )
+            retrieval_mode, context, thread_id, proposal = await prepare_agent_execution(
+                requested_agent, payload, user
+            )
+            sources = agent_citations(context)
+            yield encode_sse(
+                "status", {"stage": "generation", "message": "正在生成可追溯回答"}
+            )
+            answer_parts: list[str] = []
+            generated = False
+            state = {"context": context, "retrieval_mode": retrieval_mode}
+
+            async def stream_branch(kind: Literal["coach", "tutor"]):
+                nonlocal generated
+                fallback = coach_fallback(state) if kind == "coach" else tutor_fallback(state)
+                has_evidence = bool(context["private_sources"] or context["web_sources"])
+                can_generate = kind == "coach" or has_evidence
+                received = False
+                if can_generate:
+                    async for delta in agent_model.stream(
+                        agent=kind,
+                        question=payload.message,
+                        context=context,
+                        fallback=fallback,
+                    ):
+                        received = True
+                        generated = True
+                        answer_parts.append(delta)
+                        yield encode_sse("delta", {"text": delta})
+                if not received:
+                    answer_parts.append(fallback)
+                    yield encode_sse("delta", {"text": fallback})
+
+            branches: tuple[Literal["coach", "tutor"], ...] = (
+                ("coach", "tutor")
+                if requested_agent == "combined"
+                else (cast(Literal["coach", "tutor"], requested_agent),)
+            )
+            for branch_index, branch in enumerate(branches):
+                if branch_index:
+                    answer_parts.append("\n\n")
+                    yield encode_sse("delta", {"text": "\n\n"})
+                async for event in stream_branch(branch):
+                    yield event
+
+            answer = "".join(answer_parts)
+            model_status = "generated" if generated else "fallback"
+            await persist_agent_exchange(
+                user=user,
+                thread_id=thread_id,
+                message=payload.message,
+                answer=answer,
+                sources=sources,
+                route=requested_agent,
+                retrieval_mode=retrieval_mode,
+                model_status=model_status,
+            )
+            yield encode_sse(
+                "done",
+                {
+                    "thread_id": str(thread_id),
+                    "agent": requested_agent,
+                    "answer": answer,
+                    "route": requested_agent,
+                    "retrieval_mode": retrieval_mode,
+                    "model_status": model_status,
+                    "sources": [source.model_dump(mode="json") for source in sources],
+                    "proposal": proposal.model_dump(mode="json") if proposal else None,
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Streaming Agent run failed")
+            yield encode_sse(
+                "error",
+                {
+                    "message": "Agent 流式回答失败，未确认的提案不会写入学习数据。",
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/v1/agents/threads/latest", response_model=AgentThreadHistory | None)
