@@ -27,3 +27,10 @@ test("Agent 长请求可以停止等待且不会宣称服务端已经终止", ()
   assert.match(pageSource, /停止等待/);
   assert.match(pageSource, /服务端可能仍在安全完成分析/);
 });
+
+test("Agent 新消息自动滚动并支持复制回答", () => {
+  assert.match(pageSource, /messageListRef/);
+  assert.match(pageSource, /messageList\.scrollTop = messageList\.scrollHeight/);
+  assert.match(pageSource, /navigator\.clipboard\.writeText\(text\)/);
+  assert.match(pageSource, /复制回答/);
+});

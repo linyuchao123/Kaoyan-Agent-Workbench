@@ -1626,7 +1626,9 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] = useState<ApiHealth["agent"] | null>(null);
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
+  const [copyFeedback, setCopyFeedback] = useState<{ index: number; label: string } | null>(null);
   const agentRequest = useRef<AbortController | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
 
   function restoreThread(thread: AgentThreadHistory) {
     setThreadId(thread.id);
@@ -1645,6 +1647,14 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   }, []);
 
   useEffect(() => () => agentRequest.current?.abort(), []);
+
+  useEffect(() => {
+    const scrollFrame = window.requestAnimationFrame(() => {
+      const messageList = messageListRef.current;
+      if (messageList) messageList.scrollTop = messageList.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(scrollFrame);
+  }, [messages]);
 
   useEffect(() => {
     if (isDemo) return;
@@ -1720,6 +1730,15 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
 
   function stopWaiting() {
     agentRequest.current?.abort();
+  }
+
+  async function copyAgentMessage(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyFeedback({ index, label: "已复制" });
+    } catch {
+      setCopyFeedback({ index, label: "复制失败" });
+    }
   }
 
   function startNewConversation() {
@@ -1827,12 +1846,13 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
             <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)} disabled={busy}>{label}</button>
           ))}
         </div>
-        <div className="message-list">
+        <div className="message-list" ref={messageListRef}>
           {messages.map((message, index) => (
             <div className={`message ${message.role}`} key={index}>
               <span>{message.role === "agent" ? "✦" : "你"}</span>
               <div className="message-body">
                 <p>{message.text}</p>
+                {message.role === "agent" && <button className="message-copy-button" type="button" onClick={() => void copyAgentMessage(message.text, index)}>{copyFeedback?.index === index ? copyFeedback.label : "复制回答"}</button>}
                 {message.sources && message.sources.length > 0 && (
                   <div className="agent-sources">
                     <strong>本次回答来源</strong>
