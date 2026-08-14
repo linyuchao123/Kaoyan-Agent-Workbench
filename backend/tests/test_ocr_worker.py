@@ -1,10 +1,10 @@
-from unittest import IsolatedAsyncioTestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
 from uuid import UUID
 
 from app.config import Settings
 from app.services.embeddings import OpenAICompatibleEmbeddingProvider
 from app.services.ingestion import TextChunk
-from app.workers.ocr import OcrWorker, OcrWorkItem
+from app.workers.ocr import OcrWorker, OcrWorkItem, SupabaseOcrQueue
 
 
 class FakeQueue:
@@ -47,6 +47,32 @@ class FakeEmbeddingProvider:
 
     async def embed_query(self, text: str) -> list[float]:
         return [0.1, 0.2, 0.3]
+
+
+class SupabaseOcrQueueAuthTests(TestCase):
+    def test_new_secret_key_is_only_sent_as_api_key(self):
+        queue = SupabaseOcrQueue(
+            Settings(
+                supabase_url="https://example.supabase.co",
+                supabase_service_role_key="sb_secret_example",
+            )
+        )
+
+        self.assertEqual(queue.headers, {"apikey": "sb_secret_example"})
+
+    def test_legacy_service_role_jwt_keeps_bearer_header(self):
+        queue = SupabaseOcrQueue(
+            Settings(
+                supabase_url="https://example.supabase.co",
+                supabase_service_role_key="legacy-service-role-jwt",
+            )
+        )
+
+        self.assertEqual(queue.headers["apikey"], "legacy-service-role-jwt")
+        self.assertEqual(
+            queue.headers["Authorization"],
+            "Bearer legacy-service-role-jwt",
+        )
 
 
 class OcrWorkerTests(IsolatedAsyncioTestCase):

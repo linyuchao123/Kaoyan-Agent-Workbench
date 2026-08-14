@@ -64,10 +64,12 @@ class SupabaseOcrQueue:
 
     @property
     def headers(self) -> dict[str, str]:
-        return {
-            "apikey": self.service_key,
-            "Authorization": f"Bearer {self.service_key}",
-        }
+        headers = {"apikey": self.service_key}
+        # Supabase's new sb_secret keys are opaque API keys, not JWTs. Legacy
+        # service_role keys still need the Bearer header for PostgREST auth.
+        if not self.service_key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {self.service_key}"
+        return headers
 
     async def _request(self, method: str, path: str, *, json: Any = None) -> Any:
         async with httpx.AsyncClient(timeout=60, transport=self.transport) as client:
