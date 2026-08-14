@@ -50,7 +50,7 @@ from app.schemas import (
 )
 from app.services.embeddings import OpenAICompatibleEmbeddingProvider
 from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
-from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
+from app.services.ingestion import chunk_markdown, chunk_pages, document_hash, embed_safe_chunks
 from app.services.rag import choose_retrieval_mode
 from app.services.repository import (
     RepositoryConflictError,
@@ -475,6 +475,8 @@ async def upload_document(
 
     content_type = "application/pdf" if suffix == "pdf" else "text/markdown"
     chunks, status = prepare_document_chunks(content, content_type)
+    if status == "ready":
+        chunks = await embed_safe_chunks(chunks, embedding_provider)
     item, duplicate = await repository.persist_document(
         user,
         document_id=uuid4(),
@@ -529,6 +531,8 @@ async def approve_import(
 
     filename = downloaded.filename.replace("\\", "_").replace("/", "_")[:180]
     chunks, status = prepare_document_chunks(downloaded.content, downloaded.content_type)
+    if status == "ready":
+        chunks = await embed_safe_chunks(chunks, embedding_provider)
     document, duplicate = await repository.persist_document(
         user,
         document_id=uuid4(),

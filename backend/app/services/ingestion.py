@@ -1,7 +1,8 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 
+from app.services.embeddings import EmbeddingProvider
 from app.services.security import contains_prompt_injection
 
 
@@ -13,6 +14,29 @@ class TextChunk:
     content: str
     page_number: int | None
     flagged_untrusted_instruction: bool
+    embedding: list[float] | None = None
+
+
+async def embed_safe_chunks(
+    chunks: list[TextChunk], provider: EmbeddingProvider
+) -> list[TextChunk]:
+    """Embed retrievable chunks while leaving unsafe or failed items keyword-only."""
+    safe_positions = [
+        position
+        for position, chunk in enumerate(chunks)
+        if not chunk.flagged_untrusted_instruction and chunk.content.strip()
+    ]
+    if not safe_positions:
+        return chunks
+    vectors = await provider.embed_documents(
+        [chunks[position].content for position in safe_positions]
+    )
+    if vectors is None:
+        return chunks
+    indexed = list(chunks)
+    for position, vector in zip(safe_positions, vectors, strict=True):
+        indexed[position] = replace(chunks[position], embedding=vector)
+    return indexed
 
 
 def document_hash(content: bytes) -> str:

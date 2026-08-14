@@ -1292,6 +1292,7 @@ class SupabaseRepository:
                         "locator": chunk.locator,
                         "content": chunk.content,
                         "flagged_untrusted_instruction": chunk.flagged_untrusted_instruction,
+                        "embedding": chunk.embedding,
                     }
                     for chunk in chunks
                 ],

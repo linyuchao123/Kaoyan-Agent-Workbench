@@ -17,7 +17,7 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
 )
-from app.services.ingestion import chunk_markdown
+from app.services.ingestion import TextChunk
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
@@ -442,7 +442,17 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         repository = SupabaseRepository(settings, httpx.MockTransport(handler))
         content = b"# Limits\nDefinition and examples"
-        chunks = chunk_markdown(content.decode())
+        chunks = [
+            TextChunk(
+                index=0,
+                heading="Limits",
+                locator="Limits · 片段 1",
+                content="Definition and examples",
+                page_number=None,
+                flagged_untrusted_instruction=False,
+                embedding=[0.1, 0.2, 0.3],
+            )
+        ]
         document, duplicate = await repository.persist_document(
             self.user,
             document_id=document_id,
@@ -469,6 +479,7 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(chunk_payload["document_id"], str(document_id))
         self.assertEqual(chunk_payload["user_id"], str(self.user.id))
         self.assertIsNone(chunk_payload["page_number"])
+        self.assertEqual(chunk_payload["embedding"], [0.1, 0.2, 0.3])
 
     async def test_supabase_document_upload_reuses_existing_hash(self):
         requests: list[httpx.Request] = []
