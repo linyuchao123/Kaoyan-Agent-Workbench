@@ -1932,6 +1932,97 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   );
 }
 
+type WorkbenchSearchEntry = {
+  id: string;
+  view: View;
+  category: string;
+  title: string;
+  detail: string;
+};
+
+function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; isDemo: boolean; onClose: () => void; onNavigate: (view: View) => void }) {
+  const [query, setQuery] = useState("");
+  const [entries, setEntries] = useState<WorkbenchSearchEntry[]>([]);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    const focusFrame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (isDemo) return;
+    let active = true;
+    void Promise.all([
+      api.today(),
+      api.listPlans(),
+      api.listMistakes(),
+      api.listSchoolOptions(),
+      api.listDocuments(),
+      api.listCareerItems(),
+    ]).then(([today, plans, mistakes, schools, documents, careerItems]) => {
+      if (!active) return;
+      setEntries([
+        ...today.tasks.map((task) => ({ id: task.id, view: "today" as const, category: "今日任务", title: task.title, detail: `${subjectMeta[task.subject].label} · ${task.planned_minutes} 分钟` })),
+        ...plans.map((plan) => ({ id: plan.id, view: "plan" as const, category: `${plan.level === "stage" ? "阶段" : plan.level === "week" ? "周" : "日"}计划`, title: plan.title, detail: `${plan.starts_on} 至 ${plan.ends_on}` })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "错题卡", title: mistake.title, detail: subjectMeta[mistake.subject].label })),
+        ...schools.map((school) => ({ id: school.id, view: "schools" as const, category: "院校情报", title: `${school.university} · ${school.major_name}`, detail: `${school.college} · ${school.exam_year}` })),
+        ...documents.map((document) => ({ id: document.id, view: "materials" as const, category: "个人资料", title: document.title, detail: document.original_filename || document.content_type })),
+        ...careerItems.map((item) => ({ id: item.id, view: "career" as const, category: "求职记录", title: item.title, detail: item.company || careerStatusMeta[item.status] })),
+      ]);
+      setStatus("搜索范围仅包含当前账户的云端数据");
+    }).catch((error) => {
+      if (active) setStatus(error instanceof Error ? `搜索数据加载失败：${error.message}` : "搜索数据加载失败");
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [isDemo, open]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const results = normalizedQuery
+    ? entries.filter((entry) => `${entry.category} ${entry.title} ${entry.detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery)).slice(0, 30)
+    : [];
+  const visibleStatus = isDemo ? "离线演示模式不读取个人数据，登录后可使用全局搜索。" : status;
+  const visibleLoading = !isDemo && loading;
+  if (!open) return null;
+
+  return (
+    <div className="global-search-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="global-search-dialog panel" role="dialog" aria-modal="true" aria-labelledby="global-search-title">
+        <div className="global-search-field">
+          <span>⌕</span>
+          <label className="visually-hidden" htmlFor="global-search-input" id="global-search-title">搜索个人工作台</label>
+          <input id="global-search-input" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、计划、错题、院校、资料或求职记录" />
+          <button type="button" aria-label="关闭搜索" onClick={onClose}>Esc</button>
+        </div>
+        <div className="global-search-results">
+          {visibleLoading ? <div className="global-search-empty">正在读取你的云端数据…</div>
+            : !normalizedQuery ? <div className="global-search-empty">输入关键词开始搜索，结果不会离开你的账户。</div>
+              : results.length === 0 ? <div className="global-search-empty">没有找到匹配记录</div>
+                : results.map((entry) => (
+                  <button key={`${entry.view}-${entry.id}`} type="button" onClick={() => { onNavigate(entry.view); onClose(); }}>
+                    <span>{entry.category}</span><strong>{entry.title}</strong><small>{entry.detail}</small>
+                  </button>
+                ))}
+        </div>
+        <small className="global-search-status">{visibleStatus}</small>
+      </section>
+    </div>
+  );
+}
+
 function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDemo: boolean; onClose: () => void; onSaved: () => void }) {
   const [kind, setKind] = useState<"task" | "mistake">("task");
   const [subject, setSubject] = useState<Subject>("math");
@@ -2031,6 +2122,7 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
 function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
@@ -2056,10 +2148,11 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" onClick={() => setSearchOpen(true)}>⌕</button><button aria-label="通知">○</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
+      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
     </main>
   );
