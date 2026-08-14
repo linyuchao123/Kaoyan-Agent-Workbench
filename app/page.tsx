@@ -2035,6 +2035,7 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
   const [items, setItems] = useState<AttentionEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState("");
+  const loadedOnce = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -2046,7 +2047,7 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
   }, [onClose, open]);
 
   useEffect(() => {
-    if (!open || isDemo) return;
+    if (isDemo || (!open && loadedOnce.current)) return;
     let active = true;
     void Promise.all([
       api.today(),
@@ -2061,12 +2062,14 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
         ...proposals.filter((proposal) => proposal.status === "pending" || proposal.status === "edited").map((proposal) => ({ id: proposal.id, view: "agents" as const, category: "Agent 提案", title: proposal.summary, detail: "需要批准、编辑或拒绝" })),
         ...documents.filter((document) => document.ingestion_status === "ocr_required" || document.ingestion_status === "failed").map((document) => ({ id: document.id, view: "materials" as const, category: document.ingestion_status === "ocr_required" ? "等待 OCR" : "资料处理失败", title: document.title, detail: document.ingestion_error || document.original_filename || "请进入资料库检查" })),
       ].slice(0, 30);
+      loadedOnce.current = true;
       setItems(nextItems);
       setStatus("待处理事项来自当前账户的实时云端记录");
       setLoading(false);
       onCountChange(nextItems.length);
     }).catch((error) => {
       if (!active) return;
+      loadedOnce.current = true;
       setStatus(error instanceof Error ? `待处理事项加载失败：${error.message}` : "待处理事项加载失败");
       setLoading(false);
     });

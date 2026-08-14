@@ -21,6 +21,13 @@ test("事项中心汇总真实待完成记录", () => {
   assert.doesNotMatch(component, /user_id/);
 });
 
+test("进入云端工作台后会预取待处理事项数量", () => {
+  assert.match(component, /const loadedOnce = useRef\(false\)/);
+  assert.match(component, /isDemo \|\| \(!open && loadedOnce\.current\)/);
+  assert.match(component, /loadedOnce\.current = true/);
+  assert.match(component, /onCountChange\(nextItems\.length\)/);
+});
+
 test("点击待处理事项可以前往对应模块", () => {
   assert.match(component, /onNavigate\(item\.view\)/);
   assert.match(pageSource, /onCountChange=\{setAttentionCount\}/);
