@@ -70,6 +70,18 @@ class MigrationContractTests(TestCase):
         self.assertIn("filter_document_ids", sql)
         self.assertIn("to authenticated", sql)
 
+    def test_private_hybrid_search_fuses_ranks_and_preserves_security_boundaries(self):
+        sql = Path(
+            "supabase/migrations/202608140001_private_hybrid_search.sql"
+        ).read_text()
+        self.assertIn("hybrid_search_private_document_chunks", sql)
+        self.assertIn("dc.user_id = auth.uid()", sql)
+        self.assertIn("not dc.flagged_untrusted_instruction", sql)
+        self.assertIn("filter_document_ids", sql)
+        self.assertIn("keyword_rank", sql)
+        self.assertIn("semantic_rank", sql)
+        self.assertIn("to authenticated", sql)
+
     def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
         sql = Path(
             "supabase/migrations/202608130001_agent_proposal_persistence.sql"

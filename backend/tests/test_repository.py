@@ -576,6 +576,36 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["filter_document_ids"], [str(document_id)])
         self.assertNotIn("user_id", payload)
 
+    async def test_supabase_private_search_uses_hybrid_rpc_with_query_embedding(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        await repository.search_private_knowledge(
+            self.user,
+            "极限定义",
+            limit=4,
+            query_embedding=[0.1, 0.2, 0.3],
+        )
+
+        self.assertTrue(
+            requests[0].url.path.endswith("/rpc/hybrid_search_private_document_chunks")
+        )
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["query_embedding"], [0.1, 0.2, 0.3])
+        self.assertNotIn("user_id", payload)
+
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(

@@ -149,6 +149,7 @@ class StudyRepository(Protocol):
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]: ...
 
     async def record_web_search(
@@ -426,6 +427,7 @@ class DemoRepository:
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]:
         normalized = query.casefold().strip()
         allowed = set(document_ids) if document_ids else None
@@ -1404,20 +1406,29 @@ class SupabaseRepository:
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]:
+        rpc_name = (
+            "hybrid_search_private_document_chunks"
+            if query_embedding is not None
+            else "search_private_document_chunks"
+        )
+        payload: dict[str, Any] = {
+            "query_text": query,
+            "match_count": limit,
+            "filter_document_ids": (
+                [str(document_id) for document_id in document_ids]
+                if document_ids
+                else None
+            ),
+        }
+        if query_embedding is not None:
+            payload["query_embedding"] = query_embedding
         rows = await self._request(
             user,
             "POST",
-            "rpc/search_private_document_chunks",
-            json={
-                "query_text": query,
-                "match_count": limit,
-                "filter_document_ids": (
-                    [str(document_id) for document_id in document_ids]
-                    if document_ids
-                    else None
-                ),
-            },
+            f"rpc/{rpc_name}",
+            json=payload,
         )
         return [PrivateKnowledgeSource.model_validate(row) for row in rows]
 

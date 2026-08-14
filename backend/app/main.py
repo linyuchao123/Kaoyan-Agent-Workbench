@@ -505,11 +505,13 @@ async def search_private_knowledge(
     limit: Annotated[int, Query(ge=1, le=20)] = 8,
     document_id: UUID | None = None,
 ) -> list[PrivateKnowledgeSource]:
+    query_embedding = await embedding_provider.embed_query(query)
     return await repository.search_private_knowledge(
         user,
         query,
         limit,
         [document_id] if document_id else None,
+        query_embedding,
     )
 
 
@@ -575,6 +577,11 @@ async def run_agent(
     if agent not in {"coach", "tutor", "combined"}:
         raise HTTPException(404, "unknown agent")
     retrieval_mode = choose_retrieval_mode(payload.message)
+    query_embedding = (
+        await embedding_provider.embed_query(payload.message)
+        if agent in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}
+        else None
+    )
     context = await build_agent_context(
         repository,
         user,
@@ -582,6 +589,7 @@ async def run_agent(
         route=agent,
         retrieval_mode=retrieval_mode,
         search_provider=search_provider,
+        query_embedding=query_embedding,
     )
     result = await agent_graph.ainvoke(
         {
