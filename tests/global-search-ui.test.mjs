@@ -25,3 +25,10 @@ test("点击搜索结果会跳转到对应工作台模块", () => {
   assert.match(component, /onNavigate\(entry\.view\)/);
   assert.match(pageSource, /onNavigate=\{setView\}/);
 });
+
+test("全局搜索支持 Ctrl 或 Command K 快捷键", () => {
+  assert.match(pageSource, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(pageSource, /event\.key\.toLocaleLowerCase\(\) === "k"/);
+  assert.match(pageSource, /event\.preventDefault\(\)/);
+  assert.match(pageSource, /搜索（Ctrl\/⌘ \+ K）/);
+});
