@@ -21,6 +21,7 @@ from app.schemas import (
     ImportProposal,
     MistakeCardCreate,
     MistakeReviewCreate,
+    OcrJob,
     PlanCreate,
     PlanProgress,
     PlanUpdate,
@@ -131,6 +132,12 @@ class StudyRepository(Protocol):
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
 
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob: ...
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None: ...
+
     async def create_import_proposal(
         self, user: AuthUser, proposal: ImportProposal
     ) -> ImportProposal: ...
@@ -233,6 +240,7 @@ class DemoRepository:
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
+        self.ocr_jobs: dict[tuple[UUID, UUID], OcrJob] = {}
         self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
         self.web_search_records: dict[tuple[UUID, UUID], WebSearchRecord] = {}
         self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
@@ -246,6 +254,7 @@ class DemoRepository:
         self.documents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
+        self.ocr_jobs.clear()
         self.import_proposals.clear()
         self.web_search_records.clear()
         self.agent_threads.clear()
@@ -399,6 +408,31 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
+        document = self.documents.get((user.id, document_id))
+        if not document:
+            raise RepositoryValidationError("document not found")
+        now = self.now_factory() if self.now_factory else datetime.now(UTC)
+        existing = self.ocr_jobs.get((user.id, document_id))
+        job = OcrJob(
+            id=existing.id if existing else uuid4(),
+            document_id=document_id,
+            status="queued",
+            attempts=0 if existing and existing.status == "failed" else existing.attempts if existing else 0,
+            max_attempts=existing.max_attempts if existing else 3,
+            available_at=now,
+            last_error=None,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        self.ocr_jobs[(user.id, document_id)] = job
+        return job
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None:
+        return self.ocr_jobs.get((user.id, document_id))
 
     async def create_import_proposal(
         self, user: AuthUser, proposal: ImportProposal
@@ -1338,6 +1372,36 @@ class SupabaseRepository:
             },
         )
         return rows[0] if rows else None
+
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/enqueue_document_ocr",
+            json={"requested_document_id": str(document_id)},
+        )
+        if not rows:
+            raise RepositoryError("OCR job was not queued")
+        return OcrJob.model_validate(rows[0])
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None:
+        rows = await self._request(
+            user,
+            "GET",
+            "ocr_jobs",
+            params={
+                "select": (
+                    "id,document_id,status,attempts,max_attempts,available_at,last_error,"
+                    "created_at,updated_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "document_id": f"eq.{document_id}",
+                "limit": "1",
+            },
+        )
+        return OcrJob.model_validate(rows[0]) if rows else None
 
     @staticmethod
     def _import_proposal(row: Mapping[str, Any]) -> ImportProposal:

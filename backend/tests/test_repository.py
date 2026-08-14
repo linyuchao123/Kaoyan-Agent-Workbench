@@ -531,6 +531,44 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertFalse(any("/storage/v1/" in str(request.url) for request in requests))
 
+    async def test_supabase_ocr_queue_uses_owned_rpc_and_read_filter(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        job = {
+            "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "document_id": str(document_id),
+            "status": "queued",
+            "attempts": 0,
+            "max_attempts": 3,
+            "available_at": "2026-08-14T10:00:00Z",
+            "last_error": None,
+            "created_at": "2026-08-14T10:00:00Z",
+            "updated_at": "2026-08-14T10:00:00Z",
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[job])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        queued = await repository.enqueue_document_ocr(self.user, document_id)
+        loaded = await repository.get_document_ocr_job(self.user, document_id)
+
+        self.assertEqual(queued.status, "queued")
+        self.assertEqual(loaded.id, queued.id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/enqueue_document_ocr"))
+        self.assertEqual(json.loads(requests[0].content)["requested_document_id"], str(document_id))
+        self.assertTrue(requests[1].url.path.endswith("/rest/v1/ocr_jobs"))
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+
     async def test_supabase_private_search_calls_user_scoped_rpc(self):
         requests: list[httpx.Request] = []
         document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

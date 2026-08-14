@@ -82,6 +82,16 @@ class MigrationContractTests(TestCase):
         self.assertIn("semantic_rank", sql)
         self.assertIn("to authenticated", sql)
 
+    def test_ocr_queue_has_owner_reads_and_atomic_service_role_claim(self):
+        sql = Path("supabase/migrations/202608140002_ocr_job_queue.sql").read_text()
+        self.assertIn("create table if not exists public.ocr_jobs", sql)
+        self.assertIn("using (user_id = auth.uid())", sql)
+        self.assertIn("enqueue_document_ocr", sql)
+        self.assertIn("claim_document_ocr", sql)
+        self.assertIn("for update skip locked", sql)
+        self.assertIn("service role required", sql)
+        self.assertIn("to service_role", sql)
+
     def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
         sql = Path(
             "supabase/migrations/202608130001_agent_proposal_persistence.sql"

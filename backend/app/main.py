@@ -141,6 +141,14 @@ def prepare_document_chunks(content: bytes, content_type: str):
     return chunk_markdown(text), "ready"
 
 
+async def queue_document_ocr(user: AuthUser, document_id: UUID):
+    try:
+        return await repository.enqueue_document_ocr(user, document_id)
+    except RepositoryError as error:
+        logger.warning("Document was saved but its OCR job could not be queued: %s", error)
+        return None
+
+
 @app.get("/api/v1/today")
 async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
     return {
@@ -477,9 +485,10 @@ async def upload_document(
     chunks, status = prepare_document_chunks(content, content_type)
     if status == "ready":
         chunks = await embed_safe_chunks(chunks, embedding_provider)
+    document_id = uuid4()
     item, duplicate = await repository.persist_document(
         user,
-        document_id=uuid4(),
+        document_id=document_id,
         filename=filename,
         content_type=content_type,
         content=content,
@@ -487,7 +496,12 @@ async def upload_document(
         ingestion_status=status,
         chunks=chunks,
     )
-    return {**item, "duplicate": duplicate}
+    ocr_job = (
+        await queue_document_ocr(user, document_id)
+        if status == "ocr_required" and not duplicate
+        else None
+    )
+    return {**item, "duplicate": duplicate, "ocr_job": ocr_job}
 
 
 @app.get("/api/v1/documents")
@@ -535,9 +549,10 @@ async def approve_import(
     chunks, status = prepare_document_chunks(downloaded.content, downloaded.content_type)
     if status == "ready":
         chunks = await embed_safe_chunks(chunks, embedding_provider)
+    document_id = uuid4()
     document, duplicate = await repository.persist_document(
         user,
-        document_id=uuid4(),
+        document_id=document_id,
         filename=filename,
         content_type=downloaded.content_type,
         content=downloaded.content,
@@ -547,10 +562,20 @@ async def approve_import(
         source_url=downloaded.final_url,
         title=downloaded.title,
     )
+    ocr_job = (
+        await queue_document_ocr(user, document_id)
+        if status == "ocr_required" and not duplicate
+        else None
+    )
     approved = await repository.approve_import_proposal(user, proposal_id)
     if not approved:
         raise HTTPException(404, "import proposal not found")
-    return {"proposal": approved, "document": document, "duplicate": duplicate}
+    return {
+        "proposal": approved,
+        "document": document,
+        "duplicate": duplicate,
+        "ocr_job": ocr_job,
+    }
 
 
 @app.get("/api/v1/documents/{document_id}/ingestion-status")
@@ -560,12 +585,26 @@ async def ingestion_status(
     document = await repository.get_document(user, document_id)
     if not document:
         raise HTTPException(404, "document not found")
+    ocr_job = await repository.get_document_ocr_job(user, document_id)
     return {
         "document_id": document_id,
         "status": document["ingestion_status"],
         "chunks": document["chunk_count"],
         "flagged_chunks": document["flagged_chunk_count"],
+        "ocr_job": ocr_job,
     }
+
+
+@app.post("/api/v1/documents/{document_id}/ocr/retry")
+async def retry_document_ocr(
+    document_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
+):
+    document = await repository.get_document(user, document_id)
+    if not document:
+        raise HTTPException(404, "document not found")
+    if document["ingestion_status"] not in {"ocr_required", "failed"}:
+        raise HTTPException(409, "document does not require OCR")
+    return await repository.enqueue_document_ocr(user, document_id)
 
 
 @app.post("/api/v1/agents/{agent}/runs")

@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from unittest import TestCase
 from unittest.mock import patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
@@ -936,6 +938,27 @@ class ApiFlowTests(TestCase):
             json={"url": "http://127.0.0.1/private"},
         )
         self.assertEqual(blocked.status_code, 422)
+
+    def test_scanned_pdf_is_queued_for_ocr_and_can_be_retried(self):
+        pdf = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.write(pdf)
+
+        uploaded = self.client.post(
+            "/api/v1/documents/upload",
+            files={"file": ("scan.pdf", pdf.getvalue(), "application/pdf")},
+        )
+
+        self.assertEqual(uploaded.status_code, 201)
+        body = uploaded.json()
+        self.assertEqual(body["ingestion_status"], "ocr_required")
+        self.assertEqual(body["ocr_job"]["status"], "queued")
+        status = self.client.get(f"/api/v1/documents/{body['id']}/ingestion-status")
+        self.assertEqual(status.json()["ocr_job"]["document_id"], body["id"])
+        retried = self.client.post(f"/api/v1/documents/{body['id']}/ocr/retry")
+        self.assertEqual(retried.status_code, 200)
+        self.assertEqual(retried.json()["attempts"], 0)
 
     def test_web_import_requires_approval_then_persists_searchable_document(self):
         preview = self.client.post(

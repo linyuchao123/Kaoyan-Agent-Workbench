@@ -233,6 +233,18 @@ class PrivateKnowledgeSource(BaseModel):
     score: float = Field(ge=0)
 
 
+class OcrJob(BaseModel):
+    id: UUID
+    document_id: UUID
+    status: Literal["queued", "processing", "completed", "failed"]
+    attempts: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    available_at: datetime
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: UUID | None = None
