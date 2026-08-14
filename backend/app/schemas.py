@@ -262,6 +262,13 @@ class AgentThreadHistory(BaseModel):
     messages: list[AgentMessage]
 
 
+class AgentThreadSummary(BaseModel):
+    id: UUID
+    mode: Literal["coach", "tutor", "combined"]
+    title: str
+    updated_at: datetime
+
+
 class ActionProposal(BaseModel):
     id: UUID
     agent: Literal["coach", "tutor"]

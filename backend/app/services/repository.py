@@ -14,6 +14,7 @@ from app.schemas import (
     AgentCitation,
     AgentMessage,
     AgentThreadHistory,
+    AgentThreadSummary,
     CareerItemCreate,
     CareerItemUpdate,
     ContributionDay,
@@ -193,6 +194,14 @@ class StudyRepository(Protocol):
     ) -> None: ...
 
     async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None: ...
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]: ...
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None: ...
 
     async def list_pending_agent_proposals(
         self, user: AuthUser, limit: int = 10
@@ -486,7 +495,11 @@ class DemoRepository:
     ) -> tuple[UUID, ActionProposal]:
         if thread_id is None:
             thread_id = UUID(int=len(self.agent_threads) + 1)
-            self.agent_threads[(user.id, thread_id)] = {"mode": mode, "title": proposal.summary}
+            self.agent_threads[(user.id, thread_id)] = {
+                "mode": mode,
+                "title": proposal.summary,
+                "updated_at": datetime.now(UTC),
+            }
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         existing_id = self.proposal_ids_by_key.get((user.id, proposal.idempotency_key))
@@ -509,7 +522,11 @@ class DemoRepository:
     ) -> UUID:
         if thread_id is None:
             thread_id = uuid4()
-            self.agent_threads[(user.id, thread_id)] = {"mode": mode, "title": title}
+            self.agent_threads[(user.id, thread_id)] = {
+                "mode": mode,
+                "title": title,
+                "updated_at": datetime.now(UTC),
+            }
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         return thread_id
@@ -558,6 +575,34 @@ class DemoRepository:
             owned,
             key=lambda item: item[1].get("updated_at", datetime.min.replace(tzinfo=UTC)),
         )
+        return AgentThreadHistory(
+            id=thread_id,
+            mode=thread["mode"],
+            title=thread["title"],
+            messages=self.agent_messages.get((user.id, thread_id), []),
+        )
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]:
+        owned = [
+            AgentThreadSummary(
+                id=thread_id,
+                mode=thread["mode"],
+                title=thread["title"],
+                updated_at=thread.get("updated_at", datetime.now(UTC)),
+            )
+            for (owner_id, thread_id), thread in self.agent_threads.items()
+            if owner_id == user.id
+        ]
+        return sorted(owned, key=lambda thread: thread.updated_at, reverse=True)[:limit]
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            return None
         return AgentThreadHistory(
             id=thread_id,
             mode=thread["mode"],
@@ -1514,6 +1559,54 @@ class SupabaseRepository:
         )
         return AgentThreadHistory(
             **thread,
+            messages=[AgentMessage.model_validate(message) for message in messages],
+        )
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]:
+        rows = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title,updated_at",
+                "user_id": f"eq.{user.id}",
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [AgentThreadSummary.model_validate(row) for row in rows]
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None:
+        threads = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title",
+                "user_id": f"eq.{user.id}",
+                "id": f"eq.{thread_id}",
+                "limit": "1",
+            },
+        )
+        if not threads:
+            return None
+        messages = await self._request(
+            user,
+            "GET",
+            "agent_messages",
+            params={
+                "select": "id,role,content,sources,metadata,created_at",
+                "user_id": f"eq.{user.id}",
+                "thread_id": f"eq.{thread_id}",
+                "order": "created_at.asc,id.asc",
+            },
+        )
+        return AgentThreadHistory(
+            **threads[0],
             messages=[AgentMessage.model_validate(message) for message in messages],
         )
 

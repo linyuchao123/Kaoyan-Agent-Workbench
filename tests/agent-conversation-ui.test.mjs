@@ -14,3 +14,9 @@ test("存在待确认提案时不会隐藏提案并切换对话", () => {
   assert.match(pageSource, /proposal\.status === "pending" \|\| proposal\.status === "edited"/);
   assert.match(pageSource, /请先批准或拒绝，再开始新对话/);
 });
+
+test("Agent 页面展示历史对话并允许读取指定线程", () => {
+  assert.match(pageSource, /aria-label="历史对话"/);
+  assert.match(pageSource, /api\.listAgentThreads\(\)/);
+  assert.match(pageSource, /api\.getAgentThread\(selectedThreadId\)/);
+});

@@ -24,6 +24,7 @@ from app.schemas import (
     AgentProposalEditRequest,
     AgentRunRequest,
     AgentThreadHistory,
+    AgentThreadSummary,
     CareerItemCreate,
     CareerItemType,
     CareerItemUpdate,
@@ -669,6 +670,25 @@ async def latest_agent_thread(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> AgentThreadHistory | None:
     return await repository.latest_agent_thread(user)
+
+
+@app.get("/api/v1/agents/threads", response_model=list[AgentThreadSummary])
+async def list_agent_threads(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> list[AgentThreadSummary]:
+    return await repository.list_agent_threads(user, limit)
+
+
+@app.get("/api/v1/agents/threads/{thread_id}", response_model=AgentThreadHistory)
+async def get_agent_thread(
+    thread_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AgentThreadHistory:
+    thread = await repository.get_agent_thread(user, thread_id)
+    if not thread:
+        raise HTTPException(404, "agent thread not found")
+    return thread
 
 
 @app.get("/api/v1/proposals", response_model=list[ActionProposal])

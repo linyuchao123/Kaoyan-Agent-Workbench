@@ -233,3 +233,30 @@ test("Agent 页面可恢复当前账户最近一次对话", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Agent 页面可列出并读取当前账户的历史对话", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("agent-thread-token");
+
+  try {
+    await api.listAgentThreads();
+    await api.getAgentThread("11111111-1111-1111-1111-111111111111");
+    assert.match(requests[0].input, /\/api\/v1\/agents\/threads\?limit=20$/);
+    assert.match(requests[1].input, /\/api\/v1\/agents\/threads\/11111111-1111-1111-1111-111111111111$/);
+    for (const request of requests) {
+      assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer agent-thread-token");
+      assert.doesNotMatch(request.input, /user_id/);
+    }
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

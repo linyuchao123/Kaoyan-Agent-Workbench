@@ -170,6 +170,13 @@ export type AgentThreadHistory = {
   messages: AgentMessage[];
 };
 
+export type AgentThreadSummary = {
+  id: string;
+  mode: "coach" | "tutor" | "combined";
+  title: string;
+  updated_at: string;
+};
+
 export type ImportProposal = {
   id: string;
   url: string;
@@ -397,6 +404,8 @@ export const api = {
       body: JSON.stringify({ message, thread_id: threadId }),
     }),
   latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
+  listAgentThreads: () => request<AgentThreadSummary[]>("/api/v1/agents/threads?limit=20"),
+  getAgentThread: (id: string) => request<AgentThreadHistory>(`/api/v1/agents/threads/${id}`),
   listPendingProposals: () => request<ActionProposal[]>("/api/v1/proposals?limit=10"),
   decideProposal: (
     id: string,

@@ -152,12 +152,24 @@ class ApiFlowTests(TestCase):
         self.assertEqual(history.json()["messages"][0]["content"], "解释二叉树的遍历")
         self.assertEqual(history.json()["messages"][1]["role"], "agent")
 
+        threads = self.client.get("/api/v1/agents/threads")
+        self.assertEqual(threads.status_code, 200)
+        self.assertEqual(threads.json()[0]["id"], run["thread_id"])
+        selected = self.client.get(f"/api/v1/agents/threads/{run['thread_id']}")
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.json()["messages"][0]["content"], "解释二叉树的遍历")
+
         self.current_user = AuthUser(
             id=UUID("22222222-2222-2222-2222-222222222222"),
             email="two@example.com",
             access_token="user-two-token",
         )
         self.assertIsNone(self.client.get("/api/v1/agents/threads/latest").json())
+        self.assertEqual(self.client.get("/api/v1/agents/threads").json(), [])
+        self.assertEqual(
+            self.client.get(f"/api/v1/agents/threads/{run['thread_id']}").status_code,
+            404,
+        )
 
     def test_separate_agent_runs_do_not_share_idempotency_key(self):
         payload = {"message": "安排明天的 408 复习"}

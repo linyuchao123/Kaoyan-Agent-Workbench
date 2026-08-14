@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1624,6 +1624,13 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [capabilities, setCapabilities] = useState<ApiHealth["agent"] | null>(null);
+  const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
+
+  function restoreThread(thread: AgentThreadHistory) {
+    setThreadId(thread.id);
+    setMode(thread.mode);
+    setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources })) : [{ role: "agent", text: agentWelcomeMessage }]);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -1638,8 +1645,9 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   useEffect(() => {
     if (isDemo) return;
     let cancelled = false;
-    void Promise.all([api.latestAgentThread(), api.listPendingProposals()]).then(([thread, items]) => {
+    void Promise.all([api.latestAgentThread(), api.listPendingProposals(), api.listAgentThreads()]).then(([thread, items, threadItems]) => {
       if (cancelled) return;
+      setThreads(threadItems);
       const restoredMessages = thread?.messages.length
         ? thread.messages.map((message) => ({
             role: message.role,
@@ -1679,6 +1687,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     try {
       const result = await api.runAgent(mode, text, threadId);
       setThreadId(result.thread_id);
+      void api.listAgentThreads().then(setThreads).catch(() => undefined);
       setProposal(result.proposal);
       setProposalDraft(result.proposal?.payload ?? null);
       setEditingProposal(false);
@@ -1707,6 +1716,22 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     setEditingProposal(false);
     setQuery("");
     setMessages([{ role: "agent", text: agentWelcomeMessage }]);
+  }
+
+  async function openConversation(selectedThreadId: string) {
+    if (selectedThreadId === threadId || busy) return;
+    if (proposal && (proposal.status === "pending" || proposal.status === "edited")) {
+      setMessages((items) => [...items, { role: "agent", text: "当前还有待确认提案。请先处理提案，再切换历史对话。" }]);
+      return;
+    }
+    setBusy(true);
+    try {
+      restoreThread(await api.getAgentThread(selectedThreadId));
+    } catch {
+      setMessages((items) => [...items, { role: "agent", text: "历史对话读取失败，当前对话没有变化。" }]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function decide(decision: "approve" | "reject") {
@@ -1744,7 +1769,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
 
   const modelReady = !isDemo && capabilities?.model_configured;
   const searchReady = !isDemo && capabilities?.web_search_configured;
-  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><div className="agent-heading-actions"><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span><button className="outline-button" type="button" onClick={startNewConversation} disabled={busy}>＋ 新建对话</button></div></div><div className="agent-capabilities panel" aria-label="Agent 运行能力"><div><span className={modelReady ? "ready" : "fallback"}>模型</span><strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong><small>{modelReady ? "回答将调用配置的 OpenAI 兼容模型" : "未配置模型 Key，不会伪装成模型回答"}</small></div><div><span className={searchReady ? "ready" : "fallback"}>联网</span><strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong><small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small></div></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><div className="message-body"><p>{message.text}</p>{message.sources && message.sources.length > 0 && <div className="agent-sources"><strong>本次回答来源</strong>{message.sources.map((source) => source.url ? <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer"><span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small></a> : <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>)}</div>}</div></div>)}</div>{proposal && <AgentProposalCard proposal={proposal} draft={proposalDraft} editing={editingProposal} busy={busy} onDraftChange={setProposalDraft} onStartEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(true); }} onCancelEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(false); }} onSaveEdit={saveProposalEdit} onApprove={() => void decide("approve")} onReject={() => void decide("reject")} />}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
+  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><div className="agent-heading-actions"><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span><button className="outline-button" type="button" onClick={startNewConversation} disabled={busy}>＋ 新建对话</button></div></div><div className="agent-capabilities panel" aria-label="Agent 运行能力"><div><span className={modelReady ? "ready" : "fallback"}>模型</span><strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong><small>{modelReady ? "回答将调用配置的 OpenAI 兼容模型" : "未配置模型 Key，不会伪装成模型回答"}</small></div><div><span className={searchReady ? "ready" : "fallback"}>联网</span><strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong><small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small></div></div><div className="agent-shell panel">{threads.length > 0 && <div className="agent-thread-list" aria-label="历史对话">{threads.map((thread) => <button key={thread.id} type="button" className={thread.id === threadId ? "active" : ""} onClick={() => void openConversation(thread.id)} disabled={busy}><strong>{thread.title}</strong><small>{new Date(thread.updated_at).toLocaleDateString("zh-CN")}</small></button>)}</div>}<div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><div className="message-body"><p>{message.text}</p>{message.sources && message.sources.length > 0 && <div className="agent-sources"><strong>本次回答来源</strong>{message.sources.map((source) => source.url ? <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer"><span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small></a> : <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>)}</div>}</div></div>)}</div>{proposal && <AgentProposalCard proposal={proposal} draft={proposalDraft} editing={editingProposal} busy={busy} onDraftChange={setProposalDraft} onStartEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(true); }} onCancelEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(false); }} onSaveEdit={saveProposalEdit} onApprove={() => void decide("approve")} onReject={() => void decide("reject")} />}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
 }
 
 function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
