@@ -93,13 +93,26 @@ async def repository_error_handler(_: Request, error: RepositoryError) -> JSONRe
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, object]:
+    model_configured = agent_model.configured
+    web_search_configured = search_provider.configured
+    if model_configured and web_search_configured:
+        agent_mode = "live"
+    elif model_configured or web_search_configured:
+        agent_mode = "partial"
+    else:
+        agent_mode = "fallback"
     return {
         "status": "ok",
         "mode": repository.mode,
         "auth": "configured"
         if settings.supabase_url and settings.supabase_anon_key
         else "unconfigured",
+        "agent": {
+            "mode": agent_mode,
+            "model_configured": model_configured,
+            "web_search_configured": web_search_configured,
+        },
     }
 
 

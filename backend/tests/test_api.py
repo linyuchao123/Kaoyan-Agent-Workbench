@@ -57,6 +57,17 @@ class ApiFlowTests(TestCase):
     def task_count(self) -> int:
         return len(self.client.get("/api/v1/tasks").json())
 
+    def test_health_exposes_agent_capabilities_without_secrets(self):
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["agent"]["web_search_configured"], True)
+        self.assertIn(body["agent"]["mode"], {"live", "partial", "fallback"})
+        serialized = response.text.lower()
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("token", serialized)
+
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
             "/api/v1/tasks",

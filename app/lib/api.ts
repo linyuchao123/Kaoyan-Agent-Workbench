@@ -10,6 +10,17 @@ export type CareerItemType = "milestone" | "resume" | "application" | "interview
 export type CareerStatus = "planned" | "in_progress" | "submitted" | "interviewing" | "offer" | "rejected" | "completed" | "archived";
 export type ExportFormat = "json" | "csv" | "markdown";
 
+export type ApiHealth = {
+  status: "ok";
+  mode: "demo" | "supabase";
+  auth: "configured" | "unconfigured";
+  agent: {
+    mode: "live" | "partial" | "fallback";
+    model_configured: boolean;
+    web_search_configured: boolean;
+  };
+};
+
 export type ApiTask = {
   id: string;
   plan_id: string | null;
@@ -241,7 +252,7 @@ async function download(path: string): Promise<{ blob: Blob; filename: string }>
 }
 
 export const api = {
-  health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
+  health: () => request<ApiHealth>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
   listPlans: (level?: PlanLevel) => request<ApiPlan[]>(`/api/v1/plans${level ? `?level=${level}` : ""}`),
   createPlan: (payload: {
