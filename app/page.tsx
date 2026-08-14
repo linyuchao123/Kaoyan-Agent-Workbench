@@ -2023,6 +2023,78 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
   );
 }
 
+type AttentionEntry = {
+  id: string;
+  view: View;
+  category: string;
+  title: string;
+  detail: string;
+};
+
+function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: { open: boolean; isDemo: boolean; onClose: () => void; onNavigate: (view: View) => void; onCountChange: (count: number) => void }) {
+  const [items, setItems] = useState<AttentionEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open || isDemo) return;
+    let active = true;
+    void Promise.all([
+      api.today(),
+      api.listMistakes(true),
+      api.listPendingProposals(),
+      api.listDocuments(),
+    ]).then(([today, mistakes, proposals, documents]) => {
+      if (!active) return;
+      const nextItems: AttentionEntry[] = [
+        ...today.tasks.filter((task) => !task.completed).map((task) => ({ id: task.id, view: "today" as const, category: "待完成任务", title: task.title, detail: `${subjectMeta[task.subject].label} · 计划 ${task.planned_minutes} 分钟` })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "到期错题", title: mistake.title, detail: `已复习 ${mistake.review_count} 次` })),
+        ...proposals.filter((proposal) => proposal.status === "pending" || proposal.status === "edited").map((proposal) => ({ id: proposal.id, view: "agents" as const, category: "Agent 提案", title: proposal.summary, detail: "需要批准、编辑或拒绝" })),
+        ...documents.filter((document) => document.ingestion_status === "ocr_required" || document.ingestion_status === "failed").map((document) => ({ id: document.id, view: "materials" as const, category: document.ingestion_status === "ocr_required" ? "等待 OCR" : "资料处理失败", title: document.title, detail: document.ingestion_error || document.original_filename || "请进入资料库检查" })),
+      ].slice(0, 30);
+      setItems(nextItems);
+      setStatus("待处理事项来自当前账户的实时云端记录");
+      setLoading(false);
+      onCountChange(nextItems.length);
+    }).catch((error) => {
+      if (!active) return;
+      setStatus(error instanceof Error ? `待处理事项加载失败：${error.message}` : "待处理事项加载失败");
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [isDemo, onCountChange, open]);
+
+  if (!open) return null;
+  const visibleLoading = !isDemo && loading;
+  const visibleStatus = isDemo ? "离线演示模式不读取个人待办，登录后可查看。" : status;
+  return (
+    <div className="attention-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="attention-dialog panel" role="dialog" aria-modal="true" aria-labelledby="attention-title">
+        <div className="attention-heading"><div><div className="eyebrow">需要行动</div><h2 id="attention-title">待处理事项</h2></div><button type="button" aria-label="关闭待处理事项" onClick={onClose}>×</button></div>
+        <div className="attention-list">
+          {visibleLoading ? <div className="attention-empty">正在检查云端事项…</div>
+            : items.length === 0 ? <div className="attention-empty"><strong>暂时没有待处理事项</strong><span>保持现在的节奏。</span></div>
+              : items.map((item) => (
+                <button key={`${item.category}-${item.id}`} type="button" onClick={() => { onNavigate(item.view); onClose(); }}>
+                  <span>{item.category}</span><strong>{item.title}</strong><small>{item.detail}</small>
+                </button>
+              ))}
+        </div>
+        <small className="attention-status">{visibleStatus}</small>
+      </section>
+    </div>
+  );
+}
+
 function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDemo: boolean; onClose: () => void; onSaved: () => void }) {
   const [kind, setKind] = useState<"task" | "mistake">("task");
   const [subject, setSubject] = useState<Subject>("math");
@@ -2123,6 +2195,8 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [attentionCount, setAttentionCount] = useState(0);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
@@ -2148,11 +2222,12 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" onClick={() => setSearchOpen(true)}>⌕</button><button aria-label="通知">○</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
+      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
     </main>
   );
