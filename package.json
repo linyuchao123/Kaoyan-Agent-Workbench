@@ -1,6 +1,6 @@
 {
   "name": "kaoyan-agent-workbench",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "AI-powered postgraduate exam study workbench with RAG and dual agents.",
   "engines": {

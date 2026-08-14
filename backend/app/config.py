@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     chat_model: str = "gpt-5-mini"
     embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
     tavily_api_key: str = ""
     demo_mode: bool = True
 

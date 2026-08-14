@@ -48,6 +48,7 @@ from app.schemas import (
     WebSearchRecord,
     WebSearchRequest,
 )
+from app.services.embeddings import OpenAICompatibleEmbeddingProvider
 from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
 from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
 from app.services.rag import choose_retrieval_mode
@@ -64,7 +65,7 @@ from app.services.web_import import download_public_document
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-app = FastAPI(title="研途 API", version="0.7.0", docs_url="/docs")
+app = FastAPI(title="研途 API", version="0.8.0", docs_url="/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -75,6 +76,7 @@ app.add_middleware(
 
 repository = build_repository(settings)
 agent_model = OpenAICompatibleAgentModel(settings)
+embedding_provider = OpenAICompatibleEmbeddingProvider(settings)
 agent_graph = build_graph(agent_model)
 search_provider = get_search_provider(settings)
 
@@ -113,6 +115,11 @@ async def health() -> dict[str, object]:
             "mode": agent_mode,
             "model_configured": model_configured,
             "web_search_configured": web_search_configured,
+        },
+        "rag": {
+            "mode": "hybrid" if embedding_provider.configured else "keyword",
+            "embedding_configured": embedding_provider.configured,
+            "embedding_dimensions": embedding_provider.dimensions,
         },
     }
 
