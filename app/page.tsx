@@ -1932,12 +1932,110 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   );
 }
 
+function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDemo: boolean; onClose: () => void; onSaved: () => void }) {
+  const [kind, setKind] = useState<"task" | "mistake">("task");
+  const [subject, setSubject] = useState<Subject>("math");
+  const [title, setTitle] = useState("");
+  const [plannedMinutes, setPlannedMinutes] = useState(30);
+  const [question, setQuestion] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    const focusFrame = window.requestAnimationFrame(() => titleInputRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [busy, onClose, open]);
+
+  if (!open) return null;
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || busy) return;
+    if (kind === "mistake" && !question.trim()) {
+      setStatus("请填写题目或知识点内容");
+      return;
+    }
+    if (isDemo) {
+      setStatus("离线演示模式不会保存个人记录，请登录云端账户后使用。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      if (kind === "task") {
+        await api.createTask({ title: title.trim(), subject, planned_minutes: plannedMinutes });
+      } else {
+        await api.createMistake({
+          title: title.trim(),
+          subject: subject === "career" ? "math" : subject,
+          question: question.trim(),
+          error_reason: reason.trim(),
+        });
+      }
+      setTitle("");
+      setQuestion("");
+      setReason("");
+      setPlannedMinutes(30);
+      onSaved();
+      onClose();
+    } catch (error) {
+      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const availableSubjects = kind === "task"
+    ? scopes.filter((item) => item.key !== "all")
+    : scopes.filter((item) => item.key !== "all" && item.key !== "career");
+  return (
+    <div className="quick-capture-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <section className="quick-capture-dialog panel" role="dialog" aria-modal="true" aria-labelledby="quick-capture-title">
+        <div className="quick-capture-heading">
+          <div><div className="eyebrow">随时记录</div><h2 id="quick-capture-title">快速记录学习现场</h2></div>
+          <button type="button" aria-label="关闭快速记录" onClick={onClose} disabled={busy}>×</button>
+        </div>
+        <div className="quick-capture-tabs">
+          <button type="button" className={kind === "task" ? "active" : ""} onClick={() => { setKind("task"); setStatus(""); }}>今日任务</button>
+          <button type="button" className={kind === "mistake" ? "active" : ""} onClick={() => { setKind("mistake"); setStatus(""); if (subject === "career") setSubject("math"); }}>错题卡</button>
+        </div>
+        <form onSubmit={save}>
+          <label>科目<select value={subject} onChange={(event) => setSubject(event.target.value as Subject)}>{availableSubjects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+          <label className="quick-capture-wide">{kind === "task" ? "任务名称" : "错题标题"}<input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder={kind === "task" ? "例如：完成线性代数第二讲" : "例如：极限等价无穷小误用"} required /></label>
+          {kind === "task" ? (
+            <label>计划时长（分钟）<input type="number" min={1} max={1440} value={plannedMinutes} onChange={(event) => setPlannedMinutes(Number(event.target.value))} required /></label>
+          ) : (
+            <>
+              <label className="quick-capture-wide">题目或知识点<textarea value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={5000} required /></label>
+              <label className="quick-capture-wide">错误原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={5000} placeholder="可稍后补充" /></label>
+            </>
+          )}
+          {status && <div className="quick-capture-status" role="status">{status}</div>}
+          <div className="quick-capture-actions"><button type="button" onClick={onClose} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存到云端"}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
@@ -1958,10 +2056,11 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
+      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
     </main>
   );
 }
