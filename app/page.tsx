@@ -1118,6 +1118,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [tierFilter, setTierFilter] = useState<SchoolTier | "all">("all");
   const [yearFilter, setYearFilter] = useState("2028");
   const [tier, setTier] = useState<SchoolTier>("match");
