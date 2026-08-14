@@ -1,0 +1,16 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+test("Agent 页面可以开始新对话并清除旧线程编号", () => {
+  assert.match(pageSource, /function startNewConversation\(\)/);
+  assert.match(pageSource, /setThreadId\(undefined\)/);
+  assert.match(pageSource, /＋ 新建对话/);
+});
+
+test("存在待确认提案时不会隐藏提案并切换对话", () => {
+  assert.match(pageSource, /proposal\.status === "pending" \|\| proposal\.status === "edited"/);
+  assert.match(pageSource, /请先批准或拒绝，再开始新对话/);
+});
