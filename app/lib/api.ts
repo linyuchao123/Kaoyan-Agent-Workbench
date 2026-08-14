@@ -390,7 +390,7 @@ export const api = {
     document: ApiDocument;
     duplicate: boolean;
   }>(`/api/v1/documents/import-proposals/${id}/approve`, { method: "POST" }),
-  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string) =>
+  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string, signal?: AbortSignal) =>
     request<{
       thread_id: string;
       answer: string;
@@ -402,6 +402,7 @@ export const api = {
     }>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),
+      signal,
     }),
   latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
   listAgentThreads: () => request<AgentThreadSummary[]>("/api/v1/agents/threads?limit=20"),

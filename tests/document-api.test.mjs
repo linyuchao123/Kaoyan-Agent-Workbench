@@ -260,3 +260,28 @@ test("Agent 页面可列出并读取当前账户的历史对话", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("Agent 请求支持传入取消信号", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      thread_id: "22222222-2222-2222-2222-222222222222",
+      answer: "已完成分析",
+      route: "coach",
+      retrieval_mode: "none",
+      model_status: "fallback",
+      sources: [],
+      proposal: null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const controller = new AbortController();
+
+  try {
+    await api.runAgent("coach", "安排今天的复习", undefined, controller.signal);
+    assert.equal(request.init.signal, controller.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
