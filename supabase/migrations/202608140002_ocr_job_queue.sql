@@ -57,14 +57,22 @@ begin
   values (owner_id, requested_document_id)
   on conflict (document_id) do update set
     status = 'queued',
-    attempts = case when ocr_jobs.status = 'failed' then 0 else ocr_jobs.attempts end,
+    attempts = 0,
     available_at = now(),
     locked_at = null,
     completed_at = null,
     last_error = null,
     updated_at = now()
   where ocr_jobs.user_id = owner_id
+    and ocr_jobs.status in ('failed', 'completed')
   returning * into queued_job;
+
+  -- Repeated clicks must not reset an active lease or create duplicate work.
+  if queued_job.id is null then
+    select * into queued_job
+    from public.ocr_jobs
+    where document_id = requested_document_id and user_id = owner_id;
+  end if;
 
   return queued_job;
 end;
@@ -82,6 +90,38 @@ begin
     raise exception 'service role required';
   end if;
 
+  -- Recover a job when a worker disappeared without reporting failure.
+  with expired_jobs as (
+    update public.ocr_jobs
+    set
+      status = 'failed',
+      locked_at = null,
+      last_error = 'OCR worker lease expired',
+      updated_at = now()
+    where status = 'processing'
+      and locked_at < now() - interval '2 hours'
+      and attempts >= max_attempts
+    returning user_id, document_id
+  )
+  update public.documents d
+  set
+    ingestion_status = 'failed',
+    ingestion_error = 'OCR worker lease expired',
+    updated_at = now()
+  from expired_jobs e
+  where d.id = e.document_id and d.user_id = e.user_id;
+
+  update public.ocr_jobs
+  set
+    status = 'queued',
+    available_at = now(),
+    locked_at = null,
+    last_error = 'OCR worker lease expired; queued for retry',
+    updated_at = now()
+  where status = 'processing'
+    and locked_at < now() - interval '2 hours'
+    and attempts < max_attempts;
+
   update public.ocr_jobs
   set
     status = 'processing',
@@ -91,7 +131,9 @@ begin
   where id = (
     select id
     from public.ocr_jobs
-    where status = 'queued' and available_at <= now()
+    where status = 'queued'
+      and available_at <= now()
+      and attempts < max_attempts
     order by available_at asc, created_at asc
     for update skip locked
     limit 1
