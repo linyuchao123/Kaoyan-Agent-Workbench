@@ -146,13 +146,15 @@ class OpenAIVisionOcrProvider:
         self.model = settings.ocr_model
         self.max_pages = settings.ocr_max_pages
         self.pdftoppm_path = shutil.which(settings.pdftoppm_path)
+        api_key = settings.resolved_ocr_api_key
+        base_url = settings.resolved_ocr_base_url
         self._configured = bool(
-            settings.openai_api_key and self.model and self.pdftoppm_path
+            api_key and self.model and self.pdftoppm_path
         )
         self.client = (
             AsyncOpenAI(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url or None,
+                api_key=api_key,
+                base_url=base_url or None,
                 timeout=60,
                 max_retries=1,
             )

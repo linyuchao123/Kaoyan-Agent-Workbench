@@ -66,21 +66,37 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 
 ### v0.8 AI 与 OCR 配置
 
-在 `backend/.env` 中按使用的 OpenAI 兼容服务填写：
+聊天、向量和 OCR 可以使用不同的 OpenAI 兼容服务。推荐的低成本组合是：
+
+- Agent 聊天：DeepSeek；
+- 私有资料向量：阿里云百炼 `text-embedding-v4`；
+- 扫描 PDF OCR：阿里云百炼 `qwen3.5-ocr`。
+
+在 `backend/.env` 中填写（密钥只放本地真实 `.env`，不要写进 `.env.example` 或提交到 Git）：
 
 ```dotenv
+# 旧版统一配置留空；仅使用同一家服务时才需要填写。
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
-CHAT_MODEL=gpt-5-mini
-EMBEDDING_MODEL=text-embedding-3-small
+
+CHAT_API_KEY=<DeepSeek API Key>
+CHAT_BASE_URL=https://api.deepseek.com
+CHAT_MODEL=deepseek-v4-flash
+
+EMBEDDING_API_KEY=<阿里云百炼 API Key>
+EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_DIMENSIONS=1536
-OCR_MODEL=gpt-5-mini
+
+OCR_API_KEY=<阿里云百炼 API Key，可与上面相同>
+OCR_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+OCR_MODEL=qwen3.5-ocr
 OCR_MAX_PAGES=100
 OCR_POLL_SECONDS=5
 PDFTOPPM_PATH=pdftoppm
 ```
 
-`EMBEDDING_DIMENSIONS` 必须与迁移中的 `vector(1536)` 一致。若不配置模型密钥，上传与检索仍可工作，但 `/health` 会报告 `rag.mode=keyword`，不会伪装成混合检索。
+各类专用配置优先于旧的 `OPENAI_API_KEY` / `OPENAI_BASE_URL`，旧配置仍保留兼容。`EMBEDDING_DIMENSIONS` 必须与迁移中的 `vector(1536)` 一致。只配置 DeepSeek 时，Agent 对话可用，但检索会安全降级为关键词模式，OCR Worker 会保持未配置状态；系统不会拿聊天模型密钥误调用 Embedding 或图片接口。
 
 OCR Worker 还需要 `SUPABASE_SERVICE_ROLE_KEY`，该密钥只能放在后端环境，不能写入根目录前端变量或提交到 Git。系统需安装 Poppler 的 `pdftoppm`，然后在另一个终端启动：
 

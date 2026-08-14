@@ -39,12 +39,14 @@ class OpenAICompatibleAgentModel:
     """Optional model adapter. A failure always falls back to deterministic analysis."""
 
     def __init__(self, settings: Settings) -> None:
-        self._configured = bool(settings.openai_api_key and settings.chat_model)
+        api_key = settings.resolved_chat_api_key
+        base_url = settings.resolved_chat_base_url
+        self._configured = bool(api_key and settings.chat_model)
         self.client = (
             ChatOpenAI(
                 model=settings.chat_model,
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url or None,
+                api_key=api_key,
+                base_url=base_url or None,
                 timeout=30,
                 max_retries=1,
             )

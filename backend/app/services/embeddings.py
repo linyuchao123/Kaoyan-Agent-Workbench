@@ -27,8 +27,10 @@ class OpenAICompatibleEmbeddingProvider:
 
     def __init__(self, settings: Settings) -> None:
         self._dimensions = settings.embedding_dimensions
+        api_key = settings.resolved_embedding_api_key
+        base_url = settings.resolved_embedding_base_url
         self._configured = bool(
-            settings.openai_api_key
+            api_key
             and settings.embedding_model
             and self._dimensions > 0
         )
@@ -36,8 +38,8 @@ class OpenAICompatibleEmbeddingProvider:
             OpenAIEmbeddings(
                 model=settings.embedding_model,
                 dimensions=self._dimensions,
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url or None,
+                api_key=api_key,
+                base_url=base_url or None,
                 timeout=30,
                 max_retries=1,
             )
