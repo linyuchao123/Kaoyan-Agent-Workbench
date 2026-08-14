@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
@@ -1965,6 +1965,7 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
   const [entries, setEntries] = useState<WorkbenchSearchEntry[]>([]);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
+  const [activeResultIndex, setActiveResultIndex] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -2018,21 +2019,40 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
   const visibleLoading = !isDemo && loading;
   if (!open) return null;
 
+  function openSearchResult(entry: WorkbenchSearchEntry) {
+    onNavigate(entry.view);
+    onClose();
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (results.length === 0) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveResultIndex((index) => (index + 1) % results.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveResultIndex((index) => (index - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      openSearchResult(results[Math.min(activeResultIndex, results.length - 1)]);
+    }
+  }
+
   return (
     <div className="global-search-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="global-search-dialog panel" role="dialog" aria-modal="true" aria-labelledby="global-search-title">
         <div className="global-search-field">
           <span>⌕</span>
           <label className="visually-hidden" htmlFor="global-search-input" id="global-search-title">搜索个人工作台</label>
-          <input id="global-search-input" ref={searchInputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索任务、计划、错题、院校、资料或求职记录" />
+          <input id="global-search-input" ref={searchInputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveResultIndex(0); }} onKeyDown={handleSearchKeyDown} aria-controls="global-search-results" aria-activedescendant={results.length ? `global-search-result-${activeResultIndex}` : undefined} placeholder="搜索任务、计划、错题、院校、资料或求职记录" />
           <button type="button" aria-label="关闭搜索" onClick={onClose}>Esc</button>
         </div>
-        <div className="global-search-results">
+        <div className="global-search-results" id="global-search-results">
           {visibleLoading ? <div className="global-search-empty">正在读取你的云端数据…</div>
             : !normalizedQuery ? <div className="global-search-empty">输入关键词开始搜索，结果不会离开你的账户。</div>
               : results.length === 0 ? <div className="global-search-empty">没有找到匹配记录</div>
-                : results.map((entry) => (
-                  <button key={`${entry.view}-${entry.id}`} type="button" onClick={() => { onNavigate(entry.view); onClose(); }}>
+                : results.map((entry, index) => (
+                  <button id={`global-search-result-${index}`} key={`${entry.view}-${entry.id}`} className={index === activeResultIndex ? "active" : ""} type="button" onMouseEnter={() => setActiveResultIndex(index)} onClick={() => openSearchResult(entry)}>
                     <span>{entry.category}</span><strong>{entry.title}</strong><small>{entry.detail}</small>
                   </button>
                 ))}

@@ -32,3 +32,11 @@ test("全局搜索支持 Ctrl 或 Command K 快捷键", () => {
   assert.match(pageSource, /event\.preventDefault\(\)/);
   assert.match(pageSource, /搜索（Ctrl\/⌘ \+ K）/);
 });
+
+test("全局搜索支持方向键选择与回车跳转", () => {
+  assert.match(component, /event\.key === "ArrowDown"/);
+  assert.match(component, /event\.key === "ArrowUp"/);
+  assert.match(component, /event\.key === "Enter"/);
+  assert.match(component, /openSearchResult\(results\[/);
+  assert.match(component, /aria-activedescendant/);
+});
