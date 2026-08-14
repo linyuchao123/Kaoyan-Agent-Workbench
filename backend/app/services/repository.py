@@ -2,7 +2,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from typing import Any, Protocol, cast
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -10,9 +10,15 @@ from app.auth import AuthUser
 from app.config import Settings
 from app.domain.contributions import Scope, intensity_level
 from app.schemas import (
+    ActionProposal,
+    AgentCitation,
+    AgentMessage,
+    AgentThreadHistory,
+    AgentThreadSummary,
     CareerItemCreate,
     CareerItemUpdate,
     ContributionDay,
+    ImportProposal,
     MistakeCardCreate,
     MistakeReviewCreate,
     PlanCreate,
@@ -21,9 +27,11 @@ from app.schemas import (
     PrivateKnowledgeSource,
     SchoolOptionCreate,
     SchoolOptionUpdate,
+    SearchSource,
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
+    WebSearchRecord,
 )
 from app.services.ingestion import TextChunk
 from app.services.store import DemoStore
@@ -115,11 +123,25 @@ class StudyRepository(Protocol):
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]: ...
 
     async def list_documents(self, user: AuthUser) -> list[dict]: ...
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal: ...
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None: ...
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None: ...
 
     async def search_private_knowledge(
         self,
@@ -128,6 +150,70 @@ class StudyRepository(Protocol):
         limit: int = 8,
         document_ids: list[UUID] | None = None,
     ) -> list[PrivateKnowledgeSource]: ...
+
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord: ...
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]: ...
+
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]: ...
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID: ...
+
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None: ...
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None: ...
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]: ...
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None: ...
+
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]: ...
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None: ...
 
 
 class DemoRepository:
@@ -146,12 +232,26 @@ class DemoRepository:
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
+        self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
+        self.web_search_records: dict[tuple[UUID, UUID], WebSearchRecord] = {}
+        self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
+        self.agent_messages: dict[tuple[UUID, UUID], list[AgentMessage]] = {}
+        self.action_proposals: dict[tuple[UUID, UUID], ActionProposal] = {}
+        self.proposal_ids_by_key: dict[tuple[UUID, str], UUID] = {}
+        self.audit_logs: list[dict[str, Any]] = []
 
     def clear(self) -> None:
         self.stores.clear()
         self.documents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
+        self.import_proposals.clear()
+        self.web_search_records.clear()
+        self.agent_threads.clear()
+        self.agent_messages.clear()
+        self.action_proposals.clear()
+        self.proposal_ids_by_key.clear()
+        self.audit_logs.clear()
 
     def _store(self, user: AuthUser) -> DemoStore:
         return self.stores.setdefault(user.id, DemoStore(self.timezone_name, self.now_factory))
@@ -264,13 +364,17 @@ class DemoRepository:
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]:
         existing_id = self.document_ids_by_hash.get((user.id, digest))
         if existing_id:
             return self.documents[(user.id, existing_id)], True
         item = {
             "id": document_id,
-            "title": filename.rsplit(".", 1)[0],
+            "source_type": "web" if source_url else "upload",
+            "source_url": source_url,
+            "title": title or filename.rsplit(".", 1)[0],
             "original_filename": filename,
             "content_type": content_type,
             "byte_size": len(content),
@@ -294,6 +398,27 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal:
+        self.import_proposals[(user.id, proposal.id)] = proposal
+        return proposal
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        return self.import_proposals.get((user.id, proposal_id))
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        proposal = self.import_proposals.get((user.id, proposal_id))
+        if not proposal:
+            return None
+        approved = proposal.model_copy(update={"status": "approved"})
+        self.import_proposals[(user.id, proposal_id)] = approved
+        return approved
 
     async def search_private_knowledge(
         self,
@@ -331,6 +456,219 @@ class DemoRepository:
                 )
         matches.sort(key=lambda item: item.score, reverse=True)
         return matches[:limit]
+
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord:
+        record = WebSearchRecord(
+            id=uuid4(),
+            query=query,
+            provider=provider,
+            results=results,
+            searched_at=datetime.now(UTC),
+        )
+        self.web_search_records[(user.id, record.id)] = record
+        return record
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]:
+        records = [
+            record
+            for (owner_id, _), record in reversed(self.web_search_records.items())
+            if owner_id == user.id
+        ]
+        return records[:limit]
+
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]:
+        if thread_id is None:
+            thread_id = UUID(int=len(self.agent_threads) + 1)
+            self.agent_threads[(user.id, thread_id)] = {
+                "mode": mode,
+                "title": proposal.summary,
+                "updated_at": datetime.now(UTC),
+            }
+        elif (user.id, thread_id) not in self.agent_threads:
+            raise RepositoryValidationError("agent thread not found")
+        existing_id = self.proposal_ids_by_key.get((user.id, proposal.idempotency_key))
+        if existing_id:
+            return thread_id, self.action_proposals[(user.id, existing_id)]
+        self.action_proposals[(user.id, proposal.id)] = proposal
+        self.proposal_ids_by_key[(user.id, proposal.idempotency_key)] = proposal.id
+        self.audit_logs.append(
+            {"user_id": user.id, "proposal_id": proposal.id, "event_type": "proposal_created"}
+        )
+        return thread_id, proposal
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID:
+        if thread_id is None:
+            thread_id = uuid4()
+            self.agent_threads[(user.id, thread_id)] = {
+                "mode": mode,
+                "title": title,
+                "updated_at": datetime.now(UTC),
+            }
+        elif (user.id, thread_id) not in self.agent_threads:
+            raise RepositoryValidationError("agent thread not found")
+        return thread_id
+
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            raise RepositoryValidationError("agent thread not found")
+        now = datetime.now(UTC)
+        messages = self.agent_messages.setdefault((user.id, thread_id), [])
+        messages.extend(
+            [
+                AgentMessage(
+                    id=uuid4(), role="user", content=user_message, created_at=now
+                ),
+                AgentMessage(
+                    id=uuid4(),
+                    role="agent",
+                    content=agent_message,
+                    sources=sources,
+                    metadata=metadata,
+                    created_at=now,
+                ),
+            ]
+        )
+        thread["updated_at"] = now
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
+        owned = [
+            (thread_id, thread)
+            for (owner_id, thread_id), thread in self.agent_threads.items()
+            if owner_id == user.id
+        ]
+        if not owned:
+            return None
+        thread_id, thread = max(
+            owned,
+            key=lambda item: item[1].get("updated_at", datetime.min.replace(tzinfo=UTC)),
+        )
+        return AgentThreadHistory(
+            id=thread_id,
+            mode=thread["mode"],
+            title=thread["title"],
+            messages=self.agent_messages.get((user.id, thread_id), []),
+        )
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]:
+        owned = [
+            AgentThreadSummary(
+                id=thread_id,
+                mode=thread["mode"],
+                title=thread["title"],
+                updated_at=thread.get("updated_at", datetime.now(UTC)),
+            )
+            for (owner_id, thread_id), thread in self.agent_threads.items()
+            if owner_id == user.id
+        ]
+        return sorted(owned, key=lambda thread: thread.updated_at, reverse=True)[:limit]
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            return None
+        return AgentThreadHistory(
+            id=thread_id,
+            mode=thread["mode"],
+            title=thread["title"],
+            messages=self.agent_messages.get((user.id, thread_id), []),
+        )
+
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]:
+        proposals = [
+            proposal
+            for (owner_id, _), proposal in reversed(self.action_proposals.items())
+            if owner_id == user.id and proposal.status in {"pending", "edited"}
+        ]
+        return proposals[:limit]
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None:
+        proposal = self.action_proposals.get((user.id, proposal_id))
+        if not proposal:
+            return None
+        if decision == "approve" and proposal.status == "applied":
+            self.audit_logs.append(
+                {
+                    "user_id": user.id,
+                    "proposal_id": proposal.id,
+                    "event_type": "proposal_approval_replayed",
+                }
+            )
+            return proposal
+        if proposal.status not in {"pending", "edited"}:
+            return proposal
+        if decision == "approve":
+            if proposal.action != "create_review_task":
+                raise RepositoryValidationError("unsupported proposal action")
+            await self.create_task(
+                user,
+                TaskCreate(
+                    title=str(proposal.payload.get("title", "Agent 复习任务")),
+                    subject=str(proposal.payload.get("subject", "cs408")),
+                    planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
+                ),
+            )
+            status = "applied"
+        elif decision == "edit":
+            status = "edited"
+        else:
+            status = "rejected"
+        updated = proposal.model_copy(
+            update={"status": status, "payload": edited_payload or proposal.payload}
+        )
+        self.action_proposals[(user.id, proposal_id)] = updated
+        self.audit_logs.append(
+            {
+                "user_id": user.id,
+                "proposal_id": proposal.id,
+                "event_type": f"proposal_{decision}",
+            }
+        )
+        return updated
 
 
 class SupabaseRepository:
@@ -856,6 +1194,8 @@ class SupabaseRepository:
         digest: str,
         ingestion_status: str,
         chunks: list[TextChunk],
+        source_url: str | None = None,
+        title: str | None = None,
     ) -> tuple[dict, bool]:
         existing = await self._request(
             user,
@@ -891,6 +1231,24 @@ class SupabaseRepository:
                 ),
             }, True
 
+        if source_url:
+            same_url = await self._request(
+                user,
+                "GET",
+                "documents",
+                params={
+                    "select": (
+                        "id,title,original_filename,source_type,source_url,content_type,"
+                        "byte_size,sha256,storage_path,ingestion_status"
+                    ),
+                    "user_id": f"eq.{user.id}",
+                    "source_url": f"eq.{source_url}",
+                    "limit": "1",
+                },
+            )
+            if same_url:
+                return {**same_url[0], "chunk_count": 0, "flagged_chunk_count": 0}, True
+
         storage_path = f"{user.id}/{document_id}/{filename}"
         encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
         await self._storage_request(
@@ -907,8 +1265,9 @@ class SupabaseRepository:
             json={
                 "id": str(document_id),
                 "user_id": str(user.id),
-                "source_type": "upload",
-                "title": filename.rsplit(".", 1)[0],
+                "source_type": "web" if source_url else "upload",
+                "source_url": source_url,
+                "title": title or filename.rsplit(".", 1)[0],
                 "original_filename": filename,
                 "storage_path": storage_path,
                 "content_type": content_type,
@@ -977,6 +1336,67 @@ class SupabaseRepository:
         )
         return rows[0] if rows else None
 
+    @staticmethod
+    def _import_proposal(row: Mapping[str, Any]) -> ImportProposal:
+        return ImportProposal(
+            id=row["id"],
+            url=row["source_url"],
+            title=row["title"],
+            summary=row["summary"],
+            content_type=row.get("content_type") or "text/html",
+            estimated_bytes=row.get("estimated_bytes"),
+            status=row["status"],
+        )
+
+    async def create_import_proposal(
+        self, user: AuthUser, proposal: ImportProposal
+    ) -> ImportProposal:
+        rows = await self._request(
+            user,
+            "POST",
+            "import_proposals",
+            json={
+                "id": str(proposal.id),
+                "user_id": str(user.id),
+                "source_url": str(proposal.url),
+                "title": proposal.title,
+                "summary": proposal.summary,
+                "content_type": proposal.content_type,
+                "estimated_bytes": proposal.estimated_bytes,
+                "status": proposal.status,
+            },
+            prefer="return=representation",
+        )
+        return self._import_proposal(rows[0])
+
+    async def get_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        rows = await self._request(
+            user,
+            "GET",
+            "import_proposals",
+            params={
+                "select": "*",
+                "id": f"eq.{proposal_id}",
+                "user_id": f"eq.{user.id}",
+            },
+        )
+        return self._import_proposal(rows[0]) if rows else None
+
+    async def approve_import_proposal(
+        self, user: AuthUser, proposal_id: UUID
+    ) -> ImportProposal | None:
+        rows = await self._request(
+            user,
+            "PATCH",
+            "import_proposals",
+            params={"id": f"eq.{proposal_id}", "user_id": f"eq.{user.id}"},
+            json={"status": "approved", "decided_at": datetime.now(UTC).isoformat()},
+            prefer="return=representation",
+        )
+        return self._import_proposal(rows[0]) if rows else None
+
     async def search_private_knowledge(
         self,
         user: AuthUser,
@@ -999,6 +1419,235 @@ class SupabaseRepository:
             },
         )
         return [PrivateKnowledgeSource.model_validate(row) for row in rows]
+
+    async def record_web_search(
+        self,
+        user: AuthUser,
+        *,
+        query: str,
+        provider: str,
+        results: list[SearchSource],
+    ) -> WebSearchRecord:
+        rows = await self._request(
+            user,
+            "POST",
+            "web_search_records",
+            json={
+                "user_id": str(user.id),
+                "query": query,
+                "provider": provider,
+                "results": [result.model_dump(mode="json") for result in results],
+            },
+            prefer="return=representation",
+        )
+        return WebSearchRecord.model_validate(rows[0])
+
+    async def list_web_search_records(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[WebSearchRecord]:
+        rows = await self._request(
+            user,
+            "GET",
+            "web_search_records",
+            params={
+                "select": "id,query,provider,results,searched_at",
+                "user_id": f"eq.{user.id}",
+                "order": "searched_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [WebSearchRecord.model_validate(row) for row in rows]
+
+    async def create_agent_proposal(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        proposal: ActionProposal,
+    ) -> tuple[UUID, ActionProposal]:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/create_agent_proposal",
+            json={
+                "requested_thread_id": str(thread_id) if thread_id else None,
+                "requested_mode": mode,
+                "requested_agent": proposal.agent,
+                "requested_action": proposal.action,
+                "requested_payload": proposal.payload,
+                "requested_summary": proposal.summary,
+                "requested_idempotency_key": proposal.idempotency_key,
+            },
+        )
+        if not rows:
+            raise RepositoryError("Agent proposal was not persisted")
+        row = rows[0]
+        return UUID(str(row["thread_id"])), ActionProposal.model_validate(row["proposal"])
+
+    async def ensure_agent_thread(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID | None,
+        mode: str,
+        title: str,
+    ) -> UUID:
+        row = await self._request(
+            user,
+            "POST",
+            "rpc/ensure_agent_thread",
+            json={
+                "requested_thread_id": str(thread_id) if thread_id else None,
+                "requested_mode": mode,
+                "requested_title": title,
+            },
+        )
+        value = row[0] if isinstance(row, list) else row
+        if not value:
+            raise RepositoryError("Agent thread was not persisted")
+        return UUID(str(value))
+
+    async def append_agent_exchange(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        user_message: str,
+        agent_message: str,
+        sources: list[AgentCitation],
+        metadata: dict[str, Any],
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/append_agent_exchange",
+            json={
+                "requested_thread_id": str(thread_id),
+                "user_content": user_message,
+                "agent_content": agent_message,
+                "agent_sources": [source.model_dump(mode="json") for source in sources],
+                "agent_metadata": metadata,
+            },
+        )
+
+    async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
+        threads = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title",
+                "user_id": f"eq.{user.id}",
+                "order": "updated_at.desc",
+                "limit": "1",
+            },
+        )
+        if not threads:
+            return None
+        thread = threads[0]
+        messages = await self._request(
+            user,
+            "GET",
+            "agent_messages",
+            params={
+                "select": "id,role,content,sources,metadata,created_at",
+                "user_id": f"eq.{user.id}",
+                "thread_id": f"eq.{thread['id']}",
+                "order": "created_at.asc,id.asc",
+            },
+        )
+        return AgentThreadHistory(
+            **thread,
+            messages=[AgentMessage.model_validate(message) for message in messages],
+        )
+
+    async def list_agent_threads(
+        self, user: AuthUser, limit: int = 20
+    ) -> list[AgentThreadSummary]:
+        rows = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title,updated_at",
+                "user_id": f"eq.{user.id}",
+                "order": "updated_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [AgentThreadSummary.model_validate(row) for row in rows]
+
+    async def get_agent_thread(
+        self, user: AuthUser, thread_id: UUID
+    ) -> AgentThreadHistory | None:
+        threads = await self._request(
+            user,
+            "GET",
+            "agent_threads",
+            params={
+                "select": "id,mode,title",
+                "user_id": f"eq.{user.id}",
+                "id": f"eq.{thread_id}",
+                "limit": "1",
+            },
+        )
+        if not threads:
+            return None
+        messages = await self._request(
+            user,
+            "GET",
+            "agent_messages",
+            params={
+                "select": "id,role,content,sources,metadata,created_at",
+                "user_id": f"eq.{user.id}",
+                "thread_id": f"eq.{thread_id}",
+                "order": "created_at.asc,id.asc",
+            },
+        )
+        return AgentThreadHistory(
+            **threads[0],
+            messages=[AgentMessage.model_validate(message) for message in messages],
+        )
+
+    async def list_pending_agent_proposals(
+        self, user: AuthUser, limit: int = 10
+    ) -> list[ActionProposal]:
+        rows = await self._request(
+            user,
+            "GET",
+            "action_proposals",
+            params={
+                "select": "id,agent,action,payload,summary,idempotency_key,status",
+                "user_id": f"eq.{user.id}",
+                "status": "in.(pending,edited)",
+                "order": "created_at.desc",
+                "limit": str(limit),
+            },
+        )
+        return [ActionProposal.model_validate(row) for row in rows]
+
+    async def decide_agent_proposal(
+        self,
+        user: AuthUser,
+        proposal_id: UUID,
+        decision: str,
+        edited_payload: dict[str, Any] | None = None,
+    ) -> ActionProposal | None:
+        row = await self._request(
+            user,
+            "POST",
+            "rpc/decide_agent_proposal",
+            json={
+                "requested_proposal_id": str(proposal_id),
+                "requested_decision": decision,
+                "edited_payload": edited_payload,
+            },
+        )
+        if not row:
+            return None
+        payload = row[0] if isinstance(row, list) else row
+        return ActionProposal.model_validate(payload)
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from unittest import TestCase
+from unittest.mock import patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -7,12 +8,34 @@ from fastapi.testclient import TestClient
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
 from app.services.repository import DemoRepository
+from app.services.search import WebResult
+from app.services.web_import import DownloadedWebDocument
+
+
+class FakeSearchProvider:
+    name = "fake-search"
+    configured = True
+
+    async def search(self, query, include_domains=None):
+        return [
+            WebResult(
+                title="某大学官方招生网",
+                url="https://example.edu/admission",
+                snippet=f"{query} 的招生信息",
+                accessed_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+            )
+        ]
+
+    async def extract(self, url):
+        return url
 
 
 class ApiFlowTests(TestCase):
     def setUp(self):
         self.previous_repository = main.repository
+        self.previous_search_provider = main.search_provider
         main.repository = DemoRepository(now_factory=lambda: datetime(2026, 8, 10, 8, tzinfo=UTC))
+        main.search_provider = FakeSearchProvider()
         self.user = AuthUser(
             id=UUID("11111111-1111-1111-1111-111111111111"),
             email="one@example.com",
@@ -24,17 +47,26 @@ class ApiFlowTests(TestCase):
             return self.current_user
 
         main.app.dependency_overrides[get_current_user] = authenticated_user
-        main.import_proposals.clear()
-        main.action_proposals.clear()
-        main.applied_proposals.clear()
         self.client = TestClient(main.app)
 
     def tearDown(self):
         main.app.dependency_overrides.clear()
         main.repository = self.previous_repository
+        main.search_provider = self.previous_search_provider
 
     def task_count(self) -> int:
         return len(self.client.get("/api/v1/tasks").json())
+
+    def test_health_exposes_agent_capabilities_without_secrets(self):
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["agent"]["web_search_configured"], True)
+        self.assertIn(body["agent"]["mode"], {"live", "partial", "fallback"})
+        serialized = response.text.lower()
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("token", serialized)
 
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
@@ -67,6 +99,26 @@ class ApiFlowTests(TestCase):
         self.assertEqual(contribution["effective_minutes"], 80)
         self.assertEqual(contribution["completed_tasks"], 1)
 
+    def test_web_search_history_is_persisted_and_user_isolated(self):
+        searched = self.client.post(
+            "/api/v1/search/web",
+            json={"query": "2028 软件工程招生简章"},
+        )
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(searched.json()[0]["title"], "某大学官方招生网")
+
+        history = self.client.get("/api/v1/search/web/history").json()
+        self.assertEqual(history[0]["query"], "2028 软件工程招生简章")
+        self.assertEqual(history[0]["provider"], "fake-search")
+        self.assertEqual(history[0]["results"][0]["url"], "https://example.edu/admission")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/search/web/history").json(), [])
+
     def test_agent_write_requires_approval_and_is_idempotent(self):
         run = self.client.post(
             "/api/v1/agents/combined/runs",
@@ -76,6 +128,7 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertEqual(body["route"], "combined")
         self.assertEqual(body["retrieval_mode"], "hybrid")
+        self.assertEqual(body["model_status"], "fallback")
         self.assertEqual(self.task_count(), 0)
 
         proposal_id = body["proposal"]["id"]
@@ -84,6 +137,39 @@ class ApiFlowTests(TestCase):
         self.assertEqual(first.json()["status"], "applied")
         self.assertEqual(second.json()["status"], "applied")
         self.assertEqual(self.task_count(), 1)
+
+    def test_latest_agent_thread_restores_messages_and_is_user_isolated(self):
+        run = self.client.post(
+            "/api/v1/agents/tutor/runs",
+            json={"message": "解释二叉树的遍历"},
+        ).json()
+
+        history = self.client.get("/api/v1/agents/threads/latest")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.json()["id"], run["thread_id"])
+        self.assertEqual(history.json()["mode"], "tutor")
+        self.assertEqual(history.json()["messages"][0]["role"], "user")
+        self.assertEqual(history.json()["messages"][0]["content"], "解释二叉树的遍历")
+        self.assertEqual(history.json()["messages"][1]["role"], "agent")
+
+        threads = self.client.get("/api/v1/agents/threads")
+        self.assertEqual(threads.status_code, 200)
+        self.assertEqual(threads.json()[0]["id"], run["thread_id"])
+        selected = self.client.get(f"/api/v1/agents/threads/{run['thread_id']}")
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.json()["messages"][0]["content"], "解释二叉树的遍历")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertIsNone(self.client.get("/api/v1/agents/threads/latest").json())
+        self.assertEqual(self.client.get("/api/v1/agents/threads").json(), [])
+        self.assertEqual(
+            self.client.get(f"/api/v1/agents/threads/{run['thread_id']}").status_code,
+            404,
+        )
 
     def test_separate_agent_runs_do_not_share_idempotency_key(self):
         payload = {"message": "安排明天的 408 复习"}
@@ -95,6 +181,129 @@ class ApiFlowTests(TestCase):
         self.client.post(f"/api/v1/proposals/{first['proposal']['id']}/approve")
         self.client.post(f"/api/v1/proposals/{second['proposal']['id']}/approve")
         self.assertEqual(self.task_count(), 2)
+
+    def test_agent_proposal_can_be_edited_before_approval(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个复习任务"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+
+        missing_payload = self.client.post(f"/api/v1/proposals/{proposal_id}/edit")
+        self.assertEqual(missing_payload.status_code, 422)
+        edited = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={"title": "线性代数错题复盘", "subject": "math", "planned_minutes": 75},
+        )
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()["status"], "edited")
+        self.assertEqual(edited.json()["payload"]["planned_minutes"], 75)
+        self.assertEqual(self.task_count(), 0)
+
+        approved = self.client.post(f"/api/v1/proposals/{proposal_id}/approve")
+        self.assertEqual(approved.json()["status"], "applied")
+        tasks = self.client.get("/api/v1/tasks").json()
+        self.assertEqual(tasks[0]["title"], "线性代数错题复盘")
+        self.assertEqual(tasks[0]["subject"], "math")
+        self.assertEqual(tasks[0]["planned_minutes"], 75)
+
+    def test_agent_proposal_edit_rejects_invalid_task_fields(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个复习任务"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+        response = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={"title": "", "subject": "other", "planned_minutes": 0},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.task_count(), 0)
+
+    def test_pending_agent_proposals_can_be_restored_and_are_user_isolated(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排一个 408 复习任务"},
+        ).json()
+        restored = self.client.get("/api/v1/proposals").json()
+        self.assertEqual(restored[0]["id"], run["proposal"]["id"])
+        self.assertEqual(restored[0]["status"], "pending")
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/proposals").json(), [])
+
+    def test_coach_answer_and_proposal_use_real_learning_context(self):
+        self.client.post(
+            "/api/v1/mistakes",
+            json={
+                "subject": "math",
+                "title": "洛必达使用条件",
+                "question": "何时可以使用洛必达法则？",
+            },
+        )
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "根据我的错题安排今天的复习"},
+        )
+
+        self.assertEqual(run.status_code, 200)
+        body = run.json()
+        self.assertIn("到期错题 1 道", body["answer"])
+        self.assertIn("洛必达使用条件", body["answer"])
+        self.assertEqual(body["proposal"]["payload"]["subject"], "math")
+        self.assertIn("洛必达使用条件", body["proposal"]["summary"])
+
+    def test_tutor_answer_cites_matching_private_material(self):
+        self.client.post(
+            "/api/v1/documents/upload",
+            files={
+                "file": (
+                    "数据结构笔记.md",
+                    "# 线性表\n顺序表支持按下标随机访问。".encode(),
+                    "text/markdown",
+                )
+            },
+        )
+
+        run = self.client.post(
+            "/api/v1/agents/tutor/runs",
+            json={"message": "顺序表"},
+        )
+
+        self.assertEqual(run.status_code, 200)
+        body = run.json()
+        self.assertIn("数据结构笔记", body["answer"])
+        self.assertIn("顺序表支持按下标随机访问", body["answer"])
+        self.assertEqual(body["sources"][0]["source_type"], "private")
+        self.assertEqual(body["sources"][0]["title"], "数据结构笔记")
+        self.assertIsNone(body["proposal"])
+        self.assertEqual(self.task_count(), 0)
+
+    def test_combined_knowledge_question_does_not_create_write_proposal(self):
+        run = self.client.post(
+            "/api/v1/agents/combined/runs",
+            json={"message": "请解释当前 408 数据结构中的顺序表"},
+        )
+        self.assertEqual(run.status_code, 200)
+        self.assertIsNone(run.json()["proposal"])
+        self.assertEqual(self.task_count(), 0)
+
+    def test_agent_proposal_isolated_from_other_user(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs", json={"message": "安排明天的 408 复习"}
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        response = self.client.post(f"/api/v1/proposals/{run['proposal']['id']}/approve")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(self.task_count(), 0)
 
     def test_users_cannot_read_or_modify_each_others_tasks(self):
         first = self.client.post(
@@ -716,9 +925,7 @@ class ApiFlowTests(TestCase):
         documents = self.client.get("/api/v1/documents")
         self.assertEqual(documents.status_code, 200)
         self.assertEqual(len(documents.json()), 1)
-        status = self.client.get(
-            f"/api/v1/documents/{first.json()['id']}/ingestion-status"
-        )
+        status = self.client.get(f"/api/v1/documents/{first.json()['id']}/ingestion-status")
         self.assertEqual(status.status_code, 200)
         self.assertEqual(status.json()["status"], "ready")
 
@@ -727,6 +934,45 @@ class ApiFlowTests(TestCase):
             json={"url": "http://127.0.0.1/private"},
         )
         self.assertEqual(blocked.status_code, 422)
+
+    def test_web_import_requires_approval_then_persists_searchable_document(self):
+        preview = self.client.post(
+            "/api/v1/documents/import-preview",
+            json={"url": "https://example.edu/guide"},
+        )
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/documents").json(), [])
+        downloaded = DownloadedWebDocument(
+            final_url="https://example.edu/guide",
+            title="2028 招生指南",
+            filename="2028 招生指南.md",
+            content_type="text/markdown",
+            content="# 2028 招生指南\n\n软件工程考试科目说明。".encode(),
+        )
+        with patch("app.main.download_public_document", return_value=downloaded):
+            approved = self.client.post(
+                f"/api/v1/documents/import-proposals/{preview.json()['id']}/approve"
+            )
+
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(approved.json()["proposal"]["status"], "approved")
+        self.assertEqual(approved.json()["document"]["source_type"], "web")
+        search = self.client.get("/api/v1/knowledge/private-search", params={"query": "考试科目"})
+        self.assertEqual(search.status_code, 200)
+        self.assertEqual(search.json()[0]["title"], "2028 招生指南")
+
+    def test_web_import_proposal_is_isolated_from_another_user(self):
+        preview = self.client.post(
+            "/api/v1/documents/import-preview",
+            json={"url": "https://example.edu/private-guide"},
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        response = self.client.post(f"/api/v1/documents/import-proposals/{preview['id']}/approve")
+        self.assertEqual(response.status_code, 404)
 
     def test_private_knowledge_search_returns_citations_and_isolates_users(self):
         uploaded = self.client.post(

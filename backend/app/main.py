@@ -6,18 +6,25 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import httpx
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
+from app.agents.context import build_agent_context
 from app.agents.graph import build_graph
+from app.agents.model import OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.schemas import (
     ActionProposal,
+    AgentCitation,
+    AgentProposalEditRequest,
     AgentRunRequest,
+    AgentThreadHistory,
+    AgentThreadSummary,
     CareerItemCreate,
     CareerItemType,
     CareerItemUpdate,
@@ -38,10 +45,12 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
     TaskUpdate,
+    WebSearchRecord,
     WebSearchRequest,
 )
 from app.services.exporting import render_csv_export, render_json_export, render_markdown_export
 from app.services.ingestion import chunk_markdown, chunk_pages, document_hash
+from app.services.rag import choose_retrieval_mode
 from app.services.repository import (
     RepositoryConflictError,
     RepositoryError,
@@ -51,10 +60,11 @@ from app.services.repository import (
 from app.services.search import get_search_provider
 from app.services.security import UnsafeUrlError, validate_public_url
 from app.services.store import SessionOverlapError
+from app.services.web_import import download_public_document
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-app = FastAPI(title="研途 API", version="0.3.0", docs_url="/docs")
+app = FastAPI(title="研途 API", version="0.7.0", docs_url="/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -64,10 +74,11 @@ app.add_middleware(
 )
 
 repository = build_repository(settings)
-import_proposals: dict[UUID, tuple[UUID, ImportProposal]] = {}
-action_proposals: dict[UUID, tuple[UUID, ActionProposal]] = {}
-applied_proposals: set[str] = set()
-agent_graph = build_graph()
+agent_model = OpenAICompatibleAgentModel(settings)
+agent_graph = build_graph(agent_model)
+search_provider = get_search_provider(settings)
+
+WRITE_INTENT_MARKERS = ("安排", "创建", "添加", "生成任务", "调整计划", "写入", "建立任务")
 
 
 @app.exception_handler(RepositoryError)
@@ -83,14 +94,44 @@ async def repository_error_handler(_: Request, error: RepositoryError) -> JSONRe
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
+async def health() -> dict[str, object]:
+    model_configured = agent_model.configured
+    web_search_configured = search_provider.configured
+    if model_configured and web_search_configured:
+        agent_mode = "live"
+    elif model_configured or web_search_configured:
+        agent_mode = "partial"
+    else:
+        agent_mode = "fallback"
     return {
         "status": "ok",
         "mode": repository.mode,
         "auth": "configured"
         if settings.supabase_url and settings.supabase_anon_key
         else "unconfigured",
+        "agent": {
+            "mode": agent_mode,
+            "model_configured": model_configured,
+            "web_search_configured": web_search_configured,
+        },
     }
+
+
+def prepare_document_chunks(content: bytes, content_type: str):
+    if content_type == "application/pdf":
+        try:
+            pages = [(page.extract_text() or "") for page in PdfReader(BytesIO(content)).pages]
+        except Exception as error:
+            raise HTTPException(422, "PDF could not be parsed") from error
+        chunks = chunk_pages(pages)
+        text_chars = sum(len(page.strip()) for page in pages)
+        status = "ocr_required" if text_chars < max(120, len(pages) * 40) else "ready"
+        return chunks, status
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise HTTPException(422, "text document must be UTF-8 encoded") from error
+    return chunk_markdown(text), "ready"
 
 
 @app.get("/api/v1/today")
@@ -332,13 +373,19 @@ async def export_user_data(
     if format == "csv":
         body, media_type, suffix = render_csv_export(payload), "text/csv; charset=utf-8", "csv"
     elif format == "markdown":
-        body, media_type, suffix = render_markdown_export(payload), "text/markdown; charset=utf-8", "md"
+        body, media_type, suffix = (
+            render_markdown_export(payload),
+            "text/markdown; charset=utf-8",
+            "md",
+        )
     else:
         body, media_type, suffix = render_json_export(payload), "application/json", "json"
     return Response(
         content=body,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="yantu-export-{date_stamp}.{suffix}"'
+        },
     )
 
 
@@ -358,16 +405,33 @@ async def contributions(
 
 @app.post("/api/v1/search/web", response_model=list[SearchSource])
 async def web_search(
-    payload: WebSearchRequest, _: Annotated[AuthUser, Depends(get_current_user)]
+    payload: WebSearchRequest, user: Annotated[AuthUser, Depends(get_current_user)]
 ) -> list[SearchSource]:
-    provider = get_search_provider(settings)
-    results = await provider.search(payload.query, payload.include_domains)
-    return [
+    results = await search_provider.search(payload.query, payload.include_domains)
+    sources = [
         SearchSource(
             title=item.title, url=item.url, snippet=item.snippet, accessed_at=item.accessed_at
         )
         for item in results
     ]
+    try:
+        await repository.record_web_search(
+            user,
+            query=payload.query,
+            provider=search_provider.name,
+            results=sources,
+        )
+    except RepositoryError:
+        logger.warning("Web search succeeded but its history record could not be persisted")
+    return sources
+
+
+@app.get("/api/v1/search/web/history", response_model=list[WebSearchRecord])
+async def web_search_history(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> list[WebSearchRecord]:
+    return await repository.list_web_search_records(user, limit)
 
 
 @app.post("/api/v1/documents/import-preview", response_model=ImportProposal)
@@ -386,8 +450,7 @@ async def preview_import(
         summary="系统将在批准后下载、去重、解析并建立混合检索索引。",
         content_type="text/html",
     )
-    import_proposals[proposal.id] = (user.id, proposal)
-    return proposal
+    return await repository.create_import_proposal(user, proposal)
 
 
 @app.post("/api/v1/documents/upload", status_code=201)
@@ -403,36 +466,15 @@ async def upload_document(
     if suffix not in {"pdf", "md", "markdown"}:
         raise HTTPException(415, "only PDF and Markdown files are supported")
 
-    digest = document_hash(content)
-    if suffix == "pdf":
-        try:
-            pages = [(page.extract_text() or "") for page in PdfReader(BytesIO(content)).pages]
-        except Exception as error:
-            raise HTTPException(422, "PDF could not be parsed") from error
-        chunks = chunk_pages(pages)
-        text_chars = sum(len(page.strip()) for page in pages)
-        status = "ocr_required" if text_chars < max(120, len(pages) * 40) else "ready"
-    else:
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise HTTPException(422, "Markdown must be UTF-8 encoded") from error
-        chunks = chunk_markdown(text)
-        status = "ready"
-
-    document_id = uuid4()
-    content_type = (
-        "application/pdf"
-        if suffix == "pdf"
-        else "text/markdown"
-    )
+    content_type = "application/pdf" if suffix == "pdf" else "text/markdown"
+    chunks, status = prepare_document_chunks(content, content_type)
     item, duplicate = await repository.persist_document(
         user,
-        document_id=document_id,
+        document_id=uuid4(),
         filename=filename,
         content_type=content_type,
         content=content,
-        digest=digest,
+        digest=document_hash(content),
         ingestion_status=status,
         chunks=chunks,
     )
@@ -462,19 +504,40 @@ async def search_private_knowledge(
     )
 
 
-@app.post("/api/v1/documents/import-proposals/{proposal_id}/approve", response_model=ImportProposal)
+@app.post("/api/v1/documents/import-proposals/{proposal_id}/approve")
 async def approve_import(
     proposal_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
-) -> ImportProposal:
-    owned = import_proposals.get(proposal_id)
-    if not owned or owned[0] != user.id:
+) -> dict:
+    proposal = await repository.get_import_proposal(user, proposal_id)
+    if not proposal:
         raise HTTPException(404, "import proposal not found")
-    proposal = owned[1]
-    if proposal.status == "approved":
-        return proposal
-    approved = proposal.model_copy(update={"status": "approved"})
-    import_proposals[proposal_id] = (user.id, approved)
-    return approved
+    try:
+        downloaded = await download_public_document(str(proposal.url))
+    except UnsafeUrlError as error:
+        raise HTTPException(422, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    except httpx.HTTPError as error:
+        raise HTTPException(502, "web document download failed") from error
+
+    filename = downloaded.filename.replace("\\", "_").replace("/", "_")[:180]
+    chunks, status = prepare_document_chunks(downloaded.content, downloaded.content_type)
+    document, duplicate = await repository.persist_document(
+        user,
+        document_id=uuid4(),
+        filename=filename,
+        content_type=downloaded.content_type,
+        content=downloaded.content,
+        digest=document_hash(downloaded.content),
+        ingestion_status=status,
+        chunks=chunks,
+        source_url=downloaded.final_url,
+        title=downloaded.title,
+    )
+    approved = await repository.approve_import_proposal(user, proposal_id)
+    if not approved:
+        raise HTTPException(404, "import proposal not found")
+    return {"proposal": approved, "document": document, "duplicate": duplicate}
 
 
 @app.get("/api/v1/documents/{document_id}/ingestion-status")
@@ -500,36 +563,140 @@ async def run_agent(
 ) -> dict:
     if agent not in {"coach", "tutor", "combined"}:
         raise HTTPException(404, "unknown agent")
+    retrieval_mode = choose_retrieval_mode(payload.message)
+    context = await build_agent_context(
+        repository,
+        user,
+        message=payload.message,
+        route=agent,
+        retrieval_mode=retrieval_mode,
+        search_provider=search_provider,
+    )
     result = await agent_graph.ainvoke(
         {
             "messages": [HumanMessage(content=payload.message)],
             "requested_route": agent,
             "user_id": str(user.id),
+            "context": context,
         }
     )
-    thread_id = payload.thread_id or str(uuid4())
-    proposal_id = uuid4()
-    idempotency_key = sha256(
-        f"{thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
-    ).hexdigest()
-    proposal = ActionProposal(
-        id=proposal_id,
-        agent="coach" if agent in {"coach", "combined"} else "tutor",
-        action="create_review_task",
-        payload={"title": "数据结构错题回顾", "planned_minutes": 45},
-        summary="创建一个 45 分钟的数据结构错题复习任务",
-        idempotency_key=idempotency_key,
+    wants_write = agent == "coach" or (
+        agent == "combined" and any(marker in payload.message for marker in WRITE_INTENT_MARKERS)
     )
-    action_proposals[proposal.id] = (user.id, proposal)
+    proposal: ActionProposal | None = None
+    if wants_write:
+        proposal_id = uuid4()
+        idempotency_key = sha256(
+            f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
+        ).hexdigest()
+        priority = (
+            context["due_mistakes"][0]
+            if context["due_mistakes"]
+            else context["pending_tasks"][0]
+            if context["pending_tasks"]
+            else None
+        )
+        proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
+        proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
+        requested_proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": proposal_title, "subject": proposal_subject, "planned_minutes": 45},
+            summary=f"创建一个 45 分钟的「{proposal_title}」任务",
+            idempotency_key=idempotency_key,
+        )
+        thread_id, proposal = await repository.create_agent_proposal(
+            user,
+            thread_id=payload.thread_id,
+            mode=agent,
+            proposal=requested_proposal,
+        )
+    else:
+        thread_id = await repository.ensure_agent_thread(
+            user,
+            thread_id=payload.thread_id,
+            mode=agent,
+            title=payload.message[:160],
+        )
+    answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
+    sources = [
+        AgentCitation(
+            source_type="private",
+            title=source["title"],
+            locator=source["locator"],
+        )
+        for source in context["private_sources"]
+    ] + [
+        AgentCitation(
+            source_type="web",
+            title=source["title"],
+            locator=source["url"],
+            url=source["url"],
+            accessed_at=source["accessed_at"],
+        )
+        for source in context["web_sources"]
+    ]
+    try:
+        await repository.append_agent_exchange(
+            user,
+            thread_id=thread_id,
+            user_message=payload.message,
+            agent_message=answer,
+            sources=sources,
+            metadata={
+                "route": result.get("route", agent),
+                "retrieval_mode": result.get("retrieval_mode", "private"),
+                "model_status": result.get("model_status", "fallback"),
+            },
+        )
+    except RepositoryError:
+        logger.warning("Agent run succeeded but its message history could not be persisted")
     return {
         "thread_id": thread_id,
         "agent": agent,
-        "answer": result.get("answer", "已完成分析。写入动作已转换为待确认提案。"),
+        "answer": answer,
         "route": result.get("route", agent),
         "retrieval_mode": result.get("retrieval_mode", "private"),
+        "model_status": result.get("model_status", "fallback"),
+        "sources": sources,
         "proposal": proposal,
         "created_at": datetime.now(UTC),
     }
+
+
+@app.get("/api/v1/agents/threads/latest", response_model=AgentThreadHistory | None)
+async def latest_agent_thread(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AgentThreadHistory | None:
+    return await repository.latest_agent_thread(user)
+
+
+@app.get("/api/v1/agents/threads", response_model=list[AgentThreadSummary])
+async def list_agent_threads(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> list[AgentThreadSummary]:
+    return await repository.list_agent_threads(user, limit)
+
+
+@app.get("/api/v1/agents/threads/{thread_id}", response_model=AgentThreadHistory)
+async def get_agent_thread(
+    thread_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> AgentThreadHistory:
+    thread = await repository.get_agent_thread(user, thread_id)
+    if not thread:
+        raise HTTPException(404, "agent thread not found")
+    return thread
+
+
+@app.get("/api/v1/proposals", response_model=list[ActionProposal])
+async def list_pending_proposals(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> list[ActionProposal]:
+    return await repository.list_pending_agent_proposals(user, limit)
 
 
 @app.post("/api/v1/proposals/{proposal_id}/{decision}", response_model=ActionProposal)
@@ -537,25 +704,18 @@ async def decide_proposal(
     proposal_id: UUID,
     decision: str,
     user: Annotated[AuthUser, Depends(get_current_user)],
+    payload: AgentProposalEditRequest | None = None,
 ) -> ActionProposal:
     if decision not in {"approve", "edit", "reject"}:
         raise HTTPException(422, "decision must be approve, edit or reject")
-    owned = action_proposals.get(proposal_id)
-    if not owned or owned[0] != user.id:
+    if decision == "edit" and payload is None:
+        raise HTTPException(422, "edited proposal payload is required")
+    proposal = await repository.decide_agent_proposal(
+        user,
+        proposal_id,
+        decision,
+        payload.model_dump(mode="json") if payload else None,
+    )
+    if not proposal:
         raise HTTPException(404, "proposal not found")
-    proposal = owned[1]
-    if decision == "approve":
-        if proposal.idempotency_key not in applied_proposals:
-            task_payload = TaskCreate(
-                title=str(proposal.payload.get("title", "Agent 复习任务")),
-                subject="cs408",
-                planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
-            )
-            await repository.create_task(user, task_payload)
-            applied_proposals.add(proposal.idempotency_key)
-        status = "applied"
-    else:
-        status = {"edit": "edited", "reject": "rejected"}[decision]
-    updated = proposal.model_copy(update={"status": status})
-    action_proposals[proposal_id] = (user.id, updated)
-    return updated
+    return proposal

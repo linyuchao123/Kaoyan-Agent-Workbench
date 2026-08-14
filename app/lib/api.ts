@@ -10,6 +10,17 @@ export type CareerItemType = "milestone" | "resume" | "application" | "interview
 export type CareerStatus = "planned" | "in_progress" | "submitted" | "interviewing" | "offer" | "rejected" | "completed" | "archived";
 export type ExportFormat = "json" | "csv" | "markdown";
 
+export type ApiHealth = {
+  status: "ok";
+  mode: "demo" | "supabase";
+  auth: "configured" | "unconfigured";
+  agent: {
+    mode: "live" | "partial" | "fallback";
+    model_configured: boolean;
+    web_search_configured: boolean;
+  };
+};
+
 export type ApiTask = {
   id: string;
   plan_id: string | null;
@@ -121,8 +132,59 @@ export type ContributionDay = {
 
 export type ActionProposal = {
   id: string;
+  agent: "coach" | "tutor";
+  action: string;
+  payload: {
+    title: string;
+    subject: Subject;
+    planned_minutes: number;
+  };
   summary: string;
+  idempotency_key: string;
   status: "pending" | "approved" | "edited" | "rejected" | "applied" | "failed";
+};
+
+export type AgentProposalEdit = ActionProposal["payload"];
+
+export type AgentSource = {
+  source_type: "private" | "web";
+  title: string;
+  locator: string;
+  url: string | null;
+  accessed_at: string | null;
+};
+
+export type AgentMessage = {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  sources: AgentSource[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AgentThreadHistory = {
+  id: string;
+  mode: "coach" | "tutor" | "combined";
+  title: string;
+  messages: AgentMessage[];
+};
+
+export type AgentThreadSummary = {
+  id: string;
+  mode: "coach" | "tutor" | "combined";
+  title: string;
+  updated_at: string;
+};
+
+export type ImportProposal = {
+  id: string;
+  url: string;
+  title: string;
+  summary: string;
+  content_type: string;
+  estimated_bytes: number | null;
+  status: "pending" | "approved" | "rejected";
 };
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -197,7 +259,7 @@ async function download(path: string): Promise<{ blob: Blob; filename: string }>
 }
 
 export const api = {
-  health: () => request<{ status: string; mode: "demo" | "supabase"; auth: "configured" | "unconfigured" }>("/health"),
+  health: () => request<ApiHealth>("/health"),
   today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
   listPlans: (level?: PlanLevel) => request<ApiPlan[]>(`/api/v1/plans${level ? `?level=${level}` : ""}`),
   createPlan: (payload: {
@@ -319,21 +381,39 @@ export const api = {
       duplicate: boolean;
     }>("/api/v1/documents/upload", { method: "POST", body });
   },
-  previewImport: (url: string) => request<{ id: string; title: string; summary: string; status: string }>(
+  previewImport: (url: string) => request<ImportProposal>(
     "/api/v1/documents/import-preview",
     { method: "POST", body: JSON.stringify({ url }) },
   ),
-  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string) =>
+  approveImport: (id: string) => request<{
+    proposal: ImportProposal;
+    document: ApiDocument;
+    duplicate: boolean;
+  }>(`/api/v1/documents/import-proposals/${id}/approve`, { method: "POST" }),
+  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string, signal?: AbortSignal) =>
     request<{
       thread_id: string;
       answer: string;
       route: string;
       retrieval_mode: string;
-      proposal: ActionProposal;
+      model_status: "generated" | "fallback";
+      sources: AgentSource[];
+      proposal: ActionProposal | null;
     }>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",
       body: JSON.stringify({ message, thread_id: threadId }),
+      signal,
     }),
-  decideProposal: (id: string, decision: "approve" | "edit" | "reject") =>
-    request<ActionProposal>(`/api/v1/proposals/${id}/${decision}`, { method: "POST" }),
+  latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
+  listAgentThreads: () => request<AgentThreadSummary[]>("/api/v1/agents/threads?limit=20"),
+  getAgentThread: (id: string) => request<AgentThreadHistory>(`/api/v1/agents/threads/${id}`),
+  listPendingProposals: () => request<ActionProposal[]>("/api/v1/proposals?limit=10"),
+  decideProposal: (
+    id: string,
+    decision: "approve" | "edit" | "reject",
+    editedPayload?: AgentProposalEdit,
+  ) => request<ActionProposal>(`/api/v1/proposals/${id}/${decision}`, {
+    method: "POST",
+    body: editedPayload ? JSON.stringify(editedPayload) : undefined,
+  }),
 };

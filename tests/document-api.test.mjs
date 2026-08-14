@@ -109,3 +109,179 @@ test("私有资料检索编码查询参数并携带当前登录身份", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test("网页资料只有确认后才调用批准入库接口", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    if (String(input).endsWith("/api/v1/documents/import-preview")) {
+      return new Response(JSON.stringify({
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        url: "https://example.edu/guide",
+        title: "待导入网络资料",
+        summary: "确认后导入",
+        content_type: "text/html",
+        estimated_bytes: null,
+        status: "pending",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      proposal: { id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", status: "approved" },
+      document: { ...documentRecord, source_type: "web", source_url: "https://example.edu/guide" },
+      duplicate: false,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const preview = await api.previewImport("https://example.edu/guide");
+    assert.equal(requests.length, 1, "生成预览时不应自动批准下载");
+    await api.approveImport(preview.id);
+    assert.equal(requests.length, 2);
+    assert.match(requests[1].input, /\/import-proposals\/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\/approve$/);
+    assert.equal(requests[1].init.method, "POST");
+    assert.equal(new Headers(requests[1].init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.doesNotMatch(String(requests[1].init.body), /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Agent 提案编辑只提交允许修改的任务字段", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+      agent: "coach",
+      action: "create_review_task",
+      payload: { title: "线性代数错题复盘", subject: "math", planned_minutes: 75 },
+      summary: "创建复习任务",
+      idempotency_key: "proposal-key",
+      status: "edited",
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.decideProposal("cccccccc-cccc-cccc-cccc-cccccccccccc", "edit", {
+      title: "线性代数错题复盘",
+      subject: "math",
+      planned_minutes: 75,
+    });
+    assert.match(request.input, /\/api\/v1\/proposals\/cccccccc-cccc-cccc-cccc-cccccccccccc\/edit$/);
+    assert.equal(request.init.method, "POST");
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.deepEqual(JSON.parse(request.init.body), {
+      title: "线性代数错题复盘",
+      subject: "math",
+      planned_minutes: 75,
+    });
+    assert.doesNotMatch(request.init.body, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Agent 页面可读取当前账户的待审批提案", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.listPendingProposals();
+    assert.match(request.input, /\/api\/v1\/proposals\?limit=10$/);
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+    assert.doesNotMatch(request.input, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Agent 页面可恢复当前账户最近一次对话", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response("null", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("agent-history-token");
+
+  try {
+    const history = await api.latestAgentThread();
+    assert.equal(history, null);
+    assert.match(request.input, /\/api\/v1\/agents\/threads\/latest$/);
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer agent-history-token");
+    assert.doesNotMatch(request.input, /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Agent 页面可列出并读取当前账户的历史对话", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    return new Response(JSON.stringify([]), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  };
+  setApiAccessToken("agent-thread-token");
+
+  try {
+    await api.listAgentThreads();
+    await api.getAgentThread("11111111-1111-1111-1111-111111111111");
+    assert.match(requests[0].input, /\/api\/v1\/agents\/threads\?limit=20$/);
+    assert.match(requests[1].input, /\/api\/v1\/agents\/threads\/11111111-1111-1111-1111-111111111111$/);
+    for (const request of requests) {
+      assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer agent-thread-token");
+      assert.doesNotMatch(request.input, /user_id/);
+    }
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Agent 请求支持传入取消信号", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      thread_id: "22222222-2222-2222-2222-222222222222",
+      answer: "已完成分析",
+      route: "coach",
+      retrieval_mode: "none",
+      model_status: "fallback",
+      sources: [],
+      proposal: null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const controller = new AbortController();
+
+  try {
+    await api.runAgent("coach", "安排今天的复习", undefined, controller.signal);
+    assert.equal(request.init.signal, controller.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

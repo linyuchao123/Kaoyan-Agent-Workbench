@@ -1,8 +1,8 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type ApiCareerItem, type ApiDocument, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -723,7 +723,6 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
   const [loading, setLoading] = useState(!isDemo);
   const [formOpen, setFormOpen] = useState(false);
-  const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -1119,6 +1118,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [tierFilter, setTierFilter] = useState<SchoolTier | "all">("all");
   const [yearFilter, setYearFilter] = useState("2028");
   const [tier, setTier] = useState<SchoolTier>("match");
@@ -1134,14 +1134,8 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
-    if (isDemo) {
-      setSchools(demoSchools);
-      setLoading(false);
-      return;
-    }
+    if (isDemo) return;
     let active = true;
-    setLoading(true);
-    setStatus("正在加载云端院校情报…");
     void api.listSchoolOptions(tierFilter === "all" ? undefined : tierFilter, Number(yearFilter) || undefined)
       .then((items) => {
         if (!active) return;
@@ -1156,6 +1150,29 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [isDemo, tierFilter, yearFilter]);
+
+  const visibleSchools = isDemo
+    ? demoSchools.filter((school) =>
+        (tierFilter === "all" || school.tier === tierFilter) &&
+        school.exam_year === (Number(yearFilter) || 2028),
+      )
+    : schools;
+
+  function changeYearFilter(value: string) {
+    setYearFilter(value);
+    if (!isDemo) {
+      setLoading(true);
+      setStatus("正在加载云端院校情报…");
+    }
+  }
+
+  function changeTierFilter(value: SchoolTier | "all") {
+    setTierFilter(value);
+    if (!isDemo) {
+      setLoading(true);
+      setStatus("正在加载云端院校情报…");
+    }
+  }
 
   function clearSchoolForm() {
     setEditingSchool(null);
@@ -1247,9 +1264,9 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   }
 
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
-    <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => setYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => setTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
+    <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : schools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{schools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : visibleSchools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
   </section>;
 }
 
@@ -1294,17 +1311,8 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const [notes, setNotes] = useState("");
 
   useEffect(() => {
-    if (isDemo) {
-      setItems(demoCareerItems.filter((item) =>
-        (typeFilter === "all" || item.item_type === typeFilter) &&
-        (statusFilter === "all" || item.status === statusFilter),
-      ));
-      setLoading(false);
-      return;
-    }
+    if (isDemo) return;
     let active = true;
-    setLoading(true);
-    setMessage("正在加载云端求职记录…");
     void api.listCareerItems(typeFilter === "all" ? undefined : typeFilter, statusFilter === "all" ? undefined : statusFilter)
       .then((records) => {
         if (!active) return;
@@ -1319,6 +1327,29 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [isDemo, statusFilter, typeFilter]);
+
+  const visibleItems = isDemo
+    ? demoCareerItems.filter((item) =>
+        (typeFilter === "all" || item.item_type === typeFilter) &&
+        (statusFilter === "all" || item.status === statusFilter),
+      )
+    : items;
+
+  function changeTypeFilter(value: CareerItemType | "all") {
+    setTypeFilter(value);
+    if (!isDemo) {
+      setLoading(true);
+      setMessage("正在加载云端求职记录…");
+    }
+  }
+
+  function changeStatusFilter(value: CareerStatus | "all") {
+    setStatusFilter(value);
+    if (!isDemo) {
+      setLoading(true);
+      setMessage("正在加载云端求职记录…");
+    }
+  }
 
   function resetForm() {
     setEditingItem(null);
@@ -1395,19 +1426,19 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   }
 
   const metricCounts = {
-    total: items.length,
-    submitted: items.filter((item) => ["submitted", "interviewing", "offer"].includes(item.status)).length,
-    interviewing: items.filter((item) => item.status === "interviewing").length,
-    offer: items.filter((item) => item.status === "offer").length,
+    total: visibleItems.length,
+    submitted: visibleItems.filter((item) => ["submitted", "interviewing", "offer"].includes(item.status)).length,
+    interviewing: visibleItems.filter((item) => item.status === "interviewing").length,
+    offer: visibleItems.filter((item) => item.status === "offer").length,
   };
 
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
     <div className="career-separation-note"><strong>独立统计</strong><span>求职记录用于追踪就业准备，不会改变学习热力图、连续学习天数或考研完成率。</span></div>
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
-    <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
+    <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
     {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : items.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{items.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
   </section>;
 }
 
@@ -1450,8 +1481,8 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">数据可携带与长期归档</div><h1>数据备份</h1><p>随时导出自己的核心记录，服务器仍是在线使用时的最终事实来源。</p></div></div>
     <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
-    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <article className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></article>)}</div>
-    <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>资料库原始文件和向量索引将在 v0.6 Storage 阶段加入完整备份；当前导出只包含已经云端结构化的核心数据。</p></section>
+    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <button type="button" className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></button>)}</div>
+    <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>当前导出包含已结构化的核心数据；资料库原始文件与检索索引的完整备份将在后续版本补齐。</p></section>
   </section>;
 }
 
@@ -1464,6 +1495,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
+  const [importProposal, setImportProposal] = useState<ImportProposal | null>(null);
   const [importStatus, setImportStatus] = useState(isDemo ? "当前显示离线演示资料" : "正在加载云端资料库…");
   const [loading, setLoading] = useState(!isDemo);
   const [busy, setBusy] = useState(false);
@@ -1524,9 +1556,26 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     try {
       const preview = await api.previewImport(sourceUrl.trim());
       setImportStatus(`已生成待确认提案：${preview.summary}`);
-      setSourceUrl("");
+      setImportProposal(preview);
     } catch (error) {
       setImportStatus(error instanceof Error ? `链接预览失败：${error.message}` : "链接预览失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approveUrlImport() {
+    if (!importProposal || busy) return;
+    setBusy(true);
+    setImportStatus("正在安全下载、解析并写入个人资料库…");
+    try {
+      const result = await api.approveImport(importProposal.id);
+      setDocs((items) => [result.document, ...items.filter((item) => item.id !== result.document.id)]);
+      setImportProposal(null);
+      setSourceUrl("");
+      setImportStatus(result.duplicate ? "该内容已存在，已复用原资料" : "网页资料已确认并完成入库");
+    } catch (error) {
+      setImportStatus(error instanceof Error ? `网页入库失败：${error.message}` : "网页入库失败");
     } finally {
       setBusy(false);
     }
@@ -1556,16 +1605,87 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
 
   const ingestionLabels: Record<ApiDocument["ingestion_status"], string> = { queued: "等待处理", processing: "正在处理", ocr_required: "等待 OCR", ready: "索引就绪", failed: "处理失败" };
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small></section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>当前先使用关键词全文检索；Embedding 接入后会自动升级为混合检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：顺序表的随机访问" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><p>{source.content}</p><small>{source.locator}</small></article>)}</div>}</section></section>;
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setImportProposal(null); }} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small>{importProposal && <div className="import-confirm"><strong>待确认网络资料</strong><span>{importProposal.url}</span><p>{importProposal.summary}</p><button type="button" disabled={busy} onClick={() => void approveUrlImport()}>确认下载并入库</button></div>}</section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>当前先使用关键词全文检索；Embedding 接入后会自动升级为混合检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：顺序表的随机访问" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><p>{source.content}</p><small>{source.locator}</small></article>)}</div>}</section></section>;
 }
+
+function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onStartEdit, onCancelEdit, onSaveEdit, onApprove, onReject }: { proposal: ActionProposal; draft: AgentProposalEdit | null; editing: boolean; busy: boolean; onDraftChange: (draft: AgentProposalEdit) => void; onStartEdit: () => void; onCancelEdit: () => void; onSaveEdit: (event: FormEvent) => void; onApprove: () => void; onReject: () => void }) {
+  const canDecide = proposal.status === "pending" || proposal.status === "edited";
+  return <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.payload.title} · {subjectMeta[proposal.payload.subject].label} · {proposal.payload.planned_minutes} 分钟</p></div>{editing && draft ? <form className="agent-proposal-edit" onSubmit={onSaveEdit}><label>任务标题<input required maxLength={160} value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} /></label><label>科目<select value={draft.subject} onChange={(event) => onDraftChange({ ...draft, subject: event.target.value as Subject })}>{scopes.filter((item) => item.key !== "all").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>计划分钟<input required type="number" min={1} max={1440} value={draft.planned_minutes} onChange={(event) => onDraftChange({ ...draft, planned_minutes: Number(event.target.value) })} /></label><div><button className="approve" disabled={busy} type="submit">保存编辑</button><button className="text-button" disabled={busy} type="button" onClick={onCancelEdit}>取消</button></div></form> : canDecide && <div><button className="approve" disabled={busy} onClick={onApprove}>批准写入</button><button className="outline-button" disabled={busy} onClick={onStartEdit}>编辑</button><button className="text-button" disabled={busy} onClick={onReject}>拒绝</button></div>}</div>;
+}
+
+const agentWelcomeMessage = "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。";
 
 function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string }>>([{ role: "agent", text: "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。" }]);
+  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string; sources?: AgentSource[] }>>([{ role: "agent", text: agentWelcomeMessage }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
+  const [proposalDraft, setProposalDraft] = useState<AgentProposalEdit | null>(null);
+  const [editingProposal, setEditingProposal] = useState(false);
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [capabilities, setCapabilities] = useState<ApiHealth["agent"] | null>(null);
+  const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
+  const [copyFeedback, setCopyFeedback] = useState<{ index: number; label: string } | null>(null);
+  const agentRequest = useRef<AbortController | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
+
+  function restoreThread(thread: AgentThreadHistory) {
+    setThreadId(thread.id);
+    setMode(thread.mode);
+    setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources })) : [{ role: "agent", text: agentWelcomeMessage }]);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void api.health().then((health) => {
+      if (!cancelled) setCapabilities(health.agent);
+    }).catch(() => {
+      if (!cancelled) setCapabilities(null);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => () => agentRequest.current?.abort(), []);
+
+  useEffect(() => {
+    const scrollFrame = window.requestAnimationFrame(() => {
+      const messageList = messageListRef.current;
+      if (messageList) messageList.scrollTop = messageList.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(scrollFrame);
+  }, [messages]);
+
+  useEffect(() => {
+    if (isDemo) return;
+    let cancelled = false;
+    void Promise.all([api.latestAgentThread(), api.listPendingProposals(), api.listAgentThreads()]).then(([thread, items, threadItems]) => {
+      if (cancelled) return;
+      setThreads(threadItems);
+      const restoredMessages = thread?.messages.length
+        ? thread.messages.map((message) => ({
+            role: message.role,
+            text: message.content,
+            sources: message.sources,
+          }))
+        : null;
+      if (thread) {
+        setThreadId(thread.id);
+        setMode(thread.mode);
+      }
+      if (items.length > 0) {
+        setProposal(items[0]);
+        setProposalDraft(items[0].payload);
+      }
+      if (restoredMessages || items.length > 0) {
+        setMessages([
+          ...(restoredMessages ?? []),
+          ...(items.length > 0 ? [{ role: "agent" as const, text: "已恢复你上次未处理的 Agent 提案，请继续批准、编辑或拒绝。" }] : []),
+        ]);
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [isDemo]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -1577,13 +1697,23 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       setMessages((items) => [...items, { role: "agent", text: "当前为离线演示模式。登录并连接 Supabase 后，Agent 才能读取你的个人学习数据。" }]);
       return;
     }
+    const controller = new AbortController();
+    agentRequest.current = controller;
     setBusy(true);
     try {
-      const result = await api.runAgent(mode, text, threadId);
+      const result = await api.runAgent(mode, text, threadId, controller.signal);
       setThreadId(result.thread_id);
+      void api.listAgentThreads().then(setThreads).catch(() => undefined);
       setProposal(result.proposal);
-      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode}` }]);
-    } catch {
+      setProposalDraft(result.proposal?.payload ?? null);
+      setEditingProposal(false);
+      const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
+      setMessages((items) => [...items, { role: "agent", text: `${result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, sources: result.sources }]);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setMessages((items) => [...items, { role: "agent", text: "已停止等待本次回答。服务端可能仍在安全完成分析，你可以稍后从历史对话中恢复结果；没有经过确认的提案不会写入学习数据。" }]);
+        return;
+      }
       const fallback = mode === "coach"
         ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"
         : mode === "tutor"
@@ -1591,16 +1721,62 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           : "双 Agent API 尚未连接；当前消息没有写入任何学习数据。";
       setMessages((items) => [...items, { role: "agent", text: fallback }]);
     } finally {
+      if (agentRequest.current === controller) {
+        agentRequest.current = null;
+        setBusy(false);
+      }
+    }
+  }
+
+  function stopWaiting() {
+    agentRequest.current?.abort();
+  }
+
+  async function copyAgentMessage(text: string, index: number) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyFeedback({ index, label: "已复制" });
+    } catch {
+      setCopyFeedback({ index, label: "复制失败" });
+    }
+  }
+
+  function startNewConversation() {
+    if (proposal && (proposal.status === "pending" || proposal.status === "edited")) {
+      setMessages((items) => [...items, { role: "agent", text: "当前还有待确认提案。请先批准或拒绝，再开始新对话，避免遗漏未处理的学习安排。" }]);
+      return;
+    }
+    setThreadId(undefined);
+    setProposal(null);
+    setProposalDraft(null);
+    setEditingProposal(false);
+    setQuery("");
+    setMessages([{ role: "agent", text: agentWelcomeMessage }]);
+  }
+
+  async function openConversation(selectedThreadId: string) {
+    if (selectedThreadId === threadId || busy) return;
+    if (proposal && (proposal.status === "pending" || proposal.status === "edited")) {
+      setMessages((items) => [...items, { role: "agent", text: "当前还有待确认提案。请先处理提案，再切换历史对话。" }]);
+      return;
+    }
+    setBusy(true);
+    try {
+      restoreThread(await api.getAgentThread(selectedThreadId));
+    } catch {
+      setMessages((items) => [...items, { role: "agent", text: "历史对话读取失败，当前对话没有变化。" }]);
+    } finally {
       setBusy(false);
     }
   }
 
-  async function decide(decision: "approve" | "edit" | "reject") {
+  async function decide(decision: "approve" | "reject") {
     if (!proposal) return;
     setBusy(true);
     try {
       const updated = await api.decideProposal(proposal.id, decision);
       setProposal(updated);
+      setEditingProposal(false);
       const resultText = updated.status === "applied" ? "提案已批准并幂等写入任务清单。" : updated.status === "rejected" ? "提案已拒绝，没有修改学习数据。" : "提案已进入编辑状态。";
       setMessages((items) => [...items, { role: "agent", text: resultText }]);
     } catch {
@@ -1610,7 +1786,112 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  return <section className="content-view agent-view"><div className="view-title"><div><div className="eyebrow">LangChain × LangGraph</div><h1>双 Agent 学习助手</h1><p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p></div><span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span></div><div className="agent-shell panel"><div className="agent-tabs">{[["coach","计划教练"],["tutor","资料导师"],["combined","联合模式"]].map(([key, label]) => <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)}>{label}</button>)}</div><div className="message-list">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span>{message.role === "agent" ? "✦" : "你"}</span><p>{message.text}</p></div>)}</div>{proposal && <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.summary}</p></div>{proposal.status === "pending" && <div><button className="approve" disabled={busy} onClick={() => void decide("approve")}>批准写入</button><button className="outline-button" disabled={busy} onClick={() => void decide("edit")}>编辑</button><button className="text-button" disabled={busy} onClick={() => void decide("reject")}>拒绝</button></div>}</div>}<form className="agent-input" onSubmit={submit}><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" /><button type="submit" disabled={busy}>{busy ? "分析中…" : "发送 ↑"}</button></form></div></section>;
+  async function saveProposalEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!proposal || !proposalDraft || busy) return;
+    setBusy(true);
+    try {
+      const updated = await api.decideProposal(proposal.id, "edit", proposalDraft);
+      setProposal(updated);
+      setProposalDraft(updated.payload);
+      setEditingProposal(false);
+      setMessages((items) => [...items, { role: "agent", text: "提案内容已更新，仍未写入任务。请再次确认后批准。" }]);
+    } catch {
+      setMessages((items) => [...items, { role: "agent", text: "提案编辑保存失败，原提案未执行。" }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const modelReady = !isDemo && capabilities?.model_configured;
+  const searchReady = !isDemo && capabilities?.web_search_configured;
+  return (
+    <section className="content-view agent-view">
+      <div className="view-title">
+        <div>
+          <div className="eyebrow">LangChain × LangGraph</div>
+          <h1>双 Agent 学习助手</h1>
+          <p>计划教练负责执行闭环，资料导师负责带引用的检索与答疑。</p>
+        </div>
+        <div className="agent-heading-actions">
+          <span className={`status-chip ${busy ? "" : "online"}`}>● {busy ? "分析中" : "等待请求"}</span>
+          <button className="outline-button" type="button" onClick={startNewConversation} disabled={busy}>＋ 新建对话</button>
+        </div>
+      </div>
+      <div className="agent-capabilities panel" aria-label="Agent 运行能力">
+        <div>
+          <span className={modelReady ? "ready" : "fallback"}>模型</span>
+          <strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong>
+          <small>{modelReady ? "回答将调用配置的 OpenAI 兼容模型" : "未配置模型 Key，不会伪装成模型回答"}</small>
+        </div>
+        <div>
+          <span className={searchReady ? "ready" : "fallback"}>联网</span>
+          <strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong>
+          <small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small>
+        </div>
+      </div>
+      <div className="agent-shell panel">
+        {threads.length > 0 && (
+          <div className="agent-thread-list" aria-label="历史对话">
+            {threads.map((thread) => (
+              <button key={thread.id} type="button" className={thread.id === threadId ? "active" : ""} onClick={() => void openConversation(thread.id)} disabled={busy}>
+                <strong>{thread.title}</strong>
+                <small>{new Date(thread.updated_at).toLocaleDateString("zh-CN")}</small>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="agent-tabs">
+          {[["coach", "计划教练"], ["tutor", "资料导师"], ["combined", "联合模式"]].map(([key, label]) => (
+            <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)} disabled={busy}>{label}</button>
+          ))}
+        </div>
+        <div className="message-list" ref={messageListRef}>
+          {messages.map((message, index) => (
+            <div className={`message ${message.role}`} key={index}>
+              <span>{message.role === "agent" ? "✦" : "你"}</span>
+              <div className="message-body">
+                <p>{message.text}</p>
+                {message.role === "agent" && <button className="message-copy-button" type="button" onClick={() => void copyAgentMessage(message.text, index)}>{copyFeedback?.index === index ? copyFeedback.label : "复制回答"}</button>}
+                {message.sources && message.sources.length > 0 && (
+                  <div className="agent-sources">
+                    <strong>本次回答来源</strong>
+                    {message.sources.map((source) => source.url ? (
+                      <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer">
+                        <span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small>
+                      </a>
+                    ) : (
+                      <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {proposal && (
+          <AgentProposalCard
+            proposal={proposal}
+            draft={proposalDraft}
+            editing={editingProposal}
+            busy={busy}
+            onDraftChange={setProposalDraft}
+            onStartEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(true); }}
+            onCancelEdit={() => { setProposalDraft(proposal.payload); setEditingProposal(false); }}
+            onSaveEdit={saveProposalEdit}
+            onApprove={() => void decide("approve")}
+            onReject={() => void decide("reject")}
+          />
+        )}
+        <form className="agent-input" onSubmit={submit}>
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" disabled={busy} />
+          {busy
+            ? <button className="cancel" type="button" onClick={stopWaiting}>停止等待</button>
+            : <button type="submit" disabled={!query.trim()}>发送 ↑</button>}
+        </form>
+      </div>
+    </section>
+  );
 }
 
 function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
@@ -1671,12 +1952,299 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   );
 }
 
+type WorkbenchSearchEntry = {
+  id: string;
+  view: View;
+  category: string;
+  title: string;
+  detail: string;
+};
+
+function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; isDemo: boolean; onClose: () => void; onNavigate: (view: View) => void }) {
+  const [query, setQuery] = useState("");
+  const [entries, setEntries] = useState<WorkbenchSearchEntry[]>([]);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [activeResultIndex, setActiveResultIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    const focusFrame = window.requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (isDemo) return;
+    let active = true;
+    void Promise.all([
+      api.today(),
+      api.listPlans(),
+      api.listMistakes(),
+      api.listSchoolOptions(),
+      api.listDocuments(),
+      api.listCareerItems(),
+    ]).then(([today, plans, mistakes, schools, documents, careerItems]) => {
+      if (!active) return;
+      setEntries([
+        ...today.tasks.map((task) => ({ id: task.id, view: "today" as const, category: "今日任务", title: task.title, detail: `${subjectMeta[task.subject].label} · ${task.planned_minutes} 分钟` })),
+        ...plans.map((plan) => ({ id: plan.id, view: "plan" as const, category: `${plan.level === "stage" ? "阶段" : plan.level === "week" ? "周" : "日"}计划`, title: plan.title, detail: `${plan.starts_on} 至 ${plan.ends_on}` })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "错题卡", title: mistake.title, detail: subjectMeta[mistake.subject].label })),
+        ...schools.map((school) => ({ id: school.id, view: "schools" as const, category: "院校情报", title: `${school.university} · ${school.major_name}`, detail: `${school.college} · ${school.exam_year}` })),
+        ...documents.map((document) => ({ id: document.id, view: "materials" as const, category: "个人资料", title: document.title, detail: document.original_filename || document.content_type })),
+        ...careerItems.map((item) => ({ id: item.id, view: "career" as const, category: "求职记录", title: item.title, detail: item.company || careerStatusMeta[item.status] })),
+      ]);
+      setStatus("搜索范围仅包含当前账户的云端数据");
+    }).catch((error) => {
+      if (active) setStatus(error instanceof Error ? `搜索数据加载失败：${error.message}` : "搜索数据加载失败");
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [isDemo, open]);
+
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const results = normalizedQuery
+    ? entries.filter((entry) => `${entry.category} ${entry.title} ${entry.detail}`.toLocaleLowerCase("zh-CN").includes(normalizedQuery)).slice(0, 30)
+    : [];
+  const visibleStatus = isDemo ? "离线演示模式不读取个人数据，登录后可使用全局搜索。" : status;
+  const visibleLoading = !isDemo && loading;
+  if (!open) return null;
+
+  function openSearchResult(entry: WorkbenchSearchEntry) {
+    onNavigate(entry.view);
+    onClose();
+  }
+
+  function handleSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
+    if (results.length === 0) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveResultIndex((index) => (index + 1) % results.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveResultIndex((index) => (index - 1 + results.length) % results.length);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      openSearchResult(results[Math.min(activeResultIndex, results.length - 1)]);
+    }
+  }
+
+  return (
+    <div className="global-search-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="global-search-dialog panel" role="dialog" aria-modal="true" aria-labelledby="global-search-title">
+        <div className="global-search-field">
+          <span>⌕</span>
+          <label className="visually-hidden" htmlFor="global-search-input" id="global-search-title">搜索个人工作台</label>
+          <input id="global-search-input" ref={searchInputRef} value={query} onChange={(event) => { setQuery(event.target.value); setActiveResultIndex(0); }} onKeyDown={handleSearchKeyDown} aria-controls="global-search-results" aria-activedescendant={results.length ? `global-search-result-${activeResultIndex}` : undefined} placeholder="搜索任务、计划、错题、院校、资料或求职记录" />
+          <button type="button" aria-label="关闭搜索" onClick={onClose}>Esc</button>
+        </div>
+        <div className="global-search-results" id="global-search-results">
+          {visibleLoading ? <div className="global-search-empty">正在读取你的云端数据…</div>
+            : !normalizedQuery ? <div className="global-search-empty">输入关键词开始搜索，结果不会离开你的账户。</div>
+              : results.length === 0 ? <div className="global-search-empty">没有找到匹配记录</div>
+                : results.map((entry, index) => (
+                  <button id={`global-search-result-${index}`} key={`${entry.view}-${entry.id}`} className={index === activeResultIndex ? "active" : ""} type="button" onMouseEnter={() => setActiveResultIndex(index)} onClick={() => openSearchResult(entry)}>
+                    <span>{entry.category}</span><strong>{entry.title}</strong><small>{entry.detail}</small>
+                  </button>
+                ))}
+        </div>
+        <small className="global-search-status">{visibleStatus}</small>
+      </section>
+    </div>
+  );
+}
+
+type AttentionEntry = {
+  id: string;
+  view: View;
+  category: string;
+  title: string;
+  detail: string;
+};
+
+function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: { open: boolean; isDemo: boolean; onClose: () => void; onNavigate: (view: View) => void; onCountChange: (count: number) => void }) {
+  const [items, setItems] = useState<AttentionEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [status, setStatus] = useState("");
+  const loadedOnce = useRef(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, open]);
+
+  useEffect(() => {
+    if (isDemo || (!open && loadedOnce.current)) return;
+    let active = true;
+    void Promise.all([
+      api.today(),
+      api.listMistakes(true),
+      api.listPendingProposals(),
+      api.listDocuments(),
+    ]).then(([today, mistakes, proposals, documents]) => {
+      if (!active) return;
+      const nextItems: AttentionEntry[] = [
+        ...today.tasks.filter((task) => !task.completed).map((task) => ({ id: task.id, view: "today" as const, category: "待完成任务", title: task.title, detail: `${subjectMeta[task.subject].label} · 计划 ${task.planned_minutes} 分钟` })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "到期错题", title: mistake.title, detail: `已复习 ${mistake.review_count} 次` })),
+        ...proposals.filter((proposal) => proposal.status === "pending" || proposal.status === "edited").map((proposal) => ({ id: proposal.id, view: "agents" as const, category: "Agent 提案", title: proposal.summary, detail: "需要批准、编辑或拒绝" })),
+        ...documents.filter((document) => document.ingestion_status === "ocr_required" || document.ingestion_status === "failed").map((document) => ({ id: document.id, view: "materials" as const, category: document.ingestion_status === "ocr_required" ? "等待 OCR" : "资料处理失败", title: document.title, detail: document.ingestion_error || document.original_filename || "请进入资料库检查" })),
+      ].slice(0, 30);
+      loadedOnce.current = true;
+      setItems(nextItems);
+      setStatus("待处理事项来自当前账户的实时云端记录");
+      setLoading(false);
+      onCountChange(nextItems.length);
+    }).catch((error) => {
+      if (!active) return;
+      loadedOnce.current = true;
+      setStatus(error instanceof Error ? `待处理事项加载失败：${error.message}` : "待处理事项加载失败");
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [isDemo, onCountChange, open]);
+
+  if (!open) return null;
+  const visibleLoading = !isDemo && loading;
+  const visibleStatus = isDemo ? "离线演示模式不读取个人待办，登录后可查看。" : status;
+  return (
+    <div className="attention-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section className="attention-dialog panel" role="dialog" aria-modal="true" aria-labelledby="attention-title">
+        <div className="attention-heading"><div><div className="eyebrow">需要行动</div><h2 id="attention-title">待处理事项</h2></div><button type="button" aria-label="关闭待处理事项" onClick={onClose}>×</button></div>
+        <div className="attention-list">
+          {visibleLoading ? <div className="attention-empty">正在检查云端事项…</div>
+            : items.length === 0 ? <div className="attention-empty"><strong>暂时没有待处理事项</strong><span>保持现在的节奏。</span></div>
+              : items.map((item) => (
+                <button key={`${item.category}-${item.id}`} type="button" onClick={() => { onNavigate(item.view); onClose(); }}>
+                  <span>{item.category}</span><strong>{item.title}</strong><small>{item.detail}</small>
+                </button>
+              ))}
+        </div>
+        <small className="attention-status">{visibleStatus}</small>
+      </section>
+    </div>
+  );
+}
+
+function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDemo: boolean; onClose: () => void; onSaved: () => void }) {
+  const [kind, setKind] = useState<"task" | "mistake">("task");
+  const [subject, setSubject] = useState<Subject>("math");
+  const [title, setTitle] = useState("");
+  const [plannedMinutes, setPlannedMinutes] = useState(30);
+  const [question, setQuestion] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    const focusFrame = window.requestAnimationFrame(() => titleInputRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [busy, onClose, open]);
+
+  if (!open) return null;
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!title.trim() || busy) return;
+    if (kind === "mistake" && !question.trim()) {
+      setStatus("请填写题目或知识点内容");
+      return;
+    }
+    if (isDemo) {
+      setStatus("离线演示模式不会保存个人记录，请登录云端账户后使用。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      if (kind === "task") {
+        await api.createTask({ title: title.trim(), subject, planned_minutes: plannedMinutes });
+      } else {
+        await api.createMistake({
+          title: title.trim(),
+          subject: subject === "career" ? "math" : subject,
+          question: question.trim(),
+          error_reason: reason.trim(),
+        });
+      }
+      setTitle("");
+      setQuestion("");
+      setReason("");
+      setPlannedMinutes(30);
+      onSaved();
+      onClose();
+    } catch (error) {
+      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const availableSubjects = kind === "task"
+    ? scopes.filter((item) => item.key !== "all")
+    : scopes.filter((item) => item.key !== "all" && item.key !== "career");
+  return (
+    <div className="quick-capture-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      <section className="quick-capture-dialog panel" role="dialog" aria-modal="true" aria-labelledby="quick-capture-title">
+        <div className="quick-capture-heading">
+          <div><div className="eyebrow">随时记录</div><h2 id="quick-capture-title">快速记录学习现场</h2></div>
+          <button type="button" aria-label="关闭快速记录" onClick={onClose} disabled={busy}>×</button>
+        </div>
+        <div className="quick-capture-tabs">
+          <button type="button" className={kind === "task" ? "active" : ""} onClick={() => { setKind("task"); setStatus(""); }}>今日任务</button>
+          <button type="button" className={kind === "mistake" ? "active" : ""} onClick={() => { setKind("mistake"); setStatus(""); if (subject === "career") setSubject("math"); }}>错题卡</button>
+        </div>
+        <form onSubmit={save}>
+          <label>科目<select value={subject} onChange={(event) => setSubject(event.target.value as Subject)}>{availableSubjects.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label>
+          <label className="quick-capture-wide">{kind === "task" ? "任务名称" : "错题标题"}<input ref={titleInputRef} value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder={kind === "task" ? "例如：完成线性代数第二讲" : "例如：极限等价无穷小误用"} required /></label>
+          {kind === "task" ? (
+            <label>计划时长（分钟）<input type="number" min={1} max={1440} value={plannedMinutes} onChange={(event) => setPlannedMinutes(Number(event.target.value))} required /></label>
+          ) : (
+            <>
+              <label className="quick-capture-wide">题目或知识点<textarea value={question} onChange={(event) => setQuestion(event.target.value)} maxLength={5000} required /></label>
+              <label className="quick-capture-wide">错误原因<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={5000} placeholder="可稍后补充" /></label>
+            </>
+          )}
+          {status && <div className="quick-capture-status" role="status">{status}</div>}
+          <div className="quick-capture-actions"><button type="button" onClick={onClose} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存到云端"}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [attentionOpen, setAttentionOpen] = useState(false);
+  const [attentionCount, setAttentionCount] = useState(0);
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={isDemo ? "demo" : "cloud"} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
@@ -1688,6 +2256,17 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
     return () => { active = false; window.clearInterval(timer); };
   }, []);
 
+  useEffect(() => {
+    const openSearchWithShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", openSearchWithShortcut);
+    return () => window.removeEventListener("keydown", openSearchWithShortcut);
+  }, []);
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -1697,10 +2276,13 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button aria-label="搜索">⌕</button><button aria-label="通知">○</button><button className="quick-capture">＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
         <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
+      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
+      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
+      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
     </main>
   );
 }

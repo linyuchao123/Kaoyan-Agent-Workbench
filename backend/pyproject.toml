@@ -1,6 +1,6 @@
 [project]
 name = "kaoyan-agent-workbench-api"
-version = "0.3.0"
+version = "0.7.0"
 description = "FastAPI, RAG and LangGraph backend for 研途"
 requires-python = ">=3.11"
 dependencies = [

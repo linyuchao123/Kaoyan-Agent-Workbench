@@ -200,6 +200,14 @@ class SearchSource(BaseModel):
     source_type: Literal["web", "private"] = "web"
 
 
+class WebSearchRecord(BaseModel):
+    id: UUID
+    query: str
+    provider: str
+    results: list[SearchSource]
+    searched_at: datetime
+
+
 class ImportPreviewRequest(StrictRequestModel):
     url: HttpUrl
 
@@ -227,7 +235,38 @@ class PrivateKnowledgeSource(BaseModel):
 
 class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
-    thread_id: str | None = None
+    thread_id: UUID | None = None
+
+
+class AgentCitation(BaseModel):
+    source_type: Literal["private", "web"]
+    title: str
+    locator: str
+    url: HttpUrl | None = None
+    accessed_at: datetime | None = None
+
+
+class AgentMessage(BaseModel):
+    id: UUID
+    role: Literal["user", "agent"]
+    content: str
+    sources: list[AgentCitation] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class AgentThreadHistory(BaseModel):
+    id: UUID
+    mode: Literal["coach", "tutor", "combined"]
+    title: str
+    messages: list[AgentMessage]
+
+
+class AgentThreadSummary(BaseModel):
+    id: UUID
+    mode: Literal["coach", "tutor", "combined"]
+    title: str
+    updated_at: datetime
 
 
 class ActionProposal(BaseModel):
@@ -238,3 +277,9 @@ class ActionProposal(BaseModel):
     summary: str
     idempotency_key: str
     status: Literal["pending", "approved", "edited", "rejected", "applied", "failed"] = "pending"
+
+
+class AgentProposalEditRequest(StrictRequestModel):
+    title: str = Field(min_length=1, max_length=160)
+    subject: Subject
+    planned_minutes: int = Field(ge=1, le=1440)

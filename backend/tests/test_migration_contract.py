@@ -69,3 +69,43 @@ class MigrationContractTests(TestCase):
         self.assertIn("not dc.flagged_untrusted_instruction", sql)
         self.assertIn("filter_document_ids", sql)
         self.assertIn("to authenticated", sql)
+
+    def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
+        sql = Path(
+            "supabase/migrations/202608130001_agent_proposal_persistence.sql"
+        ).read_text()
+        self.assertIn("create_agent_proposal", sql)
+        self.assertIn("decide_agent_proposal", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("for update", sql)
+        self.assertIn("current_proposal.status = 'applied'", sql)
+        self.assertIn("insert into public.audit_logs", sql)
+        self.assertIn("insert into public.tasks", sql)
+        self.assertIn("security definer", sql)
+        self.assertIn("to authenticated", sql)
+
+    def test_import_proposals_are_granted_with_existing_owner_rls(self):
+        sql = Path(
+            "supabase/migrations/202608130002_import_proposal_permissions.sql"
+        ).read_text()
+        self.assertIn("on public.import_proposals to authenticated", sql)
+
+    def test_read_only_agent_thread_rpc_uses_authenticated_owner(self):
+        sql = Path(
+            "supabase/migrations/202608130003_agent_thread_persistence.sql"
+        ).read_text()
+        self.assertIn("create or replace function public.ensure_agent_thread", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("user_id = owner_id", sql)
+        self.assertIn("to authenticated", sql)
+
+    def test_agent_message_history_is_owner_scoped_and_written_by_rpc(self):
+        sql = Path(
+            "supabase/migrations/202608130005_agent_message_history.sql"
+        ).read_text()
+        self.assertIn("create table if not exists public.agent_messages", sql)
+        self.assertIn("alter table public.agent_messages enable row level security", sql)
+        self.assertIn("using (user_id = auth.uid())", sql)
+        self.assertIn("create or replace function public.append_agent_exchange", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("grant execute on function public.append_agent_exchange", sql)

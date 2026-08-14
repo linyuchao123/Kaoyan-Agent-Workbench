@@ -6,7 +6,7 @@
 React / Vite PWA
   ├─ 今日工作台、热力图、计划、学科、院校、资料库
   ├─ Supabase Auth 登录与离线草稿
-  └─ SSE Agent 对话与提案确认
+  └─ Agent 对话恢复与提案确认
              │
              ▼
 FastAPI API ─────────────── Supabase
@@ -32,7 +32,7 @@ LangGraph 主路由
 - 数据库通过 GiST 排他约束拒绝同一用户的重叠会话；贡献视图按用户时区拆分跨日会话，并按比例扣除暂停时间。
 - `DEMO_MODE=true` 使用按用户隔离的进程内 Repository；`DEMO_MODE=false` 切换到 Supabase Repository，所有 PostgREST 请求携带用户 JWT 并继续受到 RLS 约束。
 
-## RAG 数据流
+## RAG 目标数据流
 
 1. 上传 PDF/Markdown 或批准网页导入。
 2. 计算 SHA-256，按用户去重，原文件写入私有 Storage。
@@ -44,11 +44,16 @@ LangGraph 主路由
 
 ## 当前实现层级
 
-- `v0.3`：前端已接入 Supabase 邮箱密码登录、会话恢复与退出；FastAPI 通过 Supabase Auth 验证 Bearer Token，并将任务、会话和贡献统计切换到可配置的 Supabase Repository。
+- `v0.3`：完成 Supabase 邮箱密码登录、JWT 验证以及任务、会话和贡献统计云端持久化。
+- `v0.4`：完成三级计划、日计划关联任务、计划统计和错题间隔复习闭环。
+- `v0.5`：完成院校情报、求职副线和 JSON/CSV/Markdown 数据导出。
+- `v0.6`：完成私有 Storage、PDF/Markdown 上传、哈希去重、按页或标题切分以及关键词全文检索。
+- `v0.7`（代码完成，待云端验收）：完成 LangGraph 路由、可配置模型、真实用户上下文、Tavily 来源引用、联网资料批准入库、搜索留痕、持久化提案、审批审计和对话恢复。
 - 仓库边界：Demo Repository 用于测试和离线联调；Supabase Repository 使用用户 JWT 访问 PostgREST，不使用前端提交的 `user_id`，云端模式下数据可跨设备持久化。
 - 数据迁移：覆盖计划、任务、会话、知识点、做题记录、错题复习、院校、求职、资料、搜索、Agent 和审计实体。
-- 私有资料：Markdown 按标题切分，PDF 按页切分；低文本密度 PDF 标记为 `ocr_required`，待接入正式 OCR worker。
-- 联网资料：预览阶段校验公开 URL，默认不保存；批准导入后才进入下载、解析和向量化队列。
+- 私有资料：Markdown 按标题切分，PDF 按页切分；低文本密度 PDF 标记为 `ocr_required`，待接入正式 OCR worker；当前生产检索使用关键词全文索引，向量混合召回尚未启用。
+- 联网资料：预览阶段校验公开 URL；批准后执行安全下载、解析、哈希去重和关键词索引。网页正文仍按不可信输入处理，带有提示词注入特征的片段不会参与检索。
+- Agent 历史：用户与 Agent 消息通过受控 RPC 原子写入 `agent_messages`；浏览器只能读取当前账户的线程和消息。
 
 ## Agent 路由
 

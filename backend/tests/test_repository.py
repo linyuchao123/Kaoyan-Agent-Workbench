@@ -8,10 +8,12 @@ import httpx
 from app.auth import AuthUser
 from app.config import Settings
 from app.schemas import (
+    ActionProposal,
     CareerItemCreate,
     PlanCreate,
     PlanUpdate,
     SchoolOptionCreate,
+    SearchSource,
     StudySessionCreate,
     TaskCreate,
 )
@@ -592,3 +594,255 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                     ended_at=started_at + timedelta(hours=1),
                 ),
             )
+
+    async def test_supabase_agent_proposal_uses_authenticated_rpc_without_owner_input(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        proposal_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
+            summary="创建一个 45 分钟的数据结构错题复习任务",
+            idempotency_key="agent-idempotency-key",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "thread_id": str(thread_id),
+                        "proposal": proposal.model_dump(mode="json"),
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved_thread_id, saved_proposal = await repository.create_agent_proposal(
+            self.user,
+            thread_id=None,
+            mode="coach",
+            proposal=proposal,
+        )
+
+        self.assertEqual(saved_thread_id, thread_id)
+        self.assertEqual(saved_proposal.id, proposal_id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/create_agent_proposal"))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        payload = json.loads(requests[0].content)
+        self.assertIsNone(payload["requested_thread_id"])
+        self.assertEqual(payload["requested_mode"], "coach")
+        self.assertNotIn("user_id", payload)
+
+    async def test_supabase_agent_decision_uses_atomic_rpc(self):
+        requests: list[httpx.Request] = []
+        proposal_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+        response_proposal = ActionProposal(
+            id=proposal_id,
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "数据结构错题回顾", "subject": "cs408", "planned_minutes": 45},
+            summary="创建一个 45 分钟的数据结构错题复习任务",
+            idempotency_key="agent-idempotency-key",
+            status="applied",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=response_proposal.model_dump(mode="json"))
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        edited_payload = {
+            "title": "数据结构二刷",
+            "subject": "cs408",
+            "planned_minutes": 60,
+        }
+        saved = await repository.decide_agent_proposal(
+            self.user, proposal_id, "edit", edited_payload
+        )
+
+        self.assertIsNotNone(saved)
+        self.assertEqual(saved.status, "applied")
+        self.assertTrue(requests[0].url.path.endswith("/rpc/decide_agent_proposal"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_proposal_id"], str(proposal_id))
+        self.assertEqual(payload["requested_decision"], "edit")
+        self.assertEqual(payload["edited_payload"], edited_payload)
+        self.assertNotIn("user_id", payload)
+
+    async def test_supabase_read_only_agent_run_persists_thread_without_owner_input(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=str(thread_id))
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved = await repository.ensure_agent_thread(
+            self.user,
+            thread_id=None,
+            mode="tutor",
+            title="解释顺序表",
+        )
+
+        self.assertEqual(saved, thread_id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/ensure_agent_thread"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_mode"], "tutor")
+        self.assertEqual(payload["requested_title"], "解释顺序表")
+        self.assertNotIn("user_id", payload)
+
+    async def test_supabase_agent_exchange_uses_controlled_rpc_and_restores_owned_thread(self):
+        requests: list[httpx.Request] = []
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        message_id = UUID("dddddddd-dddd-dddd-dddd-dddddddddddd")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.endswith("/rpc/append_agent_exchange"):
+                return httpx.Response(204)
+            if request.url.path.endswith("/agent_threads"):
+                return httpx.Response(
+                    200,
+                    json=[{"id": str(thread_id), "mode": "tutor", "title": "解释顺序表"}],
+                )
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": str(message_id),
+                        "role": "user",
+                        "content": "解释顺序表",
+                        "sources": [],
+                        "metadata": {},
+                        "created_at": "2026-08-13T09:00:00Z",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        await repository.append_agent_exchange(
+            self.user,
+            thread_id=thread_id,
+            user_message="解释顺序表",
+            agent_message="顺序表使用连续存储空间。",
+            sources=[],
+            metadata={"route": "tutor"},
+        )
+        history = await repository.latest_agent_thread(self.user)
+
+        self.assertEqual(history.id, thread_id)
+        self.assertEqual(history.messages[0].content, "解释顺序表")
+        rpc_payload = json.loads(requests[0].content)
+        self.assertEqual(rpc_payload["requested_thread_id"], str(thread_id))
+        self.assertNotIn("user_id", rpc_payload)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+        self.assertIn(f"thread_id=eq.{thread_id}", str(requests[2].url))
+
+    async def test_supabase_pending_proposals_are_read_with_user_jwt(self):
+        requests: list[httpx.Request] = []
+        proposal = ActionProposal(
+            id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            agent="coach",
+            action="create_review_task",
+            payload={"title": "408 复习", "subject": "cs408", "planned_minutes": 45},
+            summary="创建复习任务",
+            idempotency_key="pending-proposal-key",
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[proposal.model_dump(mode="json")])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        restored = await repository.list_pending_agent_proposals(self.user)
+
+        self.assertEqual(restored[0].id, proposal.id)
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn("status=in.%28pending%2Cedited%29", str(requests[0].url))
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[0].url))
+
+    async def test_supabase_web_search_history_uses_user_jwt_and_owner_filter(self):
+        requests: list[httpx.Request] = []
+        record_id = UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+        source = SearchSource(
+            title="官方招生网",
+            url="https://example.edu/admission",
+            snippet="招生简章",
+            accessed_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            row = {
+                "id": str(record_id),
+                "query": "2028 招生简章",
+                "provider": "tavily",
+                "results": [source.model_dump(mode="json")],
+                "searched_at": "2026-08-13T09:00:00Z",
+            }
+            return httpx.Response(201 if request.method == "POST" else 200, json=[row])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        saved = await repository.record_web_search(
+            self.user,
+            query="2028 招生简章",
+            provider="tavily",
+            results=[source],
+        )
+        history = await repository.list_web_search_records(self.user, limit=5)
+
+        self.assertEqual(saved.id, record_id)
+        self.assertEqual(history[0].results[0].title, "官方招生网")
+        insert_payload = json.loads(requests[0].content)
+        self.assertEqual(insert_payload["user_id"], str(self.user.id))
+        self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+        self.assertIn("limit=5", str(requests[1].url))
