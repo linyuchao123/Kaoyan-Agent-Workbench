@@ -17,6 +17,7 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
 )
+from app.services.embeddings import EmbeddingDescriptor
 from app.services.ingestion import TextChunk
 from app.services.repository import (
     DemoRepository,
@@ -462,6 +463,12 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             digest="abc123",
             ingestion_status="ready",
             chunks=chunks,
+            embedding_metadata=EmbeddingDescriptor(
+                provider="qwen",
+                model="text-embedding-v4",
+                dimensions=1536,
+                version="1",
+            ),
         )
 
         self.assertFalse(duplicate)
@@ -474,6 +481,10 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(storage_request.headers["authorization"], "Bearer signed-user-jwt")
         document_payload = json.loads(requests[2].content)
         self.assertEqual(document_payload["user_id"], str(self.user.id))
+        self.assertEqual(document_payload["embedding_provider"], "qwen")
+        self.assertEqual(document_payload["embedding_model"], "text-embedding-v4")
+        self.assertEqual(document_payload["embedding_dimensions"], 1536)
+        self.assertEqual(document_payload["embedding_version"], "1")
         self.assertNotIn("access_token", document_payload)
         chunk_payload = json.loads(requests[3].content)[0]
         self.assertEqual(chunk_payload["document_id"], str(document_id))

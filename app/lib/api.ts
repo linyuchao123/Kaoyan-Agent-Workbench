@@ -104,6 +104,10 @@ export type ApiDocument = {
   version: number;
   ingestion_status: "queued" | "processing" | "ocr_required" | "ready" | "failed";
   ingestion_error: string | null;
+  embedding_provider?: string | null;
+  embedding_model?: string | null;
+  embedding_dimensions?: number | null;
+  embedding_version?: string | null;
   created_at: string;
   updated_at: string;
 };

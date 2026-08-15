@@ -497,6 +497,11 @@ async def upload_document(
     chunks, status = prepare_document_chunks(content, content_type)
     if status == "ready":
         chunks = await embed_safe_chunks(chunks, embedding_provider)
+    embedding_metadata = (
+        embedding_provider.descriptor
+        if any(chunk.embedding is not None for chunk in chunks)
+        else None
+    )
     document_id = uuid4()
     item, duplicate = await repository.persist_document(
         user,
@@ -507,6 +512,7 @@ async def upload_document(
         digest=document_hash(content),
         ingestion_status=status,
         chunks=chunks,
+        embedding_metadata=embedding_metadata,
     )
     ocr_job = (
         await queue_document_ocr(user, document_id)
@@ -561,6 +567,11 @@ async def approve_import(
     chunks, status = prepare_document_chunks(downloaded.content, downloaded.content_type)
     if status == "ready":
         chunks = await embed_safe_chunks(chunks, embedding_provider)
+    embedding_metadata = (
+        embedding_provider.descriptor
+        if any(chunk.embedding is not None for chunk in chunks)
+        else None
+    )
     document_id = uuid4()
     document, duplicate = await repository.persist_document(
         user,
@@ -573,6 +584,7 @@ async def approve_import(
         chunks=chunks,
         source_url=downloaded.final_url,
         title=downloaded.title,
+        embedding_metadata=embedding_metadata,
     )
     ocr_job = (
         await queue_document_ocr(user, document_id)

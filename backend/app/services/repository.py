@@ -34,6 +34,7 @@ from app.schemas import (
     TaskUpdate,
     WebSearchRecord,
 )
+from app.services.embeddings import EmbeddingDescriptor
 from app.services.ingestion import TextChunk
 from app.services.store import DemoStore
 
@@ -126,6 +127,7 @@ class StudyRepository(Protocol):
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]: ...
 
     async def list_documents(self, user: AuthUser) -> list[dict]: ...
@@ -384,6 +386,7 @@ class DemoRepository:
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]:
         existing_id = self.document_ids_by_hash.get((user.id, digest))
         if existing_id:
@@ -399,6 +402,10 @@ class DemoRepository:
             "sha256": digest,
             "storage_path": None,
             "ingestion_status": ingestion_status,
+            "embedding_provider": embedding_metadata.provider if embedding_metadata else None,
+            "embedding_model": embedding_metadata.model if embedding_metadata else None,
+            "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
+            "embedding_version": embedding_metadata.version if embedding_metadata else None,
             "chunk_count": len(chunks),
             "flagged_chunk_count": sum(chunk.flagged_untrusted_instruction for chunk in chunks),
         }
@@ -1273,6 +1280,7 @@ class SupabaseRepository:
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]:
         existing = await self._request(
             user,
@@ -1281,7 +1289,8 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,content_type,byte_size,sha256,storage_path,"
-                    "ingestion_status"
+                    "ingestion_status,embedding_provider,embedding_model,embedding_dimensions,"
+                    "embedding_version"
                 ),
                 "user_id": f"eq.{user.id}",
                 "sha256": f"eq.{digest}",
@@ -1316,7 +1325,8 @@ class SupabaseRepository:
                 params={
                     "select": (
                         "id,title,original_filename,source_type,source_url,content_type,"
-                        "byte_size,sha256,storage_path,ingestion_status"
+                        "byte_size,sha256,storage_path,ingestion_status,embedding_provider,"
+                        "embedding_model,embedding_dimensions,embedding_version"
                     ),
                     "user_id": f"eq.{user.id}",
                     "source_url": f"eq.{source_url}",
@@ -1351,6 +1361,10 @@ class SupabaseRepository:
                 "byte_size": len(content),
                 "sha256": digest,
                 "ingestion_status": ingestion_status,
+                "embedding_provider": embedding_metadata.provider if embedding_metadata else None,
+                "embedding_model": embedding_metadata.model if embedding_metadata else None,
+                "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
+                "embedding_version": embedding_metadata.version if embedding_metadata else None,
             },
             prefer="return=representation",
         )
@@ -1391,7 +1405,8 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
-                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
+                    "embedding_model,embedding_dimensions,embedding_version,created_at,updated_at"
                 ),
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.desc",
@@ -1406,7 +1421,8 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
-                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
+                    "embedding_model,embedding_dimensions,embedding_version,created_at,updated_at"
                 ),
                 "id": f"eq.{document_id}",
                 "user_id": f"eq.{user.id}",

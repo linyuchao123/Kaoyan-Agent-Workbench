@@ -101,6 +101,17 @@ class MigrationContractTests(TestCase):
         self.assertIn("service role required", sql)
         self.assertIn("to service_role", sql)
 
+    def test_document_embedding_metadata_is_dimension_safe_and_ocr_aware(self):
+        sql = Path(
+            "supabase/migrations/202608150002_document_embedding_metadata.sql"
+        ).read_text()
+        self.assertIn("embedding_provider", sql)
+        self.assertIn("embedding_model", sql)
+        self.assertIn("embedding_dimensions = 1536", sql)
+        self.assertIn("embedding_version", sql)
+        self.assertIn("complete_document_ocr", sql)
+        self.assertIn("service role required", sql)
+
     def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
         sql = Path(
             "supabase/migrations/202608130001_agent_proposal_persistence.sql"

@@ -1,5 +1,6 @@
 import logging
 import math
+from dataclasses import dataclass
 from typing import Protocol
 
 from langchain_openai import OpenAIEmbeddings
@@ -10,12 +11,23 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class EmbeddingDescriptor:
+    provider: str
+    model: str
+    dimensions: int
+    version: str
+
+
 class EmbeddingProvider(Protocol):
     @property
     def configured(self) -> bool: ...
 
     @property
     def dimensions(self) -> int: ...
+
+    @property
+    def descriptor(self) -> EmbeddingDescriptor: ...
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]] | None: ...
 
@@ -69,6 +81,15 @@ class OpenAICompatibleEmbeddingProvider:
     @property
     def version(self) -> str:
         return self._version
+
+    @property
+    def descriptor(self) -> EmbeddingDescriptor:
+        return EmbeddingDescriptor(
+            provider=self._provider,
+            model=self._model,
+            dimensions=self._dimensions,
+            version=self._version,
+        )
 
     def _valid_vector(self, vector: list[float]) -> bool:
         return len(vector) == self._dimensions and all(math.isfinite(value) for value in vector)

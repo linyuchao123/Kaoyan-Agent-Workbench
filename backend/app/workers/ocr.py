@@ -15,7 +15,11 @@ import httpx
 from openai import AsyncOpenAI
 
 from app.config import Settings, get_settings
-from app.services.embeddings import EmbeddingProvider, OpenAICompatibleEmbeddingProvider
+from app.services.embeddings import (
+    EmbeddingDescriptor,
+    EmbeddingProvider,
+    OpenAICompatibleEmbeddingProvider,
+)
 from app.services.ingestion import TextChunk, chunk_pages, embed_safe_chunks
 
 logger = logging.getLogger(__name__)
@@ -36,7 +40,12 @@ class OcrQueue(Protocol):
 
     async def download(self, item: OcrWorkItem) -> bytes: ...
 
-    async def complete(self, item: OcrWorkItem, chunks: list[TextChunk]) -> None: ...
+    async def complete(
+        self,
+        item: OcrWorkItem,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None,
+    ) -> None: ...
 
     async def fail(self, item: OcrWorkItem, message: str) -> None: ...
 
@@ -121,11 +130,21 @@ class SupabaseOcrQueue:
         response.raise_for_status()
         return response.content
 
-    async def complete(self, item: OcrWorkItem, chunks: list[TextChunk]) -> None:
+    async def complete(
+        self,
+        item: OcrWorkItem,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None,
+    ) -> None:
         payload = []
         for chunk in chunks:
             values = asdict(chunk)
             values["chunk_index"] = values.pop("index")
+            if embedding_metadata:
+                values["embedding_provider"] = embedding_metadata.provider
+                values["embedding_model"] = embedding_metadata.model
+                values["embedding_dimensions"] = embedding_metadata.dimensions
+                values["embedding_version"] = embedding_metadata.version
             payload.append(values)
         await self._request(
             "POST",
@@ -258,7 +277,12 @@ class OcrWorker:
             if not chunks:
                 raise RuntimeError("OCR produced no retrievable text")
             chunks = await embed_safe_chunks(chunks, self.embeddings)
-            await self.queue.complete(item, chunks)
+            embedding_metadata = (
+                self.embeddings.descriptor
+                if any(chunk.embedding is not None for chunk in chunks)
+                else None
+            )
+            await self.queue.complete(item, chunks, embedding_metadata)
         except Exception as error:
             logger.exception("OCR job %s failed", item.id)
             await self.queue.fail(item, str(error) or error.__class__.__name__)

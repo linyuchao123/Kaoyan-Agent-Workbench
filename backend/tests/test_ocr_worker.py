@@ -2,7 +2,7 @@ from unittest import IsolatedAsyncioTestCase, TestCase
 from uuid import UUID
 
 from app.config import Settings
-from app.services.embeddings import OpenAICompatibleEmbeddingProvider
+from app.services.embeddings import EmbeddingDescriptor, OpenAICompatibleEmbeddingProvider
 from app.services.ingestion import TextChunk
 from app.workers.ocr import OcrWorker, OcrWorkItem, SupabaseOcrQueue
 
@@ -11,6 +11,7 @@ class FakeQueue:
     def __init__(self, item: OcrWorkItem | None) -> None:
         self.item = item
         self.completed: list[TextChunk] | None = None
+        self.embedding_metadata: EmbeddingDescriptor | None = None
         self.failure: str | None = None
 
     async def claim(self) -> OcrWorkItem | None:
@@ -20,8 +21,14 @@ class FakeQueue:
     async def download(self, item: OcrWorkItem) -> bytes:
         return b"fake-pdf"
 
-    async def complete(self, item: OcrWorkItem, chunks: list[TextChunk]) -> None:
+    async def complete(
+        self,
+        item: OcrWorkItem,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None,
+    ) -> None:
         self.completed = chunks
+        self.embedding_metadata = embedding_metadata
 
     async def fail(self, item: OcrWorkItem, message: str) -> None:
         self.failure = message
@@ -41,6 +48,7 @@ class FakeOcrProvider:
 class FakeEmbeddingProvider:
     configured = True
     dimensions = 3
+    descriptor = EmbeddingDescriptor("qwen", "text-embedding-v4", 1536, "1")
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [[0.1, 0.2, 0.3] for _ in texts]
@@ -100,6 +108,8 @@ class OcrWorkerTests(IsolatedAsyncioTestCase):
         self.assertIsNone(queue.failure)
         self.assertEqual(queue.completed[0].page_number, 1)
         self.assertEqual(queue.completed[0].embedding, [0.1, 0.2, 0.3])
+        self.assertEqual(queue.embedding_metadata.provider, "qwen")
+        self.assertEqual(queue.embedding_metadata.model, "text-embedding-v4")
 
     async def test_failed_job_is_reported_for_queue_retry(self):
         queue = FakeQueue(self.item)
