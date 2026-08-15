@@ -57,7 +57,11 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     demo_mode: bool = True
 
-    model_config = SettingsConfigDict(env_file=BACKEND_ENV_FILE, extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_ENV_FILE,
+        env_ignore_empty=True,
+        extra="ignore",
+    )
 
     @field_validator("embedding_dimensions")
     @classmethod

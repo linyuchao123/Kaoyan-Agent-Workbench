@@ -1,4 +1,6 @@
+import os
 from unittest import TestCase
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -6,6 +8,21 @@ from app.config import Settings
 
 
 class ProviderSettingsTests(TestCase):
+    def test_empty_optional_environment_values_use_safe_defaults(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CHAT_API_KEY": "",
+                "DEEPSEEK_FLASH_INPUT_PRICE_PER_MILLION": "",
+                "QWEN_FALLBACK_PRO_OUTPUT_PRICE_PER_MILLION": "",
+            },
+        ):
+            settings = Settings(_env_file=None)
+
+        self.assertEqual(settings.chat_api_key, "")
+        self.assertIsNone(settings.deepseek_flash_input_price_per_million)
+        self.assertIsNone(settings.qwen_fallback_pro_output_price_per_million)
+
     def test_provider_specific_settings_take_precedence(self):
         settings = Settings(
             _env_file=None,
