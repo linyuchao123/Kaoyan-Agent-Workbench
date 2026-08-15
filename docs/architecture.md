@@ -19,6 +19,7 @@ FastAPI API ─────────────── Supabase
 LangGraph 主路由
   ├─ 计划教练子图（只读工具 → 写入提案）
   ├─ 资料导师子图（私有 RAG / Web / Hybrid）
+  ├─ DeepSeek Flash/Pro → 同档 Qwen 故障降级
   └─ Human-in-the-loop（批准 / 编辑 / 拒绝）
 
 OCR Worker ─────────────── Supabase
@@ -54,7 +55,7 @@ OCR Worker ─────────────── Supabase
 - `v0.5`：完成院校情报、求职副线和 JSON/CSV/Markdown 数据导出。
 - `v0.6`：完成私有 Storage、PDF/Markdown 上传、哈希去重、按页或标题切分以及关键词全文检索。
 - `v0.7`（代码完成，待云端验收）：完成 LangGraph 路由、可配置模型、真实用户上下文、Tavily 来源引用、联网资料批准入库、搜索留痕、持久化提案、审批审计和对话恢复。
-- `v0.8`（代码完成，待云端验收）：完成安全分块 Embedding、语义与关键词融合检索、可重试 OCR 队列与独立 Worker，以及完整回答后才持久化的 Agent SSE 流式输出。
+- `v0.8`（代码完成，待真实模型验收）：完成安全分块 Qwen Embedding、语义与关键词融合检索、Qwen OCR 逐页恢复、DeepSeek 双档聊天与同档 Qwen 降级，以及完整回答后才持久化的 Agent SSE 流式输出。
 - 仓库边界：Demo Repository 用于测试和离线联调；Supabase Repository 使用用户 JWT 访问 PostgREST，不使用前端提交的 `user_id`，云端模式下数据可跨设备持久化。
 - 数据迁移：覆盖计划、任务、会话、知识点、做题记录、错题复习、院校、求职、资料、搜索、Agent 和审计实体。
 - 私有资料：Markdown 按标题切分，PDF 按页切分；安全片段同时写入全文索引和向量。低文本密度 PDF 标记为 `ocr_required` 并写入持久化队列，由独立 Worker 识别后原子替换分块。
@@ -62,6 +63,8 @@ OCR Worker ─────────────── Supabase
 - 联网资料：预览阶段校验公开 URL；批准后执行安全下载、解析、哈希去重和关键词索引。网页正文仍按不可信输入处理，带有提示词注入特征的片段不会参与检索。
 - Agent 历史：用户与 Agent 消息通过受控 RPC 原子写入 `agent_messages`；浏览器只能读取当前账户的线程和消息。
 - Agent 流式边界：状态与 token 通过 SSE 返回，只有模型完整结束后才原子写入用户消息、Agent 回答和线程时间；浏览器取消不会留下半截历史记录。
+- 模型边界：前端只提交 `flash` 或 `pro`，后端映射到白名单模型。新会话默认 Flash，切换结果保存在会话中；每条回答持久化实际 Provider、模型和备用切换状态。
+- 可观测性：独立用量表仅记录 Provider、模型、状态、耗时和 Token，不保存提示词、回答或密钥；统计接口继续受用户 RLS 隔离。
 
 ## Agent 路由
 

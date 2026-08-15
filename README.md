@@ -66,9 +66,9 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 
 ### v0.8 AI 与 OCR 配置
 
-聊天、向量和 OCR 可以使用不同的 OpenAI 兼容服务。推荐的低成本组合是：
+聊天、向量和 OCR 通过独立的 OpenAI 兼容配置接入，当前固定分工是：
 
-- Agent 聊天：DeepSeek；
+- Agent 聊天：DeepSeek Flash/Pro，失败时按相同档位切换到 Qwen；
 - 私有资料向量：阿里云百炼 `text-embedding-v4`；
 - 扫描 PDF OCR：阿里云百炼 `qwen3.5-ocr`。
 
@@ -79,24 +79,40 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
 
+CHAT_PROVIDER=deepseek
+CHAT_DEFAULT_PROFILE=flash
 CHAT_API_KEY=<DeepSeek API Key>
 CHAT_BASE_URL=https://api.deepseek.com
-CHAT_MODEL=deepseek-v4-flash
+CHAT_FLASH_MODEL=deepseek-v4-flash
+CHAT_PRO_MODEL=deepseek-v4-pro
 
+CHAT_FALLBACK_PROVIDER=qwen
+CHAT_FALLBACK_API_KEY=<阿里云百炼 API Key>
+CHAT_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+CHAT_FALLBACK_FLASH_MODEL=qwen3.5-flash-2026-02-23
+CHAT_FALLBACK_PRO_MODEL=qwen3.7-plus
+
+EMBEDDING_PROVIDER=qwen
 EMBEDDING_API_KEY=<阿里云百炼 API Key>
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_DIMENSIONS=1536
+EMBEDDING_VERSION=1
 
+OCR_PROVIDER=qwen
 OCR_API_KEY=<阿里云百炼 API Key，可与上面相同>
 OCR_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OCR_MODEL=qwen3.5-ocr
+OCR_FALLBACK_MODEL=qwen3.5-plus
+OCR_MIN_CHARACTERS=20
 OCR_MAX_PAGES=100
 OCR_POLL_SECONDS=5
 PDFTOPPM_PATH=pdftoppm
 ```
 
-各类专用配置优先于旧的 `OPENAI_API_KEY` / `OPENAI_BASE_URL`，旧配置仍保留兼容。`EMBEDDING_DIMENSIONS` 必须与迁移中的 `vector(1536)` 一致。只配置 DeepSeek 时，Agent 对话可用，但检索会安全降级为关键词模式，OCR Worker 会保持未配置状态；系统不会拿聊天模型密钥误调用 Embedding 或图片接口。
+阿里云百炼的同一个 Key 可以在本地同时填入 `CHAT_FALLBACK_API_KEY`、`EMBEDDING_API_KEY` 和 `OCR_API_KEY`。各类专用配置优先于旧的 `OPENAI_API_KEY` / `OPENAI_BASE_URL`，旧配置仅保留兼容。`EMBEDDING_DIMENSIONS` 固定为 `1536`，必须与数据库 `vector(1536)` 一致。只配置 DeepSeek 时，Agent 对话可用，但检索会安全降级为关键词模式，OCR Worker 会保持未配置状态。
+
+新会话默认选择 Flash；Pro 只能由用户在 Agent 页面手动选择，切换只影响后续消息。DeepSeek 发生超时、限流、连接失败或 5xx 时重试一次，再切到对应档位的 Qwen；400、401、403 会直接报告配置问题，不错误触发备用模型。每条回答会显示实际 Provider/模型，数据库仅记录模型、Token、耗时、状态和备用切换，不保存密钥或对话正文到用量表。可通过 `GET /api/v1/analytics/model-usage?days=30` 查看当前账户的聚合指标。
 
 OCR Worker 还需要 `SUPABASE_SERVICE_ROLE_KEY`，该密钥只能放在后端环境，不能写入根目录前端变量或提交到 Git。系统需安装 Poppler 的 `pdftoppm`，然后在另一个终端启动：
 
@@ -114,7 +130,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m app.workers.ocr
 4. 在 `backend/.env` 填写相同项目的 `SUPABASE_URL`、`SUPABASE_ANON_KEY`，并设置 `DEMO_MODE=false`。
 5. 在 Supabase Auth 中启用 Email provider；开发阶段可按需要决定是否强制邮箱确认。
 6. 执行 `202608120003_private_material_storage.sql` 后会创建私有 `study-materials` Storage bucket；资料原文件使用当前用户编号作为私有目录。
-7. v0.8 依次执行 `202608140001_private_hybrid_search.sql` 和 `202608140002_ocr_job_queue.sql`；前者建立按用户隔离的混合检索函数，后者建立 OCR 队列及原子领取、完成和失败重试函数。
+7. v0.8 先执行 `202608140001_private_hybrid_search.sql` 和 `202608140002_ocr_job_queue.sql`，再依次执行 `202608150001_agent_model_profiles.sql`、`202608150002_document_embedding_metadata.sql`、`202608150003_ocr_page_recovery.sql`、`202608150004_agent_model_usage.sql`。后四个迁移分别保存会话模型档位、文档向量来源、OCR 逐页失败信息和模型用量指标。
 
 迁移包含学习任务、会话、错题、院校、资料分块、导入提案、Agent 提案、审计日志、RLS 和学习贡献聚合视图。
 
@@ -164,8 +180,12 @@ backend/.venv/bin/pytest -q backend/tests
 5. 独立 OCR Worker 使用 `pdftoppm` 渲染页面和 OpenAI 兼容视觉模型识别文字，完成后统一执行安全扫描、切分和向量化。
 6. Agent 新增 SSE 接口，真实模型 token 逐段传到浏览器；完整结束后才持久化回答，取消的半截回答不会进入历史记录。
 7. 旧的非流式 Agent 接口继续保留，避免破坏已有客户端。
+8. Agent 支持 DeepSeek Flash/Pro 白名单选择，并按相同档位降级到 Qwen；会话与每条回答保留实际模型元数据。
+9. Qwen Embedding 固定 1536 维，并在文档上记录 Provider、模型、维度和版本，防止不同向量空间混用。
+10. OCR 支持 Qwen OCR 与通用视觉模型二次识别，单页失败不会中止整份文档，并可重新处理失败页。
+11. 模型调用记录请求次数、Token、耗时、错误率和备用切换次数，并提供当前用户隔离的统计接口。
 
-v0.8 需要执行 `202608140001`、`202608140002` 两个云端迁移，并使用真实 Embedding/OCR/Chat 模型完成环境验收。
+v0.8 需要执行 `202608140001`、`202608140002`、`202608150001` 至 `202608150004` 六个云端迁移，并使用真实 DeepSeek/Qwen 密钥完成环境验收。供应商单价可能变化，系统不硬编码金额；Token 指标可结合实际账单核算成本。
 
 ## 安全约定
 
