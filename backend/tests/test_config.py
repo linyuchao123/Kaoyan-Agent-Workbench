@@ -33,6 +33,7 @@ class ProviderSettingsTests(TestCase):
         self.assertEqual(settings.embedding_dimensions, 1536)
         self.assertEqual(settings.ocr_provider, "qwen")
         self.assertEqual(settings.ocr_model, "qwen3.5-ocr")
+        self.assertEqual(settings.ocr_fallback_model, "qwen3.5-plus")
         self.assertEqual(settings.resolved_chat_model("flash"), "deepseek-v4-flash")
         self.assertEqual(settings.resolved_chat_model("pro"), "deepseek-v4-pro")
         self.assertEqual(

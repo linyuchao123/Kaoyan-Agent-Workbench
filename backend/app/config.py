@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     ocr_api_key: str = ""
     ocr_base_url: str = ""
     ocr_model: str = "qwen3.5-ocr"
+    ocr_fallback_model: str = "qwen3.5-plus"
+    ocr_min_characters: int = 20
     ocr_max_pages: int = 100
     ocr_poll_seconds: float = 5.0
     pdftoppm_path: str = "pdftoppm"

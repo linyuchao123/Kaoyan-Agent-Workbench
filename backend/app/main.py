@@ -626,7 +626,10 @@ async def retry_document_ocr(
     document = await repository.get_document(user, document_id)
     if not document:
         raise HTTPException(404, "document not found")
-    if document["ingestion_status"] not in {"ocr_required", "failed"}:
+    if (
+        document["ingestion_status"] not in {"ocr_required", "failed"}
+        and not document.get("ocr_failed_pages")
+    ):
         raise HTTPException(409, "document does not require OCR")
     return await repository.enqueue_document_ocr(user, document_id)
 

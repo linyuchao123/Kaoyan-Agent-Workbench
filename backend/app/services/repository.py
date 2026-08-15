@@ -1406,7 +1406,8 @@ class SupabaseRepository:
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
                     "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
-                    "embedding_model,embedding_dimensions,embedding_version,created_at,updated_at"
+                    "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
+                    "ocr_fallback_pages,created_at,updated_at"
                 ),
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.desc",
@@ -1422,7 +1423,8 @@ class SupabaseRepository:
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
                     "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
-                    "embedding_model,embedding_dimensions,embedding_version,created_at,updated_at"
+                    "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
+                    "ocr_fallback_pages,created_at,updated_at"
                 ),
                 "id": f"eq.{document_id}",
                 "user_id": f"eq.{user.id}",

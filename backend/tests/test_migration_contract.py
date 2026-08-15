@@ -112,6 +112,16 @@ class MigrationContractTests(TestCase):
         self.assertIn("complete_document_ocr", sql)
         self.assertIn("service role required", sql)
 
+    def test_ocr_page_recovery_records_failures_and_allows_retry(self):
+        sql = Path(
+            "supabase/migrations/202608150003_ocr_page_recovery.sql"
+        ).read_text()
+        self.assertIn("ocr_failed_pages", sql)
+        self.assertIn("ocr_fallback_pages", sql)
+        self.assertIn("ocr_metadata jsonb", sql)
+        self.assertIn("document does not require OCR", sql)
+        self.assertIn("cardinality", sql)
+
     def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
         sql = Path(
             "supabase/migrations/202608130001_agent_proposal_persistence.sql"

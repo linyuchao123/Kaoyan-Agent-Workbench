@@ -108,6 +108,8 @@ export type ApiDocument = {
   embedding_model?: string | null;
   embedding_dimensions?: number | null;
   embedding_version?: string | null;
+  ocr_failed_pages?: number[];
+  ocr_fallback_pages?: number[];
   created_at: string;
   updated_at: string;
 };
