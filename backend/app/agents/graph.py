@@ -23,7 +23,7 @@ class WorkbenchState(TypedDict, total=False):
     provider: str
     model: str
     fallback_used: bool
-    model_runs: list[dict[str, str | bool]]
+    model_runs: list[dict[str, str | bool | int]]
     proposal_ids: list[str]
 
 
@@ -102,6 +102,8 @@ def build_graph(model: AgentModel):
             "model": result.model,
             "model_profile": result.model_profile,
             "fallback_used": result.fallback_used,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
         }
         return {
             "answer": result.content,

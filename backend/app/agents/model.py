@@ -22,6 +22,8 @@ class AgentModelResult:
     model: str
     model_profile: ModelProfile
     fallback_used: bool
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,8 @@ class AgentModelDelta:
     model: str
     model_profile: ModelProfile
     fallback_used: bool
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -196,6 +200,14 @@ class OpenAICompatibleAgentModel:
             candidates.append(fallback)
         return candidates
 
+    @staticmethod
+    def _usage(message) -> tuple[int, int]:
+        usage = getattr(message, "usage_metadata", None) or {}
+        return (
+            int(usage.get("input_tokens") or 0),
+            int(usage.get("output_tokens") or 0),
+        )
+
     async def generate(
         self,
         *,
@@ -216,12 +228,15 @@ class OpenAICompatibleAgentModel:
                 response = await endpoint.client.ainvoke(messages)
                 content = response.content
                 if isinstance(content, str) and content.strip():
+                    input_tokens, output_tokens = self._usage(response)
                     return AgentModelResult(
                         content=content.strip(),
                         provider=endpoint.provider,
                         model=endpoint.model,
                         model_profile=model_profile,
                         fallback_used=endpoint.fallback_used,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
                     )
             except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
                 if not self._can_fail_over(error):
@@ -255,6 +270,7 @@ class OpenAICompatibleAgentModel:
                 async for chunk in endpoint.client.astream(messages):
                     content = chunk.content
                     if isinstance(content, str) and content:
+                        input_tokens, output_tokens = self._usage(chunk)
                         emitted = True
                         yield AgentModelDelta(
                             text=content,
@@ -262,6 +278,8 @@ class OpenAICompatibleAgentModel:
                             model=endpoint.model,
                             model_profile=model_profile,
                             fallback_used=endpoint.fallback_used,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
                         )
             except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
                 if emitted or not self._can_fail_over(error):

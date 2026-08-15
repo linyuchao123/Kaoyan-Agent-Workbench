@@ -174,6 +174,22 @@ class StudyRepository(Protocol):
         self, user: AuthUser, limit: int = 20
     ) -> list[WebSearchRecord]: ...
 
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None: ...
+
     async def create_agent_proposal(
         self,
         user: AuthUser,
@@ -535,6 +551,40 @@ class DemoRepository:
             if owner_id == user.id
         ]
         return records[:limit]
+
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None:
+        self.audit_logs.append(
+            {
+                "user_id": user.id,
+                "thread_id": thread_id,
+                "event_type": "agent_model_usage",
+                "payload": {
+                    "model_profile": model_profile,
+                    "provider": provider,
+                    "model": model,
+                    "fallback_used": fallback_used,
+                    "status": status,
+                    "latency_ms": latency_ms,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "error_type": error_type,
+                },
+            }
+        )
 
     async def create_agent_proposal(
         self,
@@ -1592,6 +1642,39 @@ class SupabaseRepository:
             },
         )
         return [WebSearchRecord.model_validate(row) for row in rows]
+
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/record_agent_model_usage",
+            json={
+                "requested_thread_id": str(thread_id),
+                "requested_model_profile": model_profile,
+                "requested_provider": provider,
+                "requested_model": model,
+                "requested_fallback_used": fallback_used,
+                "requested_status": status,
+                "requested_latency_ms": latency_ms,
+                "requested_input_tokens": input_tokens,
+                "requested_output_tokens": output_tokens,
+                "requested_error_type": error_type,
+            },
+        )
 
     async def create_agent_proposal(
         self,

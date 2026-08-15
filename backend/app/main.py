@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from io import BytesIO
+from time import perf_counter
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -764,6 +765,38 @@ async def persist_agent_exchange(
         logger.warning("Agent run succeeded but its message history could not be persisted")
 
 
+async def record_model_usage_safely(
+    *,
+    user: AuthUser,
+    thread_id: UUID,
+    model_profile: str,
+    provider: str,
+    model: str,
+    fallback_used: bool,
+    status: str,
+    latency_ms: int,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    error_type: str | None = None,
+) -> None:
+    try:
+        await repository.record_agent_model_usage(
+            user,
+            thread_id=thread_id,
+            model_profile=model_profile,
+            provider=provider,
+            model=model,
+            fallback_used=fallback_used,
+            status=status,
+            latency_ms=latency_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            error_type=error_type,
+        )
+    except RepositoryError:
+        logger.warning("Agent model usage could not be persisted")
+
+
 @app.post("/api/v1/agents/{agent}/runs")
 async def run_agent(
     agent: str,
@@ -776,15 +809,30 @@ async def run_agent(
     retrieval_mode, context, thread_id, proposal = await prepare_agent_execution(
         requested_agent, payload, user
     )
-    result = await agent_graph.ainvoke(
-        {
-            "messages": [HumanMessage(content=payload.message)],
-            "requested_route": requested_agent,
-            "user_id": str(user.id),
-            "context": context,
-            "model_profile": payload.model_profile,
-        }
-    )
+    started_at = perf_counter()
+    try:
+        result = await agent_graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=payload.message)],
+                "requested_route": requested_agent,
+                "user_id": str(user.id),
+                "context": context,
+                "model_profile": payload.model_profile,
+            }
+        )
+    except AgentModelConfigurationError as error:
+        await record_model_usage_safely(
+            user=user,
+            thread_id=thread_id,
+            model_profile=payload.model_profile,
+            provider=settings.chat_provider,
+            model=settings.resolved_chat_model(payload.model_profile),
+            fallback_used=False,
+            status="error",
+            latency_ms=int((perf_counter() - started_at) * 1000),
+            error_type="configuration_error",
+        )
+        raise HTTPException(502, str(error)) from error
     answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
     sources = agent_citations(context)
     route = result.get("route", requested_agent)
@@ -807,6 +855,19 @@ async def run_agent(
         model=model_name,
         fallback_used=fallback_used,
         model_runs=model_runs,
+    )
+    await record_model_usage_safely(
+        user=user,
+        thread_id=thread_id,
+        model_profile=payload.model_profile,
+        provider=provider,
+        model=model_name,
+        fallback_used=fallback_used,
+        status="success" if model_status == "generated" else "degraded",
+        latency_ms=int((perf_counter() - started_at) * 1000),
+        input_tokens=sum(int(run.get("input_tokens", 0)) for run in model_runs),
+        output_tokens=sum(int(run.get("output_tokens", 0)) for run in model_runs),
+        error_type=None if model_status == "generated" else "providers_unavailable",
     )
     return {
         "thread_id": thread_id,
@@ -840,6 +901,8 @@ async def stream_agent(
     requested_agent = cast(Literal["coach", "tutor", "combined"], agent)
 
     async def event_stream():
+        thread_id: UUID | None = None
+        started_at = perf_counter()
         try:
             yield encode_sse(
                 "status", {"stage": "context", "message": "正在读取学习记录与资料来源"}
@@ -853,7 +916,7 @@ async def stream_agent(
             )
             answer_parts: list[str] = []
             generated = False
-            model_runs: list[dict[str, str | bool]] = []
+            model_runs: list[dict[str, str | bool | int]] = []
             state = {"context": context, "retrieval_mode": retrieval_mode}
 
             async def stream_branch(kind: Literal["coach", "tutor"]):
@@ -876,9 +939,16 @@ async def stream_agent(
                                 "model": delta.model,
                                 "model_profile": delta.model_profile,
                                 "fallback_used": delta.fallback_used,
+                                "input_tokens": delta.input_tokens,
+                                "output_tokens": delta.output_tokens,
                             }
                             model_runs.append(run)
                             yield encode_sse("model", run)
+                        elif model_runs:
+                            if delta.input_tokens:
+                                model_runs[-1]["input_tokens"] = delta.input_tokens
+                            if delta.output_tokens:
+                                model_runs[-1]["output_tokens"] = delta.output_tokens
                         received = True
                         generated = True
                         answer_parts.append(delta.text)
@@ -921,6 +991,21 @@ async def stream_agent(
                 fallback_used=fallback_used,
                 model_runs=model_runs,
             )
+            await record_model_usage_safely(
+                user=user,
+                thread_id=thread_id,
+                model_profile=payload.model_profile,
+                provider=provider,
+                model=model_name,
+                fallback_used=fallback_used,
+                status="success" if model_status == "generated" else "degraded",
+                latency_ms=int((perf_counter() - started_at) * 1000),
+                input_tokens=sum(int(run.get("input_tokens", 0)) for run in model_runs),
+                output_tokens=sum(int(run.get("output_tokens", 0)) for run in model_runs),
+                error_type=(
+                    None if model_status == "generated" else "providers_unavailable"
+                ),
+            )
             yield encode_sse(
                 "done",
                 {
@@ -943,6 +1028,18 @@ async def stream_agent(
             raise
         except AgentModelConfigurationError as error:
             logger.error("Streaming Agent model configuration failed: %s", error)
+            if thread_id:
+                await record_model_usage_safely(
+                    user=user,
+                    thread_id=thread_id,
+                    model_profile=payload.model_profile,
+                    provider=settings.chat_provider,
+                    model=settings.resolved_chat_model(payload.model_profile),
+                    fallback_used=False,
+                    status="error",
+                    latency_ms=int((perf_counter() - started_at) * 1000),
+                    error_type="configuration_error",
+                )
             yield encode_sse("error", {"message": str(error)})
         except Exception:
             logger.exception("Streaming Agent run failed")

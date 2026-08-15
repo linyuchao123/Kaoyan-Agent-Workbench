@@ -19,7 +19,10 @@ class FakeChatModel:
         self.messages = messages
         if isinstance(self.response, Exception):
             raise self.response
-        return AIMessage(content=self.response)
+        return AIMessage(
+            content=self.response,
+            usage_metadata={"input_tokens": 12, "output_tokens": 4, "total_tokens": 16},
+        )
 
     async def astream(self, messages):
         self.messages = messages
@@ -93,6 +96,8 @@ class AgentModelTests(IsolatedAsyncioTestCase):
         self.assertEqual(result.content, "深度回答")
         self.assertEqual(result.model, "deepseek-v4-pro")
         self.assertEqual(result.model_profile, "pro")
+        self.assertEqual(result.input_tokens, 12)
+        self.assertEqual(result.output_tokens, 4)
         self.assertIsNone(flash.messages)
 
     async def test_model_receives_safety_boundary_and_context(self):

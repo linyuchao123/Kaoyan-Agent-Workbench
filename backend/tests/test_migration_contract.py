@@ -122,6 +122,17 @@ class MigrationContractTests(TestCase):
         self.assertIn("document does not require OCR", sql)
         self.assertIn("cardinality", sql)
 
+    def test_agent_model_usage_is_owner_readable_and_rpc_written(self):
+        sql = Path(
+            "supabase/migrations/202608150004_agent_model_usage.sql"
+        ).read_text()
+        self.assertIn("create table public.agent_model_usage", sql)
+        self.assertIn("agent_model_usage_owner_select", sql)
+        self.assertIn("record_agent_model_usage", sql)
+        self.assertIn("auth.uid()", sql)
+        self.assertIn("requested_input_tokens", sql)
+        self.assertNotIn("api_key", sql)
+
     def test_agent_proposal_rpc_uses_auth_owner_audit_and_idempotent_approval(self):
         sql = Path(
             "supabase/migrations/202608130001_agent_proposal_persistence.sql"

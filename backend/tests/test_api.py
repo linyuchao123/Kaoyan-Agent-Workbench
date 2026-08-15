@@ -89,6 +89,16 @@ class ApiFlowTests(TestCase):
         history = self.client.get("/api/v1/agents/threads/latest").json()
         self.assertEqual(history["messages"][0]["role"], "user")
         self.assertEqual(history["messages"][1]["role"], "agent")
+        usage = [
+            event
+            for event in main.repository.audit_logs
+            if event["event_type"] == "agent_model_usage"
+        ]
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0]["payload"]["model_profile"], "flash")
+        self.assertIn(usage[0]["payload"]["status"], {"success", "degraded"})
+        self.assertGreaterEqual(usage[0]["payload"]["latency_ms"], 0)
+        self.assertNotIn("api_key", str(usage[0]).lower())
 
     def test_study_loop_updates_contributions(self):
         task = self.client.post(

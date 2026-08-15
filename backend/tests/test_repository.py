@@ -653,6 +653,45 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         payload = json.loads(requests[0].content)
         self.assertEqual(payload["query_embedding"], [0.1, 0.2, 0.3])
+
+    async def test_supabase_records_agent_model_usage_without_prompt_or_secret(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(204)
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        await repository.record_agent_model_usage(
+            self.user,
+            thread_id=thread_id,
+            model_profile="flash",
+            provider="qwen",
+            model="qwen3.5-flash-2026-02-23",
+            fallback_used=True,
+            status="success",
+            latency_ms=850,
+            input_tokens=120,
+            output_tokens=40,
+        )
+
+        self.assertTrue(requests[0].url.path.endswith("/rpc/record_agent_model_usage"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_thread_id"], str(thread_id))
+        self.assertEqual(payload["requested_input_tokens"], 120)
+        self.assertTrue(payload["requested_fallback_used"])
+        serialized = requests[0].content.decode().lower()
+        self.assertNotIn("prompt", serialized)
+        self.assertNotIn("api_key", serialized)
         self.assertNotIn("user_id", payload)
 
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
