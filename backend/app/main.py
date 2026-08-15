@@ -437,7 +437,21 @@ async def model_usage(
     user: Annotated[AuthUser, Depends(get_current_user)],
     days: Annotated[int, Query(ge=1, le=365)] = 30,
 ) -> AgentModelUsageSummary:
-    return await repository.agent_model_usage_summary(user, days=days)
+    summary = await repository.agent_model_usage_summary(user, days=days)
+    estimated_cost = 0.0
+    has_unpriced_usage = False
+    for item in summary.breakdown:
+        prices = settings.chat_token_prices(item.provider, item.model_profile)
+        if prices is None:
+            has_unpriced_usage = has_unpriced_usage or item.request_count > 0
+            continue
+        input_price, output_price = prices
+        estimated_cost += item.input_tokens * input_price / 1_000_000
+        estimated_cost += item.output_tokens * output_price / 1_000_000
+    if summary.total_requests and not has_unpriced_usage:
+        summary.estimated_cost = round(estimated_cost, 6)
+        summary.cost_note = "按本地配置的每百万 Token 单价估算，最终以供应商账单为准"
+    return summary
 
 
 @app.post("/api/v1/search/web", response_model=list[SearchSource])

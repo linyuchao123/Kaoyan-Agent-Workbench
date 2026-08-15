@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from io import BytesIO
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
@@ -9,6 +9,8 @@ from pypdf import PdfWriter
 
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
+from app.config import Settings
+from app.schemas import AgentModelUsageBreakdown, AgentModelUsageSummary
 from app.services.repository import DemoRepository
 from app.services.search import WebResult
 from app.services.web_import import DownloadedWebDocument
@@ -114,6 +116,46 @@ class ApiFlowTests(TestCase):
             self.client.get("/api/v1/analytics/model-usage?days=0").status_code,
             422,
         )
+
+    def test_model_usage_estimates_cost_only_when_prices_are_configured(self):
+        stored_summary = AgentModelUsageSummary(
+            days=30,
+            total_requests=1,
+            successful_requests=1,
+            success_rate=1,
+            average_latency_ms=500,
+            input_tokens=100,
+            output_tokens=200,
+            breakdown=[
+                AgentModelUsageBreakdown(
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    model_profile="flash",
+                    request_count=1,
+                    average_latency_ms=500,
+                    input_tokens=100,
+                    output_tokens=200,
+                )
+            ],
+        )
+        priced_settings = Settings(
+            _env_file=None,
+            deepseek_flash_input_price_per_million=1,
+            deepseek_flash_output_price_per_million=2,
+        )
+        with (
+            patch.object(
+                main.repository,
+                "agent_model_usage_summary",
+                new=AsyncMock(return_value=stored_summary),
+            ),
+            patch.object(main, "settings", priced_settings),
+        ):
+            response = self.client.get("/api/v1/analytics/model-usage?days=30")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["estimated_cost"], 0.0005)
+        self.assertIn("供应商账单", response.json()["cost_note"])
         self.assertEqual(
             self.client.get("/api/v1/analytics/model-usage?days=366").status_code,
             422,

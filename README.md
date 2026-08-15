@@ -92,6 +92,16 @@ CHAT_FALLBACK_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 CHAT_FALLBACK_FLASH_MODEL=qwen3.5-flash-2026-02-23
 CHAT_FALLBACK_PRO_MODEL=qwen3.7-plus
 
+# 可选：按供应商当前价格填写每百万 Token 单价；留空则只统计 Token。
+DEEPSEEK_FLASH_INPUT_PRICE_PER_MILLION=
+DEEPSEEK_FLASH_OUTPUT_PRICE_PER_MILLION=
+DEEPSEEK_PRO_INPUT_PRICE_PER_MILLION=
+DEEPSEEK_PRO_OUTPUT_PRICE_PER_MILLION=
+QWEN_FALLBACK_FLASH_INPUT_PRICE_PER_MILLION=
+QWEN_FALLBACK_FLASH_OUTPUT_PRICE_PER_MILLION=
+QWEN_FALLBACK_PRO_INPUT_PRICE_PER_MILLION=
+QWEN_FALLBACK_PRO_OUTPUT_PRICE_PER_MILLION=
+
 EMBEDDING_PROVIDER=qwen
 EMBEDDING_API_KEY=<阿里云百炼 API Key>
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -185,7 +195,7 @@ backend/.venv/bin/pytest -q backend/tests
 10. OCR 支持 Qwen OCR 与通用视觉模型二次识别，单页失败不会中止整份文档，并可重新处理失败页。
 11. 模型调用记录请求次数、Token、耗时、错误率和备用切换次数，并提供当前用户隔离的统计接口。
 
-v0.8 需要执行 `202608140001`、`202608140002`、`202608150001` 至 `202608150004` 六个云端迁移，并使用真实 DeepSeek/Qwen 密钥完成环境验收。供应商单价可能变化，系统不硬编码金额；Token 指标可结合实际账单核算成本。
+v0.8 需要执行 `202608140001`、`202608140002`、`202608150001` 至 `202608150004` 六个云端迁移，并使用真实 DeepSeek/Qwen 密钥完成环境验收。供应商单价可能变化，系统不硬编码默认金额；填写本地可选单价后会返回估算成本，最终仍以供应商账单为准。
 
 ## 安全约定
 

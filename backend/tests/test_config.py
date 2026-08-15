@@ -62,3 +62,20 @@ class ProviderSettingsTests(TestCase):
     def test_embedding_dimensions_cannot_drift_from_pgvector_schema(self):
         with self.assertRaises(ValidationError):
             Settings(_env_file=None, embedding_dimensions=1024)
+
+    def test_chat_token_prices_are_optional_and_profile_specific(self):
+        settings = Settings(
+            _env_file=None,
+            deepseek_flash_input_price_per_million=1.0,
+            deepseek_flash_output_price_per_million=2.0,
+            qwen_fallback_pro_input_price_per_million=3.0,
+            qwen_fallback_pro_output_price_per_million=4.0,
+        )
+
+        self.assertEqual(settings.chat_token_prices("deepseek", "flash"), (1.0, 2.0))
+        self.assertEqual(settings.chat_token_prices("qwen", "pro"), (3.0, 4.0))
+        self.assertIsNone(settings.chat_token_prices("deepseek", "pro"))
+        self.assertIsNone(settings.chat_token_prices("unknown", "flash"))
+
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, deepseek_flash_input_price_per_million=-1)

@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     chat_fallback_base_url: str = ""
     chat_fallback_flash_model: str = "qwen3.5-flash-2026-02-23"
     chat_fallback_pro_model: str = "qwen3.7-plus"
+    deepseek_flash_input_price_per_million: float | None = Field(default=None, ge=0)
+    deepseek_flash_output_price_per_million: float | None = Field(default=None, ge=0)
+    deepseek_pro_input_price_per_million: float | None = Field(default=None, ge=0)
+    deepseek_pro_output_price_per_million: float | None = Field(default=None, ge=0)
+    qwen_fallback_flash_input_price_per_million: float | None = Field(default=None, ge=0)
+    qwen_fallback_flash_output_price_per_million: float | None = Field(default=None, ge=0)
+    qwen_fallback_pro_input_price_per_million: float | None = Field(default=None, ge=0)
+    qwen_fallback_pro_output_price_per_million: float | None = Field(default=None, ge=0)
     embedding_provider: str = "qwen"
     embedding_api_key: str = ""
     embedding_base_url: str = ""
@@ -79,6 +87,38 @@ class Settings(BaseSettings):
         if profile == "pro":
             return self.chat_fallback_pro_model
         return self.chat_fallback_flash_model
+
+    def chat_token_prices(
+        self, provider: str, profile: Literal["flash", "pro"]
+    ) -> tuple[float, float] | None:
+        normalized_provider = provider.strip().lower()
+        if normalized_provider == self.chat_provider.strip().lower():
+            input_price = (
+                self.deepseek_pro_input_price_per_million
+                if profile == "pro"
+                else self.deepseek_flash_input_price_per_million
+            )
+            output_price = (
+                self.deepseek_pro_output_price_per_million
+                if profile == "pro"
+                else self.deepseek_flash_output_price_per_million
+            )
+        elif normalized_provider == self.chat_fallback_provider.strip().lower():
+            input_price = (
+                self.qwen_fallback_pro_input_price_per_million
+                if profile == "pro"
+                else self.qwen_fallback_flash_input_price_per_million
+            )
+            output_price = (
+                self.qwen_fallback_pro_output_price_per_million
+                if profile == "pro"
+                else self.qwen_fallback_flash_output_price_per_million
+            )
+        else:
+            return None
+        if input_price is None or output_price is None:
+            return None
+        return input_price, output_price
 
     @property
     def resolved_embedding_api_key(self) -> str:
