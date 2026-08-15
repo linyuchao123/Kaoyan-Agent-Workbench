@@ -24,6 +24,7 @@ from app.config import get_settings
 from app.schemas import (
     ActionProposal,
     AgentCitation,
+    AgentModelUsageSummary,
     AgentProposalEditRequest,
     AgentRunRequest,
     AgentThreadHistory,
@@ -429,6 +430,14 @@ async def contributions(
     if scope not in {"all", "math", "english", "politics", "cs408", "career"}:
         raise HTTPException(422, "unknown contribution scope")
     return await repository.contributions(user, from_date, to_date, scope)
+
+
+@app.get("/api/v1/analytics/model-usage", response_model=AgentModelUsageSummary)
+async def model_usage(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+) -> AgentModelUsageSummary:
+    return await repository.agent_model_usage_summary(user, days=days)
 
 
 @app.post("/api/v1/search/web", response_model=list[SearchSource])

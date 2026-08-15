@@ -100,6 +100,25 @@ class ApiFlowTests(TestCase):
         self.assertGreaterEqual(usage[0]["payload"]["latency_ms"], 0)
         self.assertNotIn("api_key", str(usage[0]).lower())
 
+        summary = self.client.get("/api/v1/analytics/model-usage?days=30")
+        self.assertEqual(summary.status_code, 200)
+        metrics = summary.json()
+        self.assertEqual(metrics["total_requests"], 1)
+        self.assertEqual(metrics["degraded_requests"], 1)
+        self.assertEqual(metrics["breakdown"][0]["model_profile"], "flash")
+        self.assertIsNone(metrics["estimated_cost"])
+        self.assertNotIn("message", summary.text.lower())
+
+    def test_model_usage_rejects_out_of_range_window(self):
+        self.assertEqual(
+            self.client.get("/api/v1/analytics/model-usage?days=0").status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/analytics/model-usage?days=366").status_code,
+            422,
+        )
+
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
             "/api/v1/tasks",

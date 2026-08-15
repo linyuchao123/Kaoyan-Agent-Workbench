@@ -38,6 +38,36 @@ class ContributionDay(BaseModel):
     subject_minutes: dict[str, int] = Field(default_factory=dict)
 
 
+class AgentModelUsageBreakdown(BaseModel):
+    provider: str
+    model: str
+    model_profile: Literal["flash", "pro"]
+    request_count: int = 0
+    degraded_count: int = 0
+    error_count: int = 0
+    fallback_count: int = 0
+    average_latency_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class AgentModelUsageSummary(BaseModel):
+    days: int
+    total_requests: int = 0
+    successful_requests: int = 0
+    degraded_requests: int = 0
+    error_requests: int = 0
+    fallback_requests: int = 0
+    success_rate: float = Field(default=0, ge=0, le=1)
+    error_rate: float = Field(default=0, ge=0, le=1)
+    average_latency_ms: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost: float | None = None
+    cost_note: str = "未配置动态单价，Token 已记录，可按供应商账单价格核算"
+    breakdown: list[AgentModelUsageBreakdown] = Field(default_factory=list)
+
+
 class StudySessionCreate(StrictRequestModel):
     subject: Subject
     started_at: datetime

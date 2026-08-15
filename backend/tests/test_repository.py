@@ -694,6 +694,46 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("user_id", payload)
 
+    async def test_supabase_reads_owner_model_usage_summary(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "model_profile": "pro",
+                        "provider": "qwen",
+                        "model": "qwen3.7-plus",
+                        "fallback_used": True,
+                        "status": "degraded",
+                        "latency_ms": 1200,
+                        "input_tokens": 200,
+                        "output_tokens": 80,
+                        "created_at": "2026-08-15T00:00:00Z",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        summary = await repository.agent_model_usage_summary(self.user, days=30)
+
+        self.assertTrue(requests[0].url.path.endswith("/agent_model_usage"))
+        self.assertIn("user_id=eq.", str(requests[0].url))
+        self.assertEqual(summary.total_requests, 1)
+        self.assertEqual(summary.fallback_requests, 1)
+        self.assertEqual(summary.output_tokens, 80)
+        self.assertEqual(summary.breakdown[0].model, "qwen3.7-plus")
+
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(

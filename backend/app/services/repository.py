@@ -13,6 +13,8 @@ from app.schemas import (
     ActionProposal,
     AgentCitation,
     AgentMessage,
+    AgentModelUsageBreakdown,
+    AgentModelUsageSummary,
     AgentThreadHistory,
     AgentThreadSummary,
     CareerItemCreate,
@@ -49,6 +51,94 @@ class RepositoryConflictError(RepositoryError):
 
 class RepositoryValidationError(RepositoryError):
     pass
+
+
+def summarize_agent_model_usage(
+    rows: list[Mapping[str, Any]], *, days: int
+) -> AgentModelUsageSummary:
+    grouped: dict[tuple[str, str, str], dict[str, int]] = {}
+    totals = {
+        "successful": 0,
+        "degraded": 0,
+        "errors": 0,
+        "fallbacks": 0,
+        "latency": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    for row in rows:
+        status = str(row.get("status", "error"))
+        fallback_used = bool(row.get("fallback_used", False))
+        latency_ms = max(int(row.get("latency_ms", 0)), 0)
+        input_tokens = max(int(row.get("input_tokens", 0)), 0)
+        output_tokens = max(int(row.get("output_tokens", 0)), 0)
+        totals["successful"] += int(status in {"success", "degraded"})
+        totals["degraded"] += int(status == "degraded")
+        totals["errors"] += int(status == "error")
+        totals["fallbacks"] += int(fallback_used)
+        totals["latency"] += latency_ms
+        totals["input_tokens"] += input_tokens
+        totals["output_tokens"] += output_tokens
+
+        key = (
+            str(row.get("provider", "unknown")),
+            str(row.get("model", "unknown")),
+            str(row.get("model_profile", "flash")),
+        )
+        bucket = grouped.setdefault(
+            key,
+            {
+                "requests": 0,
+                "degraded": 0,
+                "errors": 0,
+                "fallbacks": 0,
+                "latency": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            },
+        )
+        bucket["requests"] += 1
+        bucket["degraded"] += int(status == "degraded")
+        bucket["errors"] += int(status == "error")
+        bucket["fallbacks"] += int(fallback_used)
+        bucket["latency"] += latency_ms
+        bucket["input_tokens"] += input_tokens
+        bucket["output_tokens"] += output_tokens
+
+    total_requests = len(rows)
+    breakdown = [
+        AgentModelUsageBreakdown(
+            provider=provider,
+            model=model,
+            model_profile=cast(Any, profile),
+            request_count=bucket["requests"],
+            degraded_count=bucket["degraded"],
+            error_count=bucket["errors"],
+            fallback_count=bucket["fallbacks"],
+            average_latency_ms=round(bucket["latency"] / bucket["requests"]),
+            input_tokens=bucket["input_tokens"],
+            output_tokens=bucket["output_tokens"],
+        )
+        for (provider, model, profile), bucket in sorted(grouped.items())
+    ]
+    return AgentModelUsageSummary(
+        days=days,
+        total_requests=total_requests,
+        successful_requests=totals["successful"],
+        degraded_requests=totals["degraded"],
+        error_requests=totals["errors"],
+        fallback_requests=totals["fallbacks"],
+        success_rate=round(totals["successful"] / total_requests, 4)
+        if total_requests
+        else 0,
+        error_rate=round(totals["errors"] / total_requests, 4) if total_requests else 0,
+        average_latency_ms=round(totals["latency"] / total_requests)
+        if total_requests
+        else 0,
+        input_tokens=totals["input_tokens"],
+        output_tokens=totals["output_tokens"],
+        breakdown=breakdown,
+    )
 
 
 class StudyRepository(Protocol):
@@ -189,6 +279,10 @@ class StudyRepository(Protocol):
         output_tokens: int = 0,
         error_type: str | None = None,
     ) -> None: ...
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary: ...
 
     async def create_agent_proposal(
         self,
@@ -572,6 +666,7 @@ class DemoRepository:
                 "user_id": user.id,
                 "thread_id": thread_id,
                 "event_type": "agent_model_usage",
+                "created_at": self.now_factory() if self.now_factory else datetime.now(UTC),
                 "payload": {
                     "model_profile": model_profile,
                     "provider": provider,
@@ -585,6 +680,20 @@ class DemoRepository:
                 },
             }
         )
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary:
+        now = self.now_factory() if self.now_factory else datetime.now(UTC)
+        threshold = now.timestamp() - days * 86400
+        rows = [
+            {**event["payload"], "created_at": event["created_at"]}
+            for event in self.audit_logs
+            if event.get("event_type") == "agent_model_usage"
+            and event.get("user_id") == user.id
+            and event["created_at"].timestamp() >= threshold
+        ]
+        return summarize_agent_model_usage(rows, days=days)
 
     async def create_agent_proposal(
         self,
@@ -1675,6 +1784,26 @@ class SupabaseRepository:
                 "requested_error_type": error_type,
             },
         )
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary:
+        since = datetime.fromtimestamp(datetime.now(UTC).timestamp() - days * 86400, UTC)
+        rows = await self._request(
+            user,
+            "GET",
+            "agent_model_usage",
+            params={
+                "select": (
+                    "model_profile,provider,model,fallback_used,status,latency_ms,"
+                    "input_tokens,output_tokens,created_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "created_at": f"gte.{since.isoformat()}",
+                "order": "created_at.desc",
+            },
+        )
+        return summarize_agent_model_usage(rows, days=days)
 
     async def create_agent_proposal(
         self,
