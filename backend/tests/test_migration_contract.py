@@ -140,3 +140,14 @@ class MigrationContractTests(TestCase):
         self.assertIn("create or replace function public.append_agent_exchange", sql)
         self.assertIn("owner_id uuid := auth.uid()", sql)
         self.assertIn("grant execute on function public.append_agent_exchange", sql)
+
+    def test_agent_model_profile_is_owner_scoped_and_persisted(self):
+        sql = Path(
+            "supabase/migrations/202608150001_agent_model_profiles.sql"
+        ).read_text()
+        self.assertIn("add column if not exists model_profile", sql)
+        self.assertIn("model_profile in ('flash', 'pro')", sql)
+        self.assertIn("create or replace function public.set_agent_thread_model_profile", sql)
+        self.assertIn("owner_id uuid := auth.uid()", sql)
+        self.assertIn("last_provider = nullif(agent_metadata ->> 'provider', '')", sql)
+        self.assertIn("to authenticated", sql)

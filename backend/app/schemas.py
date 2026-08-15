@@ -272,6 +272,9 @@ class AgentThreadHistory(BaseModel):
     id: UUID
     mode: Literal["coach", "tutor", "combined"]
     title: str
+    model_profile: Literal["flash", "pro"] = "flash"
+    last_provider: str | None = None
+    last_model: str | None = None
     messages: list[AgentMessage]
 
 
@@ -279,6 +282,9 @@ class AgentThreadSummary(BaseModel):
     id: UUID
     mode: Literal["coach", "tutor", "combined"]
     title: str
+    model_profile: Literal["flash", "pro"] = "flash"
+    last_provider: str | None = None
+    last_model: str | None = None
     updated_at: datetime
 
 

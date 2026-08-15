@@ -681,6 +681,11 @@ async def prepare_agent_execution(
             mode=agent,
             title=payload.message[:160],
         )
+    await repository.set_agent_thread_model_profile(
+        user,
+        thread_id=thread_id,
+        model_profile=payload.model_profile,
+    )
     return retrieval_mode, context, thread_id, proposal
 
 

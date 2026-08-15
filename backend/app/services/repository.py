@@ -190,6 +190,14 @@ class StudyRepository(Protocol):
         title: str,
     ) -> UUID: ...
 
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None: ...
+
     async def append_agent_exchange(
         self,
         user: AuthUser,
@@ -534,6 +542,9 @@ class DemoRepository:
             self.agent_threads[(user.id, thread_id)] = {
                 "mode": mode,
                 "title": proposal.summary,
+                "model_profile": "flash",
+                "last_provider": None,
+                "last_model": None,
                 "updated_at": datetime.now(UTC),
             }
         elif (user.id, thread_id) not in self.agent_threads:
@@ -561,11 +572,29 @@ class DemoRepository:
             self.agent_threads[(user.id, thread_id)] = {
                 "mode": mode,
                 "title": title,
+                "model_profile": "flash",
+                "last_provider": None,
+                "last_model": None,
                 "updated_at": datetime.now(UTC),
             }
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         return thread_id
+
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            raise RepositoryValidationError("agent thread not found")
+        if model_profile not in {"flash", "pro"}:
+            raise RepositoryValidationError("unknown model profile")
+        thread["model_profile"] = model_profile
+        thread["updated_at"] = datetime.now(UTC)
 
     async def append_agent_exchange(
         self,
@@ -598,6 +627,9 @@ class DemoRepository:
             ]
         )
         thread["updated_at"] = now
+        thread["model_profile"] = metadata.get("model_profile", "flash")
+        thread["last_provider"] = metadata.get("provider")
+        thread["last_model"] = metadata.get("model")
 
     async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
         owned = [
@@ -615,6 +647,9 @@ class DemoRepository:
             id=thread_id,
             mode=thread["mode"],
             title=thread["title"],
+            model_profile=thread.get("model_profile", "flash"),
+            last_provider=thread.get("last_provider"),
+            last_model=thread.get("last_model"),
             messages=self.agent_messages.get((user.id, thread_id), []),
         )
 
@@ -626,6 +661,9 @@ class DemoRepository:
                 id=thread_id,
                 mode=thread["mode"],
                 title=thread["title"],
+                model_profile=thread.get("model_profile", "flash"),
+                last_provider=thread.get("last_provider"),
+                last_model=thread.get("last_model"),
                 updated_at=thread.get("updated_at", datetime.now(UTC)),
             )
             for (owner_id, thread_id), thread in self.agent_threads.items()
@@ -643,6 +681,9 @@ class DemoRepository:
             id=thread_id,
             mode=thread["mode"],
             title=thread["title"],
+            model_profile=thread.get("model_profile", "flash"),
+            last_provider=thread.get("last_provider"),
+            last_model=thread.get("last_model"),
             messages=self.agent_messages.get((user.id, thread_id), []),
         )
 
@@ -1584,6 +1625,23 @@ class SupabaseRepository:
             raise RepositoryError("Agent thread was not persisted")
         return UUID(str(value))
 
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/set_agent_thread_model_profile",
+            json={
+                "requested_thread_id": str(thread_id),
+                "requested_model_profile": model_profile,
+            },
+        )
+
     async def append_agent_exchange(
         self,
         user: AuthUser,
@@ -1613,7 +1671,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title",
+                "select": "id,mode,title,model_profile,last_provider,last_model",
                 "user_id": f"eq.{user.id}",
                 "order": "updated_at.desc",
                 "limit": "1",
@@ -1646,7 +1704,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title,updated_at",
+                "select": "id,mode,title,model_profile,last_provider,last_model,updated_at",
                 "user_id": f"eq.{user.id}",
                 "order": "updated_at.desc",
                 "limit": str(limit),
@@ -1662,7 +1720,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title",
+                "select": "id,mode,title,model_profile,last_provider,last_model",
                 "user_id": f"eq.{user.id}",
                 "id": f"eq.{thread_id}",
                 "limit": "1",

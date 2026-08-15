@@ -788,6 +788,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             mode="tutor",
             title="解释顺序表",
         )
+        await repository.set_agent_thread_model_profile(
+            self.user,
+            thread_id=saved,
+            model_profile="pro",
+        )
 
         self.assertEqual(saved, thread_id)
         self.assertTrue(requests[0].url.path.endswith("/rpc/ensure_agent_thread"))
@@ -795,6 +800,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_mode"], "tutor")
         self.assertEqual(payload["requested_title"], "解释顺序表")
         self.assertNotIn("user_id", payload)
+        profile_payload = json.loads(requests[1].content)
+        self.assertTrue(
+            requests[1].url.path.endswith("/rpc/set_agent_thread_model_profile")
+        )
+        self.assertEqual(profile_payload["requested_model_profile"], "pro")
 
     async def test_supabase_agent_exchange_uses_controlled_rpc_and_restores_owned_thread(self):
         requests: list[httpx.Request] = []
@@ -808,7 +818,16 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             if request.url.path.endswith("/agent_threads"):
                 return httpx.Response(
                     200,
-                    json=[{"id": str(thread_id), "mode": "tutor", "title": "解释顺序表"}],
+                    json=[
+                        {
+                            "id": str(thread_id),
+                            "mode": "tutor",
+                            "title": "解释顺序表",
+                            "model_profile": "pro",
+                            "last_provider": "deepseek",
+                            "last_model": "deepseek-v4-pro",
+                        }
+                    ],
                 )
             return httpx.Response(
                 200,
@@ -843,6 +862,8 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         history = await repository.latest_agent_thread(self.user)
 
         self.assertEqual(history.id, thread_id)
+        self.assertEqual(history.model_profile, "pro")
+        self.assertEqual(history.last_model, "deepseek-v4-pro")
         self.assertEqual(history.messages[0].content, "解释顺序表")
         rpc_payload = json.loads(requests[0].content)
         self.assertEqual(rpc_payload["requested_thread_id"], str(thread_id))
