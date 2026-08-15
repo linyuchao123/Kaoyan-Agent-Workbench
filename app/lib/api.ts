@@ -163,10 +163,22 @@ export type AgentMessage = {
   created_at: string;
 };
 
+export type AgentModelProfile = "flash" | "pro";
+
+export type AgentModelMetadata = {
+  provider: string;
+  model: string;
+  model_profile: AgentModelProfile;
+  fallback_used: boolean;
+};
+
 export type AgentThreadHistory = {
   id: string;
   mode: "coach" | "tutor" | "combined";
   title: string;
+  model_profile: AgentModelProfile;
+  last_provider: string | null;
+  last_model: string | null;
   messages: AgentMessage[];
 };
 
@@ -174,6 +186,9 @@ export type AgentThreadSummary = {
   id: string;
   mode: "coach" | "tutor" | "combined";
   title: string;
+  model_profile: AgentModelProfile;
+  last_provider: string | null;
+  last_model: string | null;
   updated_at: string;
 };
 
@@ -183,12 +198,17 @@ export type AgentRunResult = {
   route: string;
   retrieval_mode: string;
   model_status: "generated" | "fallback";
+  provider: string;
+  model: string;
+  model_profile: AgentModelProfile;
+  fallback_used: boolean;
   sources: AgentSource[];
   proposal: ActionProposal | null;
 };
 
 export type AgentStreamHandlers = {
   onStatus?: (message: string) => void;
+  onModel?: (metadata: AgentModelMetadata) => void;
   onDelta?: (text: string) => void;
 };
 
@@ -277,6 +297,7 @@ async function streamAgentRequest(
   agent: "coach" | "tutor" | "combined",
   message: string,
   threadId: string | undefined,
+  modelProfile: AgentModelProfile,
   handlers: AgentStreamHandlers,
   signal?: AbortSignal,
 ): Promise<AgentRunResult> {
@@ -288,7 +309,7 @@ async function streamAgentRequest(
   const response = await fetch(`${API_URL}/api/v1/agents/${agent}/runs/stream`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ message, thread_id: threadId }),
+    body: JSON.stringify({ message, thread_id: threadId, model_profile: modelProfile }),
     signal,
   });
   if (!response.ok) {
@@ -317,6 +338,8 @@ async function streamAgentRequest(
     const payload = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
     if (eventName === "status" && typeof payload.message === "string") {
       handlers.onStatus?.(payload.message);
+    } else if (eventName === "model") {
+      handlers.onModel?.(payload as AgentModelMetadata);
     } else if (eventName === "delta" && typeof payload.text === "string") {
       handlers.onDelta?.(payload.text);
     } else if (eventName === "done") {
@@ -474,19 +497,20 @@ export const api = {
     document: ApiDocument;
     duplicate: boolean;
   }>(`/api/v1/documents/import-proposals/${id}/approve`, { method: "POST" }),
-  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string, signal?: AbortSignal) =>
+  runAgent: (agent: "coach" | "tutor" | "combined", message: string, modelProfile: AgentModelProfile, threadId?: string, signal?: AbortSignal) =>
     request<AgentRunResult>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",
-      body: JSON.stringify({ message, thread_id: threadId }),
+      body: JSON.stringify({ message, thread_id: threadId, model_profile: modelProfile }),
       signal,
     }),
   runAgentStream: (
     agent: "coach" | "tutor" | "combined",
     message: string,
     threadId: string | undefined,
+    modelProfile: AgentModelProfile,
     handlers: AgentStreamHandlers,
     signal?: AbortSignal,
-  ) => streamAgentRequest(agent, message, threadId, handlers, signal),
+  ) => streamAgentRequest(agent, message, threadId, modelProfile, handlers, signal),
   latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
   listAgentThreads: () => request<AgentThreadSummary[]>("/api/v1/agents/threads?limit=20"),
   getAgentThread: (id: string) => request<AgentThreadHistory>(`/api/v1/agents/threads/${id}`),

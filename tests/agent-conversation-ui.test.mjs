@@ -35,3 +35,17 @@ test("Agent 新消息自动滚动并支持复制回答", () => {
   assert.match(pageSource, /navigator\.clipboard\.writeText\(text\)/);
   assert.match(pageSource, /复制回答/);
 });
+
+test("Agent 页面允许手动选择双模型档位并展示实际来源", () => {
+  assert.match(pageSource, /value=\{modelProfile\}/);
+  assert.match(pageSource, /DeepSeek Flash · 快速/);
+  assert.match(pageSource, /DeepSeek Pro · 深度/);
+  assert.match(pageSource, /onModel: \(metadata\)/);
+  assert.match(pageSource, /Qwen 备用/);
+});
+
+test("Agent 恢复历史会话时保留模型档位和消息模型元数据", () => {
+  assert.match(pageSource, /setModelProfile\(thread\.model_profile\)/);
+  assert.match(pageSource, /restoredAgentModel\(message\.metadata\)/);
+  assert.match(pageSource, /setModelProfile\("flash"\)/);
+});

@@ -9,10 +9,11 @@ test("Agent SSE 流可跨任意网络分片逐段解析", async () => {
   const chunks = [
     "event: status\r",
     "\ndata: {\"message\":\"正在读取资料\"}\r\n\r",
-    "\nevent: delta\ndata: {\"text\":\"第一段\"}\n\nevent: del",
-    "ta\ndata: {\"text\":\"第二段\"}\n\nevent: done\ndata: {\"thread_id\":\"thread-1\",\"answer\":\"第一段第二段\",\"route\":\"tutor\",\"retrieval_mode\":\"private\",\"model_status\":\"generated\",\"sources\":[],\"proposal\":null}\n\n",
+    "\nevent: model\ndata: {\"provider\":\"deepseek\",\"model\":\"deepseek-v4-pro\",\"model_profile\":\"pro\",\"fallback_used\":false}\n\nevent: delta\ndata: {\"text\":\"第一段\"}\n\nevent: del",
+    "ta\ndata: {\"text\":\"第二段\"}\n\nevent: done\ndata: {\"thread_id\":\"thread-1\",\"answer\":\"第一段第二段\",\"route\":\"tutor\",\"retrieval_mode\":\"private\",\"model_status\":\"generated\",\"provider\":\"deepseek\",\"model\":\"deepseek-v4-pro\",\"model_profile\":\"pro\",\"fallback_used\":false,\"sources\":[],\"proposal\":null}\n\n",
   ];
   const statuses = [];
+  const models = [];
   const deltas = [];
   const controller = new AbortController();
   let capturedRequest;
@@ -32,12 +33,14 @@ test("Agent SSE 流可跨任意网络分片逐段解析", async () => {
   };
 
   try {
-    const result = await api.runAgentStream("tutor", "根据我的资料解释二叉树", undefined, {
+    const result = await api.runAgentStream("tutor", "根据我的资料解释二叉树", undefined, "pro", {
       onStatus: (message) => statuses.push(message),
+      onModel: (metadata) => models.push(metadata),
       onDelta: (text) => deltas.push(text),
     }, controller.signal);
 
     assert.deepEqual(statuses, ["正在读取资料"]);
+    assert.deepEqual(models, [{ provider: "deepseek", model: "deepseek-v4-pro", model_profile: "pro", fallback_used: false }]);
     assert.deepEqual(deltas, ["第一段", "第二段"]);
     assert.equal(result.answer, "第一段第二段");
     assert.equal(result.thread_id, "thread-1");
@@ -47,6 +50,7 @@ test("Agent SSE 流可跨任意网络分片逐段解析", async () => {
     assert.equal(capturedRequest.init.signal, controller.signal);
     assert.deepEqual(JSON.parse(capturedRequest.init.body), {
       message: "根据我的资料解释二叉树",
+      model_profile: "pro",
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -63,7 +67,7 @@ test("Agent SSE 在未收到完成事件时明确报错", async () => {
 
   try {
     await assert.rejects(
-      api.runAgentStream("coach", "制定计划", undefined, {}),
+      api.runAgentStream("coach", "制定计划", undefined, "flash", {}),
       /Agent stream ended before completion/,
     );
   } finally {

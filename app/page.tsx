@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1615,10 +1615,34 @@ function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onSt
 
 const agentWelcomeMessage = "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。";
 
+type AgentChatMessage = {
+  role: "agent" | "user";
+  text: string;
+  sources?: AgentSource[];
+  model?: AgentModelMetadata;
+};
+
+function restoredAgentModel(metadata: Record<string, unknown>): AgentModelMetadata | undefined {
+  const profile = metadata.model_profile;
+  if (
+    typeof metadata.provider !== "string"
+    || typeof metadata.model !== "string"
+    || (profile !== "flash" && profile !== "pro")
+    || typeof metadata.fallback_used !== "boolean"
+  ) return undefined;
+  return {
+    provider: metadata.provider,
+    model: metadata.model,
+    model_profile: profile,
+    fallback_used: metadata.fallback_used,
+  };
+}
+
 function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
+  const [modelProfile, setModelProfile] = useState<AgentModelProfile>("flash");
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState<Array<{ role: "agent" | "user"; text: string; sources?: AgentSource[] }>>([{ role: "agent", text: agentWelcomeMessage }]);
+  const [messages, setMessages] = useState<AgentChatMessage[]>([{ role: "agent", text: agentWelcomeMessage }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
   const [proposalDraft, setProposalDraft] = useState<AgentProposalEdit | null>(null);
   const [editingProposal, setEditingProposal] = useState(false);
@@ -1633,7 +1657,8 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   function restoreThread(thread: AgentThreadHistory) {
     setThreadId(thread.id);
     setMode(thread.mode);
-    setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources })) : [{ role: "agent", text: agentWelcomeMessage }]);
+    setModelProfile(thread.model_profile);
+    setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources, model: restoredAgentModel(message.metadata) })) : [{ role: "agent", text: agentWelcomeMessage }]);
   }
 
   useEffect(() => {
@@ -1667,11 +1692,13 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
             role: message.role,
             text: message.content,
             sources: message.sources,
+            model: restoredAgentModel(message.metadata),
           }))
         : null;
       if (thread) {
         setThreadId(thread.id);
         setMode(thread.mode);
+        setModelProfile(thread.model_profile);
       }
       if (items.length > 0) {
         setProposal(items[0]);
@@ -1699,12 +1726,13 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
     setMessages((items) => [...items, { role: "agent", text: "正在准备回答…" }]);
     let streamedAnswer = "";
-    const updateStreamingMessage = (message: string, sources?: AgentSource[]) => {
+    let streamedModel: AgentModelMetadata | undefined;
+    const updateStreamingMessage = (message: string, sources?: AgentSource[], model?: AgentModelMetadata) => {
       setMessages((items) => {
         const updated = [...items];
         const index = updated.length - 1;
         if (index >= 0 && updated[index].role === "agent") {
-          updated[index] = { role: "agent", text: message, sources };
+          updated[index] = { role: "agent", text: message, sources, model };
         }
         return updated;
       });
@@ -1713,13 +1741,20 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     agentRequest.current = controller;
     setBusy(true);
     try {
-      const result = await api.runAgentStream(mode, text, threadId, {
+      const result = await api.runAgentStream(mode, text, threadId, modelProfile, {
         onStatus: (message) => {
           if (!streamedAnswer) updateStreamingMessage(`${message}…`);
         },
+        onModel: (metadata) => {
+          streamedModel = metadata;
+          if (!streamedAnswer) {
+            const providerLabel = metadata.fallback_used ? "Qwen 备用模型" : metadata.model_profile === "pro" ? "DeepSeek Pro" : "DeepSeek Flash";
+            updateStreamingMessage(`${providerLabel} 正在生成回答…`, undefined, metadata);
+          }
+        },
         onDelta: (delta) => {
           streamedAnswer += delta;
-          updateStreamingMessage(streamedAnswer);
+          updateStreamingMessage(streamedAnswer, undefined, streamedModel);
         },
       }, controller.signal);
       setThreadId(result.thread_id);
@@ -1728,7 +1763,9 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       setProposalDraft(result.proposal?.payload ?? null);
       setEditingProposal(false);
       const modelLabel = result.model_status === "generated" ? "模型生成" : "安全降级";
-      updateStreamingMessage(`${streamedAnswer || result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}`, result.sources);
+      const resultModel = { provider: result.provider, model: result.model, model_profile: result.model_profile, fallback_used: result.fallback_used };
+      const fallbackLabel = result.fallback_used ? " · DeepSeek 不可用，已切换 Qwen" : "";
+      updateStreamingMessage(`${streamedAnswer || result.answer}\n\n路由：${result.route} · 检索：${result.retrieval_mode} · ${modelLabel}${fallbackLabel}`, result.sources, resultModel);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         updateStreamingMessage(`${streamedAnswer}${streamedAnswer ? "\n\n" : ""}已停止生成。本次未完整回答不会写入对话历史；没有经过确认的提案不会写入学习数据。`);
@@ -1767,6 +1804,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
       return;
     }
     setThreadId(undefined);
+    setModelProfile("flash");
     setProposal(null);
     setProposalDraft(null);
     setEditingProposal(false);
@@ -1842,7 +1880,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
         <div>
           <span className={modelReady ? "ready" : "fallback"}>模型</span>
           <strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong>
-          <small>{modelReady ? "回答将调用配置的 OpenAI 兼容模型" : "未配置模型 Key，不会伪装成模型回答"}</small>
+          <small>{modelReady ? "可手动选择 DeepSeek Flash 或 Pro，故障时切换 Qwen" : "未配置模型 Key，不会伪装成模型回答"}</small>
         </div>
         <div>
           <span className={searchReady ? "ready" : "fallback"}>联网</span>
@@ -1865,6 +1903,14 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           {[["coach", "计划教练"], ["tutor", "资料导师"], ["combined", "联合模式"]].map(([key, label]) => (
             <button key={key} className={mode === key ? "active" : ""} onClick={() => setMode(key as typeof mode)} disabled={busy}>{label}</button>
           ))}
+          <label className="agent-model-select">
+            <span>回答模型</span>
+            <select value={modelProfile} onChange={(event) => setModelProfile(event.target.value as AgentModelProfile)} disabled={busy}>
+              <option value="flash">DeepSeek Flash · 快速</option>
+              <option value="pro">DeepSeek Pro · 深度</option>
+            </select>
+            <small>{modelProfile === "pro" ? "质量更高，响应更慢且费用更高" : "适合日常答疑、计划和资料概括"}</small>
+          </label>
         </div>
         <div className="message-list" ref={messageListRef}>
           {messages.map((message, index) => (
@@ -1872,6 +1918,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
               <span>{message.role === "agent" ? "✦" : "你"}</span>
               <div className="message-body">
                 <p>{message.text}</p>
+                {message.model && <small className={`message-model ${message.model.fallback_used ? "fallback" : ""}`}>{message.model.fallback_used ? "Qwen 备用" : message.model.model_profile === "pro" ? "DeepSeek Pro" : "DeepSeek Flash"} · {message.model.model}</small>}
                 {message.role === "agent" && <button className="message-copy-button" type="button" onClick={() => void copyAgentMessage(message.text, index)}>{copyFeedback?.index === index ? copyFeedback.label : "复制回答"}</button>}
                 {message.sources && message.sources.length > 0 && (
                   <div className="agent-sources">
