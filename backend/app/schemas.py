@@ -248,6 +248,7 @@ class OcrJob(BaseModel):
 class AgentRunRequest(StrictRequestModel):
     message: str = Field(min_length=1, max_length=4000)
     thread_id: UUID | None = None
+    model_profile: Literal["flash", "pro"] = "flash"
 
 
 class AgentCitation(BaseModel):

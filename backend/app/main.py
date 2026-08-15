@@ -17,7 +17,7 @@ from pypdf import PdfReader
 
 from app.agents.context import AgentContext, build_agent_context
 from app.agents.graph import build_graph, coach_fallback, tutor_fallback
-from app.agents.model import OpenAICompatibleAgentModel
+from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.schemas import (
@@ -95,6 +95,14 @@ async def repository_error_handler(_: Request, error: RepositoryError) -> JSONRe
     else:
         status = 502
     return JSONResponse(status_code=status, content={"detail": str(error)})
+
+
+@app.exception_handler(AgentModelConfigurationError)
+async def agent_model_configuration_error_handler(
+    _: Request, error: AgentModelConfigurationError
+) -> JSONResponse:
+    logger.error("Agent model configuration failed: %s", error)
+    return JSONResponse(status_code=502, content={"detail": str(error)})
 
 
 @app.get("/health")
@@ -706,6 +714,11 @@ async def persist_agent_exchange(
     route: str,
     retrieval_mode: str,
     model_status: str,
+    model_profile: str,
+    provider: str,
+    model: str,
+    fallback_used: bool,
+    model_runs: list[dict],
 ) -> None:
     try:
         await repository.append_agent_exchange(
@@ -718,6 +731,11 @@ async def persist_agent_exchange(
                 "route": route,
                 "retrieval_mode": retrieval_mode,
                 "model_status": model_status,
+                "model_profile": model_profile,
+                "provider": provider,
+                "model": model,
+                "fallback_used": fallback_used,
+                "model_runs": model_runs,
             },
         )
     except RepositoryError:
@@ -742,12 +760,17 @@ async def run_agent(
             "requested_route": requested_agent,
             "user_id": str(user.id),
             "context": context,
+            "model_profile": payload.model_profile,
         }
     )
     answer = result.get("answer", "已完成分析。写入动作已转换为待确认提案。")
     sources = agent_citations(context)
     route = result.get("route", requested_agent)
     model_status = result.get("model_status", "fallback")
+    provider = result.get("provider", "deterministic")
+    model_name = result.get("model", "safe-fallback")
+    fallback_used = result.get("fallback_used", False)
+    model_runs = result.get("model_runs", [])
     await persist_agent_exchange(
         user=user,
         thread_id=thread_id,
@@ -757,6 +780,11 @@ async def run_agent(
         route=route,
         retrieval_mode=retrieval_mode,
         model_status=model_status,
+        model_profile=payload.model_profile,
+        provider=provider,
+        model=model_name,
+        fallback_used=fallback_used,
+        model_runs=model_runs,
     )
     return {
         "thread_id": thread_id,
@@ -765,6 +793,10 @@ async def run_agent(
         "route": route,
         "retrieval_mode": retrieval_mode,
         "model_status": model_status,
+        "provider": provider,
+        "model": model_name,
+        "model_profile": payload.model_profile,
+        "fallback_used": fallback_used,
         "sources": sources,
         "proposal": proposal,
         "created_at": datetime.now(UTC),
@@ -799,6 +831,7 @@ async def stream_agent(
             )
             answer_parts: list[str] = []
             generated = False
+            model_runs: list[dict[str, str | bool]] = []
             state = {"context": context, "retrieval_mode": retrieval_mode}
 
             async def stream_branch(kind: Literal["coach", "tutor"]):
@@ -813,11 +846,21 @@ async def stream_agent(
                         question=payload.message,
                         context=context,
                         fallback=fallback,
+                        model_profile=payload.model_profile,
                     ):
+                        if not received:
+                            run = {
+                                "provider": delta.provider,
+                                "model": delta.model,
+                                "model_profile": delta.model_profile,
+                                "fallback_used": delta.fallback_used,
+                            }
+                            model_runs.append(run)
+                            yield encode_sse("model", run)
                         received = True
                         generated = True
-                        answer_parts.append(delta)
-                        yield encode_sse("delta", {"text": delta})
+                        answer_parts.append(delta.text)
+                        yield encode_sse("delta", {"text": delta.text})
                 if not received:
                     answer_parts.append(fallback)
                     yield encode_sse("delta", {"text": fallback})
@@ -836,6 +879,11 @@ async def stream_agent(
 
             answer = "".join(answer_parts)
             model_status = "generated" if generated else "fallback"
+            providers = {str(run["provider"]) for run in model_runs}
+            models = {str(run["model"]) for run in model_runs}
+            provider = next(iter(providers)) if len(providers) == 1 else "mixed" if providers else "deterministic"
+            model_name = next(iter(models)) if len(models) == 1 else "mixed" if models else "safe-fallback"
+            fallback_used = any(bool(run["fallback_used"]) for run in model_runs)
             await persist_agent_exchange(
                 user=user,
                 thread_id=thread_id,
@@ -845,6 +893,11 @@ async def stream_agent(
                 route=requested_agent,
                 retrieval_mode=retrieval_mode,
                 model_status=model_status,
+                model_profile=payload.model_profile,
+                provider=provider,
+                model=model_name,
+                fallback_used=fallback_used,
+                model_runs=model_runs,
             )
             yield encode_sse(
                 "done",
@@ -855,6 +908,10 @@ async def stream_agent(
                     "route": requested_agent,
                     "retrieval_mode": retrieval_mode,
                     "model_status": model_status,
+                    "provider": provider,
+                    "model": model_name,
+                    "model_profile": payload.model_profile,
+                    "fallback_used": fallback_used,
                     "sources": [source.model_dump(mode="json") for source in sources],
                     "proposal": proposal.model_dump(mode="json") if proposal else None,
                     "created_at": datetime.now(UTC).isoformat(),
@@ -862,6 +919,9 @@ async def stream_agent(
             )
         except asyncio.CancelledError:
             raise
+        except AgentModelConfigurationError as error:
+            logger.error("Streaming Agent model configuration failed: %s", error)
+            yield encode_sse("error", {"message": str(error)})
         except Exception:
             logger.exception("Streaming Agent run failed")
             yield encode_sse(

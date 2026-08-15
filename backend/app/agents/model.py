@@ -1,6 +1,7 @@
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from langchain_openai import ChatOpenAI
@@ -10,6 +11,38 @@ from app.agents.context import AgentContext
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+ModelProfile = Literal["flash", "pro"]
+
+
+@dataclass(frozen=True)
+class AgentModelResult:
+    content: str
+    provider: str
+    model: str
+    model_profile: ModelProfile
+    fallback_used: bool
+
+
+@dataclass(frozen=True)
+class AgentModelDelta:
+    text: str
+    provider: str
+    model: str
+    model_profile: ModelProfile
+    fallback_used: bool
+
+
+@dataclass(frozen=True)
+class ModelEndpoint:
+    provider: str
+    model: str
+    client: ChatOpenAI
+    fallback_used: bool = False
+
+
+class AgentModelConfigurationError(RuntimeError):
+    """A provider rejected credentials or request parameters; do not fail over."""
 
 
 class AgentModel(Protocol):
@@ -23,7 +56,8 @@ class AgentModel(Protocol):
         question: str,
         context: AgentContext,
         fallback: str,
-    ) -> str | None: ...
+        model_profile: ModelProfile,
+    ) -> AgentModelResult | None: ...
 
     def stream(
         self,
@@ -32,31 +66,75 @@ class AgentModel(Protocol):
         question: str,
         context: AgentContext,
         fallback: str,
-    ) -> AsyncIterator[str]: ...
+        model_profile: ModelProfile,
+    ) -> AsyncIterator[AgentModelDelta]: ...
 
 
 class OpenAICompatibleAgentModel:
-    """Optional model adapter. A failure always falls back to deterministic analysis."""
+    """Capability router for DeepSeek chat with a profile-matched Qwen fallback."""
 
     def __init__(self, settings: Settings) -> None:
-        api_key = settings.resolved_chat_api_key
-        base_url = settings.resolved_chat_base_url
-        self._configured = bool(api_key and settings.chat_model)
-        self.client = (
-            ChatOpenAI(
-                model=settings.chat_model,
-                api_key=api_key,
-                base_url=base_url or None,
-                timeout=30,
-                max_retries=1,
-            )
-            if self._configured
-            else None
+        self.default_profile = settings.chat_default_profile
+        self.primary_endpoints = self._build_endpoints(
+            provider=settings.chat_provider,
+            api_key=settings.resolved_chat_api_key,
+            base_url=settings.resolved_chat_base_url,
+            models={
+                "flash": settings.resolved_chat_model("flash"),
+                "pro": settings.resolved_chat_model("pro"),
+            },
+            fallback_used=False,
         )
+        self.fallback_endpoints = self._build_endpoints(
+            provider=settings.chat_fallback_provider,
+            api_key=settings.chat_fallback_api_key,
+            base_url=settings.chat_fallback_base_url,
+            models={
+                "flash": settings.resolved_chat_fallback_model("flash"),
+                "pro": settings.resolved_chat_fallback_model("pro"),
+            },
+            fallback_used=True,
+        )
+
+    @staticmethod
+    def _build_endpoints(
+        *,
+        provider: str,
+        api_key: str,
+        base_url: str,
+        models: dict[ModelProfile, str],
+        fallback_used: bool,
+    ) -> dict[ModelProfile, ModelEndpoint]:
+        if not api_key:
+            return {}
+        return {
+            profile: ModelEndpoint(
+                provider=provider,
+                model=model,
+                client=ChatOpenAI(
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url or None,
+                    timeout=30,
+                    max_retries=1,
+                ),
+                fallback_used=fallback_used,
+            )
+            for profile, model in models.items()
+            if model
+        }
 
     @property
     def configured(self) -> bool:
-        return self._configured
+        return bool(self.primary_endpoints or self.fallback_endpoints)
+
+    @property
+    def primary_configured(self) -> bool:
+        return bool(self.primary_endpoints)
+
+    @property
+    def fallback_configured(self) -> bool:
+        return bool(self.fallback_endpoints)
 
     @staticmethod
     def _messages(
@@ -86,6 +164,38 @@ class OpenAICompatibleAgentModel:
         )
         return [("system", system_prompt), ("human", user_prompt)]
 
+    @staticmethod
+    def _status_code(error: Exception) -> int | None:
+        status_code = getattr(error, "status_code", None)
+        if isinstance(status_code, int):
+            return status_code
+        response = getattr(error, "response", None)
+        response_status = getattr(response, "status_code", None)
+        return response_status if isinstance(response_status, int) else None
+
+    @classmethod
+    def _can_fail_over(cls, error: Exception) -> bool:
+        status_code = cls._status_code(error)
+        return status_code is None or status_code == 429 or status_code >= 500
+
+    @staticmethod
+    def _configuration_error(endpoint: ModelEndpoint, error: Exception) -> AgentModelConfigurationError:
+        status_code = OpenAICompatibleAgentModel._status_code(error)
+        suffix = f"（HTTP {status_code}）" if status_code else ""
+        return AgentModelConfigurationError(
+            f"{endpoint.provider} 模型配置或请求参数被拒绝{suffix}，请检查服务端配置。"
+        )
+
+    def _candidate_endpoints(self, profile: ModelProfile) -> list[ModelEndpoint]:
+        candidates: list[ModelEndpoint] = []
+        primary = self.primary_endpoints.get(profile)
+        fallback = self.fallback_endpoints.get(profile)
+        if primary:
+            candidates.append(primary)
+        if fallback:
+            candidates.append(fallback)
+        return candidates
+
     async def generate(
         self,
         *,
@@ -93,23 +203,36 @@ class OpenAICompatibleAgentModel:
         question: str,
         context: AgentContext,
         fallback: str,
-    ) -> str | None:
-        if self.client is None:
-            return None
-        try:
-            response = await self.client.ainvoke(
-                self._messages(
-                    agent=agent,
-                    question=question,
-                    context=context,
-                    fallback=fallback,
+        model_profile: ModelProfile,
+    ) -> AgentModelResult | None:
+        messages = self._messages(
+            agent=agent,
+            question=question,
+            context=context,
+            fallback=fallback,
+        )
+        for endpoint in self._candidate_endpoints(model_profile):
+            try:
+                response = await endpoint.client.ainvoke(messages)
+                content = response.content
+                if isinstance(content, str) and content.strip():
+                    return AgentModelResult(
+                        content=content.strip(),
+                        provider=endpoint.provider,
+                        model=endpoint.model,
+                        model_profile=model_profile,
+                        fallback_used=endpoint.fallback_used,
+                    )
+            except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
+                if not self._can_fail_over(error):
+                    raise self._configuration_error(endpoint, error) from error
+                logger.warning(
+                    "Agent provider %s/%s failed; trying the next safe candidate: %s",
+                    endpoint.provider,
+                    endpoint.model,
+                    type(error).__name__,
                 )
-            )
-        except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
-            logger.warning("Agent model invocation failed; using safe fallback: %s", error)
-            return None
-        content = response.content
-        return content.strip() if isinstance(content, str) and content.strip() else None
+        return None
 
     async def stream(
         self,
@@ -118,20 +241,39 @@ class OpenAICompatibleAgentModel:
         question: str,
         context: AgentContext,
         fallback: str,
-    ) -> AsyncIterator[str]:
-        if self.client is None:
-            return
-        try:
-            async for chunk in self.client.astream(
-                self._messages(
-                    agent=agent,
-                    question=question,
-                    context=context,
-                    fallback=fallback,
+        model_profile: ModelProfile,
+    ) -> AsyncIterator[AgentModelDelta]:
+        messages = self._messages(
+            agent=agent,
+            question=question,
+            context=context,
+            fallback=fallback,
+        )
+        for endpoint in self._candidate_endpoints(model_profile):
+            emitted = False
+            try:
+                async for chunk in endpoint.client.astream(messages):
+                    content = chunk.content
+                    if isinstance(content, str) and content:
+                        emitted = True
+                        yield AgentModelDelta(
+                            text=content,
+                            provider=endpoint.provider,
+                            model=endpoint.model,
+                            model_profile=model_profile,
+                            fallback_used=endpoint.fallback_used,
+                        )
+            except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
+                if emitted or not self._can_fail_over(error):
+                    if not self._can_fail_over(error):
+                        raise self._configuration_error(endpoint, error) from error
+                    raise
+                logger.warning(
+                    "Agent stream provider %s/%s failed before output; trying fallback: %s",
+                    endpoint.provider,
+                    endpoint.model,
+                    type(error).__name__,
                 )
-            ):
-                content = chunk.content
-                if isinstance(content, str) and content:
-                    yield content
-        except (OpenAIError, OSError, RuntimeError, TimeoutError) as error:
-            logger.warning("Agent model stream failed; using safe fallback: %s", error)
+                continue
+            if emitted:
+                return

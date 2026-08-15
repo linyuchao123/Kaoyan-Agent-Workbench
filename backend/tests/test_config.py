@@ -26,6 +26,13 @@ class ProviderSettingsTests(TestCase):
         )
         self.assertEqual(settings.resolved_ocr_api_key, "ocr-key")
         self.assertEqual(settings.resolved_ocr_base_url, "https://ocr.example/v1")
+        self.assertEqual(settings.resolved_chat_model("flash"), "deepseek-v4-flash")
+        self.assertEqual(settings.resolved_chat_model("pro"), "deepseek-v4-pro")
+        self.assertEqual(
+            settings.resolved_chat_fallback_model("flash"),
+            "qwen3.5-flash-2026-02-23",
+        )
+        self.assertEqual(settings.resolved_chat_fallback_model("pro"), "qwen3.7-plus")
 
     def test_legacy_openai_settings_remain_a_fallback(self):
         settings = Settings(

@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -19,7 +20,16 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     chat_api_key: str = ""
     chat_base_url: str = ""
+    chat_provider: str = "deepseek"
+    chat_default_profile: Literal["flash", "pro"] = "flash"
     chat_model: str = "gpt-5-mini"
+    chat_flash_model: str = "deepseek-v4-flash"
+    chat_pro_model: str = "deepseek-v4-pro"
+    chat_fallback_provider: str = "qwen"
+    chat_fallback_api_key: str = ""
+    chat_fallback_base_url: str = ""
+    chat_fallback_flash_model: str = "qwen3.5-flash-2026-02-23"
+    chat_fallback_pro_model: str = "qwen3.7-plus"
     embedding_api_key: str = ""
     embedding_base_url: str = ""
     embedding_model: str = "text-embedding-3-small"
@@ -46,6 +56,16 @@ class Settings(BaseSettings):
     @property
     def resolved_chat_base_url(self) -> str:
         return self.chat_base_url or self.openai_base_url
+
+    def resolved_chat_model(self, profile: Literal["flash", "pro"]) -> str:
+        if profile == "pro":
+            return self.chat_pro_model or self.chat_model
+        return self.chat_flash_model or self.chat_model
+
+    def resolved_chat_fallback_model(self, profile: Literal["flash", "pro"]) -> str:
+        if profile == "pro":
+            return self.chat_fallback_pro_model
+        return self.chat_fallback_flash_model
 
     @property
     def resolved_embedding_api_key(self) -> str:
