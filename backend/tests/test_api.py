@@ -67,6 +67,8 @@ class ApiFlowTests(TestCase):
         self.assertEqual(body["agent"]["web_search_configured"], True)
         self.assertIn(body["agent"]["mode"], {"live", "partial", "fallback"})
         self.assertIn(body["rag"]["mode"], {"keyword", "hybrid"})
+        self.assertEqual(body["rag"]["embedding_provider"], "qwen")
+        self.assertEqual(body["rag"]["embedding_model"], "text-embedding-v4")
         self.assertEqual(body["rag"]["embedding_dimensions"], 1536)
         serialized = response.text.lower()
         self.assertNotIn("api_key", serialized)

@@ -1,5 +1,7 @@
 from unittest import TestCase
 
+from pydantic import ValidationError
+
 from app.config import Settings
 
 
@@ -26,6 +28,11 @@ class ProviderSettingsTests(TestCase):
         )
         self.assertEqual(settings.resolved_ocr_api_key, "ocr-key")
         self.assertEqual(settings.resolved_ocr_base_url, "https://ocr.example/v1")
+        self.assertEqual(settings.embedding_provider, "qwen")
+        self.assertEqual(settings.embedding_model, "text-embedding-v4")
+        self.assertEqual(settings.embedding_dimensions, 1536)
+        self.assertEqual(settings.ocr_provider, "qwen")
+        self.assertEqual(settings.ocr_model, "qwen3.5-ocr")
         self.assertEqual(settings.resolved_chat_model("flash"), "deepseek-v4-flash")
         self.assertEqual(settings.resolved_chat_model("pro"), "deepseek-v4-pro")
         self.assertEqual(
@@ -50,3 +57,7 @@ class ProviderSettingsTests(TestCase):
             "https://legacy.example/v1",
         )
         self.assertEqual(settings.resolved_ocr_base_url, "https://legacy.example/v1")
+
+    def test_embedding_dimensions_cannot_drift_from_pgvector_schema(self):
+        with self.assertRaises(ValidationError):
+            Settings(_env_file=None, embedding_dimensions=1024)

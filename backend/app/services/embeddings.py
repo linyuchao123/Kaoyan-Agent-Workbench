@@ -26,6 +26,9 @@ class OpenAICompatibleEmbeddingProvider:
     """Optional embedding adapter with strict vector validation and safe fallback."""
 
     def __init__(self, settings: Settings) -> None:
+        self._provider = settings.embedding_provider
+        self._model = settings.embedding_model
+        self._version = settings.embedding_version
         self._dimensions = settings.embedding_dimensions
         api_key = settings.resolved_embedding_api_key
         base_url = settings.resolved_embedding_base_url
@@ -54,6 +57,18 @@ class OpenAICompatibleEmbeddingProvider:
     @property
     def dimensions(self) -> int:
         return self._dimensions
+
+    @property
+    def provider(self) -> str:
+        return self._provider
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def version(self) -> str:
+        return self._version
 
     def _valid_vector(self, vector: list[float]) -> bool:
         return len(vector) == self._dimensions and all(math.isfinite(value) for value in vector)

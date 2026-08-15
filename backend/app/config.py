@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
@@ -30,13 +31,16 @@ class Settings(BaseSettings):
     chat_fallback_base_url: str = ""
     chat_fallback_flash_model: str = "qwen3.5-flash-2026-02-23"
     chat_fallback_pro_model: str = "qwen3.7-plus"
+    embedding_provider: str = "qwen"
     embedding_api_key: str = ""
     embedding_base_url: str = ""
-    embedding_model: str = "text-embedding-3-small"
+    embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1536
+    embedding_version: str = "1"
+    ocr_provider: str = "qwen"
     ocr_api_key: str = ""
     ocr_base_url: str = ""
-    ocr_model: str = "gpt-5-mini"
+    ocr_model: str = "qwen3.5-ocr"
     ocr_max_pages: int = 100
     ocr_poll_seconds: float = 5.0
     pdftoppm_path: str = "pdftoppm"
@@ -44,6 +48,13 @@ class Settings(BaseSettings):
     demo_mode: bool = True
 
     model_config = SettingsConfigDict(env_file=BACKEND_ENV_FILE, extra="ignore")
+
+    @field_validator("embedding_dimensions")
+    @classmethod
+    def validate_embedding_dimensions(cls, value: int) -> int:
+        if value != 1536:
+            raise ValueError("EMBEDDING_DIMENSIONS must remain 1536 for pgvector compatibility")
+        return value
 
     @property
     def origins(self) -> list[str]:

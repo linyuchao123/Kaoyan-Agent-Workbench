@@ -129,6 +129,8 @@ async def health() -> dict[str, object]:
         "rag": {
             "mode": "hybrid" if embedding_provider.configured else "keyword",
             "embedding_configured": embedding_provider.configured,
+            "embedding_provider": embedding_provider.provider,
+            "embedding_model": embedding_provider.model,
             "embedding_dimensions": embedding_provider.dimensions,
         },
     }

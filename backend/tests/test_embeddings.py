@@ -35,36 +35,39 @@ class EmbeddingProviderTests(IsolatedAsyncioTestCase):
 
     async def test_configured_provider_embeds_documents_and_query(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key", embedding_dimensions=3)
+            Settings(openai_api_key="test-key")
         )
-        fake = FakeEmbeddingClient(dimensions=3)
+        fake = FakeEmbeddingClient(dimensions=1536)
         provider.client = fake
 
         documents = await provider.embed_documents(["第一段", "第二段"])
         query = await provider.embed_query("极限定义")
 
-        self.assertEqual(documents, [[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])
-        self.assertEqual(query, [0.5, 0.5, 0.5])
+        self.assertEqual(len(documents[0]), 1536)
+        self.assertEqual(documents[0][0], 1.0)
+        self.assertEqual(documents[1][0], 2.0)
+        self.assertEqual(len(query), 1536)
+        self.assertEqual(query[0], 0.5)
         self.assertEqual(fake.document_inputs, ["第一段", "第二段"])
         self.assertEqual(fake.query_input, "极限定义")
 
     async def test_invalid_or_failed_vectors_are_rejected(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key", embedding_dimensions=3)
+            Settings(openai_api_key="test-key")
         )
-        provider.client = FakeEmbeddingClient(dimensions=2)
+        provider.client = FakeEmbeddingClient(dimensions=1535)
         self.assertIsNone(await provider.embed_query("极限定义"))
         self.assertIsNone(await provider.embed_documents(["第一段"]))
 
-        provider.client = FakeEmbeddingClient(dimensions=3, fail=True)
+        provider.client = FakeEmbeddingClient(dimensions=1536, fail=True)
         self.assertIsNone(await provider.embed_query("极限定义"))
         self.assertIsNone(await provider.embed_documents(["第一段"]))
 
     async def test_only_safe_chunks_receive_embeddings(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key", embedding_dimensions=3)
+            Settings(openai_api_key="test-key")
         )
-        fake = FakeEmbeddingClient(dimensions=3)
+        fake = FakeEmbeddingClient(dimensions=1536)
         provider.client = fake
         chunks = [
             TextChunk(0, "定义", "定义 · 片段 1", "极限定义", None, False),
@@ -74,6 +77,7 @@ class EmbeddingProviderTests(IsolatedAsyncioTestCase):
         indexed = await embed_safe_chunks(chunks, provider)
 
         self.assertEqual(fake.document_inputs, ["极限定义"])
-        self.assertEqual(indexed[0].embedding, [1.0, 1.0, 1.0])
+        self.assertEqual(len(indexed[0].embedding), 1536)
+        self.assertEqual(indexed[0].embedding[0], 1.0)
         self.assertIsNone(indexed[1].embedding)
         self.assertIsNone(chunks[0].embedding)
