@@ -53,6 +53,16 @@ class RepositoryValidationError(RepositoryError):
     pass
 
 
+def storage_object_filename(content_type: str) -> str:
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    suffix = {
+        "application/pdf": ".pdf",
+        "text/markdown": ".md",
+        "text/x-markdown": ".md",
+    }.get(normalized, ".bin")
+    return f"source{suffix}"
+
+
 def summarize_agent_model_usage(
     rows: list[Mapping[str, Any]], *, days: int
 ) -> AgentModelUsageSummary:
@@ -1495,7 +1505,10 @@ class SupabaseRepository:
             if same_url:
                 return {**same_url[0], "chunk_count": 0, "flagged_chunk_count": 0}, True
 
-        storage_path = f"{user.id}/{document_id}/{filename}"
+        # Supabase Storage rejects some Unicode object keys. Keep the original
+        # filename in document metadata, while using a stable ASCII-only key.
+        object_filename = storage_object_filename(content_type)
+        storage_path = f"{user.id}/{document_id}/{object_filename}"
         encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
         await self._storage_request(
             user,

@@ -24,6 +24,7 @@ from app.services.repository import (
     RepositoryConflictError,
     RepositoryValidationError,
     SupabaseRepository,
+    storage_object_filename,
 )
 
 
@@ -34,6 +35,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             email="one@example.com",
             access_token="signed-user-jwt",
         )
+
+    def test_storage_object_filename_is_ascii_and_content_type_based(self):
+        self.assertEqual(storage_object_filename("application/pdf"), "source.pdf")
+        self.assertEqual(storage_object_filename("text/markdown; charset=utf-8"), "source.md")
+        self.assertEqual(storage_object_filename("application/octet-stream"), "source.bin")
 
     async def test_demo_repository_isolates_users(self):
         repository = DemoRepository()
@@ -457,7 +463,7 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         document, duplicate = await repository.persist_document(
             self.user,
             document_id=document_id,
-            filename="limits.md",
+            filename="极限与连续.md",
             content_type="text/markdown",
             content=content,
             digest="abc123",
@@ -472,15 +478,18 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(duplicate)
-        self.assertEqual(document["storage_path"], f"{self.user.id}/{document_id}/limits.md")
+        self.assertEqual(
+            document["storage_path"], f"{self.user.id}/{document_id}/source.md"
+        )
         storage_request = requests[1]
         self.assertIn(
-            f"/storage/v1/object/study-materials/{self.user.id}/{document_id}/limits.md",
+            f"/storage/v1/object/study-materials/{self.user.id}/{document_id}/source.md",
             str(storage_request.url),
         )
         self.assertEqual(storage_request.headers["authorization"], "Bearer signed-user-jwt")
         document_payload = json.loads(requests[2].content)
         self.assertEqual(document_payload["user_id"], str(self.user.id))
+        self.assertEqual(document_payload["original_filename"], "极限与连续.md")
         self.assertEqual(document_payload["embedding_provider"], "qwen")
         self.assertEqual(document_payload["embedding_model"], "text-embedding-v4")
         self.assertEqual(document_payload["embedding_dimensions"], 1536)
