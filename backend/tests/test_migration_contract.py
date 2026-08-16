@@ -122,6 +122,16 @@ class MigrationContractTests(TestCase):
         self.assertIn("document does not require OCR", sql)
         self.assertIn("cardinality", sql)
 
+    def test_ocr_worker_can_read_claimed_jobs_and_documents(self):
+        sql = Path(
+            "supabase/migrations/202608160001_grant_ocr_worker_read_access.sql"
+        ).read_text()
+        self.assertIn("grant select on public.ocr_jobs to service_role", sql)
+        self.assertIn("grant select on public.documents to service_role", sql)
+        self.assertNotIn("grant insert", sql)
+        self.assertNotIn("grant update", sql)
+        self.assertNotIn("grant delete", sql)
+
     def test_agent_model_usage_is_owner_readable_and_rpc_written(self):
         sql = Path(
             "supabase/migrations/202608150004_agent_model_usage.sql"
