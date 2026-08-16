@@ -55,6 +55,9 @@ class OpenAICompatibleEmbeddingProvider:
                 dimensions=self._dimensions,
                 api_key=api_key,
                 base_url=base_url or None,
+                # DashScope's OpenAI-compatible endpoint accepts text strings,
+                # not the token-id arrays produced by LangChain's length check.
+                check_embedding_ctx_length=False,
                 timeout=30,
                 max_retries=1,
             )

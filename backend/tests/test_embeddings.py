@@ -27,7 +27,9 @@ class FakeEmbeddingClient:
 
 class EmbeddingProviderTests(IsolatedAsyncioTestCase):
     async def test_unconfigured_provider_keeps_keyword_fallback(self):
-        provider = OpenAICompatibleEmbeddingProvider(Settings(openai_api_key=""))
+        provider = OpenAICompatibleEmbeddingProvider(
+            Settings(_env_file=None, openai_api_key="")
+        )
 
         self.assertFalse(provider.configured)
         self.assertIsNone(await provider.embed_query("极限定义"))
@@ -35,8 +37,9 @@ class EmbeddingProviderTests(IsolatedAsyncioTestCase):
 
     async def test_configured_provider_embeds_documents_and_query(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key")
+            Settings(_env_file=None, openai_api_key="test-key")
         )
+        self.assertFalse(provider.client.check_embedding_ctx_length)
         fake = FakeEmbeddingClient(dimensions=1536)
         provider.client = fake
 
@@ -53,7 +56,7 @@ class EmbeddingProviderTests(IsolatedAsyncioTestCase):
 
     async def test_invalid_or_failed_vectors_are_rejected(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key")
+            Settings(_env_file=None, openai_api_key="test-key")
         )
         provider.client = FakeEmbeddingClient(dimensions=1535)
         self.assertIsNone(await provider.embed_query("极限定义"))
@@ -65,7 +68,7 @@ class EmbeddingProviderTests(IsolatedAsyncioTestCase):
 
     async def test_only_safe_chunks_receive_embeddings(self):
         provider = OpenAICompatibleEmbeddingProvider(
-            Settings(openai_api_key="test-key")
+            Settings(_env_file=None, openai_api_key="test-key")
         )
         fake = FakeEmbeddingClient(dimensions=1536)
         provider.client = fake
