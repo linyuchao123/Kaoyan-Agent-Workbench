@@ -17,12 +17,14 @@ from app.schemas import (
     StudySessionCreate,
     TaskCreate,
 )
-from app.services.ingestion import chunk_markdown
+from app.services.embeddings import EmbeddingDescriptor
+from app.services.ingestion import TextChunk
 from app.services.repository import (
     DemoRepository,
     RepositoryConflictError,
     RepositoryValidationError,
     SupabaseRepository,
+    storage_object_filename,
 )
 
 
@@ -33,6 +35,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             email="one@example.com",
             access_token="signed-user-jwt",
         )
+
+    def test_storage_object_filename_is_ascii_and_content_type_based(self):
+        self.assertEqual(storage_object_filename("application/pdf"), "source.pdf")
+        self.assertEqual(storage_object_filename("text/markdown; charset=utf-8"), "source.md")
+        self.assertEqual(storage_object_filename("application/octet-stream"), "source.bin")
 
     async def test_demo_repository_isolates_users(self):
         repository = DemoRepository()
@@ -442,33 +449,57 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         repository = SupabaseRepository(settings, httpx.MockTransport(handler))
         content = b"# Limits\nDefinition and examples"
-        chunks = chunk_markdown(content.decode())
+        chunks = [
+            TextChunk(
+                index=0,
+                heading="Limits",
+                locator="Limits · 片段 1",
+                content="Definition and examples",
+                page_number=None,
+                flagged_untrusted_instruction=False,
+                embedding=[0.1, 0.2, 0.3],
+            )
+        ]
         document, duplicate = await repository.persist_document(
             self.user,
             document_id=document_id,
-            filename="limits.md",
+            filename="极限与连续.md",
             content_type="text/markdown",
             content=content,
             digest="abc123",
             ingestion_status="ready",
             chunks=chunks,
+            embedding_metadata=EmbeddingDescriptor(
+                provider="qwen",
+                model="text-embedding-v4",
+                dimensions=1536,
+                version="1",
+            ),
         )
 
         self.assertFalse(duplicate)
-        self.assertEqual(document["storage_path"], f"{self.user.id}/{document_id}/limits.md")
+        self.assertEqual(
+            document["storage_path"], f"{self.user.id}/{document_id}/source.md"
+        )
         storage_request = requests[1]
         self.assertIn(
-            f"/storage/v1/object/study-materials/{self.user.id}/{document_id}/limits.md",
+            f"/storage/v1/object/study-materials/{self.user.id}/{document_id}/source.md",
             str(storage_request.url),
         )
         self.assertEqual(storage_request.headers["authorization"], "Bearer signed-user-jwt")
         document_payload = json.loads(requests[2].content)
         self.assertEqual(document_payload["user_id"], str(self.user.id))
+        self.assertEqual(document_payload["original_filename"], "极限与连续.md")
+        self.assertEqual(document_payload["embedding_provider"], "qwen")
+        self.assertEqual(document_payload["embedding_model"], "text-embedding-v4")
+        self.assertEqual(document_payload["embedding_dimensions"], 1536)
+        self.assertEqual(document_payload["embedding_version"], "1")
         self.assertNotIn("access_token", document_payload)
         chunk_payload = json.loads(requests[3].content)[0]
         self.assertEqual(chunk_payload["document_id"], str(document_id))
         self.assertEqual(chunk_payload["user_id"], str(self.user.id))
         self.assertIsNone(chunk_payload["page_number"])
+        self.assertEqual(chunk_payload["embedding"], [0.1, 0.2, 0.3])
 
     async def test_supabase_document_upload_reuses_existing_hash(self):
         requests: list[httpx.Request] = []
@@ -520,6 +551,44 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertFalse(any("/storage/v1/" in str(request.url) for request in requests))
 
+    async def test_supabase_ocr_queue_uses_owned_rpc_and_read_filter(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        job = {
+            "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "document_id": str(document_id),
+            "status": "queued",
+            "attempts": 0,
+            "max_attempts": 3,
+            "available_at": "2026-08-14T10:00:00Z",
+            "last_error": None,
+            "created_at": "2026-08-14T10:00:00Z",
+            "updated_at": "2026-08-14T10:00:00Z",
+        }
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[job])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        queued = await repository.enqueue_document_ocr(self.user, document_id)
+        loaded = await repository.get_document_ocr_job(self.user, document_id)
+
+        self.assertEqual(queued.status, "queued")
+        self.assertEqual(loaded.id, queued.id)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/enqueue_document_ocr"))
+        self.assertEqual(json.loads(requests[0].content)["requested_document_id"], str(document_id))
+        self.assertTrue(requests[1].url.path.endswith("/rest/v1/ocr_jobs"))
+        self.assertIn(f"user_id=eq.{self.user.id}", str(requests[1].url))
+
     async def test_supabase_private_search_calls_user_scoped_rpc(self):
         requests: list[httpx.Request] = []
         document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -564,6 +633,115 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["match_count"], 5)
         self.assertEqual(payload["filter_document_ids"], [str(document_id)])
         self.assertNotIn("user_id", payload)
+
+    async def test_supabase_private_search_uses_hybrid_rpc_with_query_embedding(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=[])
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        await repository.search_private_knowledge(
+            self.user,
+            "极限定义",
+            limit=4,
+            query_embedding=[0.1, 0.2, 0.3],
+        )
+
+        self.assertTrue(
+            requests[0].url.path.endswith("/rpc/hybrid_search_private_document_chunks")
+        )
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["query_embedding"], [0.1, 0.2, 0.3])
+
+    async def test_supabase_records_agent_model_usage_without_prompt_or_secret(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(204)
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        await repository.record_agent_model_usage(
+            self.user,
+            thread_id=thread_id,
+            model_profile="flash",
+            provider="qwen",
+            model="qwen3.5-flash-2026-02-23",
+            fallback_used=True,
+            status="success",
+            latency_ms=850,
+            input_tokens=120,
+            output_tokens=40,
+        )
+
+        self.assertTrue(requests[0].url.path.endswith("/rpc/record_agent_model_usage"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_thread_id"], str(thread_id))
+        self.assertEqual(payload["requested_input_tokens"], 120)
+        self.assertTrue(payload["requested_fallback_used"])
+        serialized = requests[0].content.decode().lower()
+        self.assertNotIn("prompt", serialized)
+        self.assertNotIn("api_key", serialized)
+        self.assertNotIn("user_id", payload)
+
+    async def test_supabase_reads_owner_model_usage_summary(self):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "model_profile": "pro",
+                        "provider": "qwen",
+                        "model": "qwen3.7-plus",
+                        "fallback_used": True,
+                        "status": "degraded",
+                        "latency_ms": 1200,
+                        "input_tokens": 200,
+                        "output_tokens": 80,
+                        "created_at": "2026-08-15T00:00:00Z",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        summary = await repository.agent_model_usage_summary(self.user, days=30)
+
+        self.assertTrue(requests[0].url.path.endswith("/agent_model_usage"))
+        self.assertIn("user_id=eq.", str(requests[0].url))
+        self.assertEqual(summary.total_requests, 1)
+        self.assertEqual(summary.fallback_requests, 1)
+        self.assertEqual(summary.output_tokens, 80)
+        self.assertEqual(summary.breakdown[0].model, "qwen3.7-plus")
 
     async def test_supabase_overlap_constraint_becomes_repository_conflict(self):
         def handler(_: httpx.Request) -> httpx.Response:
@@ -709,6 +887,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             mode="tutor",
             title="解释顺序表",
         )
+        await repository.set_agent_thread_model_profile(
+            self.user,
+            thread_id=saved,
+            model_profile="pro",
+        )
 
         self.assertEqual(saved, thread_id)
         self.assertTrue(requests[0].url.path.endswith("/rpc/ensure_agent_thread"))
@@ -716,6 +899,11 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(payload["requested_mode"], "tutor")
         self.assertEqual(payload["requested_title"], "解释顺序表")
         self.assertNotIn("user_id", payload)
+        profile_payload = json.loads(requests[1].content)
+        self.assertTrue(
+            requests[1].url.path.endswith("/rpc/set_agent_thread_model_profile")
+        )
+        self.assertEqual(profile_payload["requested_model_profile"], "pro")
 
     async def test_supabase_agent_exchange_uses_controlled_rpc_and_restores_owned_thread(self):
         requests: list[httpx.Request] = []
@@ -729,7 +917,16 @@ class RepositoryTests(IsolatedAsyncioTestCase):
             if request.url.path.endswith("/agent_threads"):
                 return httpx.Response(
                     200,
-                    json=[{"id": str(thread_id), "mode": "tutor", "title": "解释顺序表"}],
+                    json=[
+                        {
+                            "id": str(thread_id),
+                            "mode": "tutor",
+                            "title": "解释顺序表",
+                            "model_profile": "pro",
+                            "last_provider": "deepseek",
+                            "last_model": "deepseek-v4-pro",
+                        }
+                    ],
                 )
             return httpx.Response(
                 200,
@@ -764,6 +961,8 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         history = await repository.latest_agent_thread(self.user)
 
         self.assertEqual(history.id, thread_id)
+        self.assertEqual(history.model_profile, "pro")
+        self.assertEqual(history.last_model, "deepseek-v4-pro")
         self.assertEqual(history.messages[0].content, "解释顺序表")
         rpc_payload = json.loads(requests[0].content)
         self.assertEqual(rpc_payload["requested_thread_id"], str(thread_id))

@@ -272,6 +272,10 @@ test("Agent 请求支持传入取消信号", async () => {
       route: "coach",
       retrieval_mode: "none",
       model_status: "fallback",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      model_profile: "flash",
+      fallback_used: false,
       sources: [],
       proposal: null,
     }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -279,8 +283,12 @@ test("Agent 请求支持传入取消信号", async () => {
   const controller = new AbortController();
 
   try {
-    await api.runAgent("coach", "安排今天的复习", undefined, controller.signal);
+    await api.runAgent("coach", "安排今天的复习", "flash", undefined, controller.signal);
     assert.equal(request.init.signal, controller.signal);
+    assert.deepEqual(JSON.parse(request.init.body), {
+      message: "安排今天的复习",
+      model_profile: "flash",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -104,6 +104,12 @@ export type ApiDocument = {
   version: number;
   ingestion_status: "queued" | "processing" | "ocr_required" | "ready" | "failed";
   ingestion_error: string | null;
+  embedding_provider?: string | null;
+  embedding_model?: string | null;
+  embedding_dimensions?: number | null;
+  embedding_version?: string | null;
+  ocr_failed_pages?: number[];
+  ocr_fallback_pages?: number[];
   created_at: string;
   updated_at: string;
 };
@@ -163,10 +169,22 @@ export type AgentMessage = {
   created_at: string;
 };
 
+export type AgentModelProfile = "flash" | "pro";
+
+export type AgentModelMetadata = {
+  provider: string;
+  model: string;
+  model_profile: AgentModelProfile;
+  fallback_used: boolean;
+};
+
 export type AgentThreadHistory = {
   id: string;
   mode: "coach" | "tutor" | "combined";
   title: string;
+  model_profile: AgentModelProfile;
+  last_provider: string | null;
+  last_model: string | null;
   messages: AgentMessage[];
 };
 
@@ -174,7 +192,30 @@ export type AgentThreadSummary = {
   id: string;
   mode: "coach" | "tutor" | "combined";
   title: string;
+  model_profile: AgentModelProfile;
+  last_provider: string | null;
+  last_model: string | null;
   updated_at: string;
+};
+
+export type AgentRunResult = {
+  thread_id: string;
+  answer: string;
+  route: string;
+  retrieval_mode: string;
+  model_status: "generated" | "fallback";
+  provider: string;
+  model: string;
+  model_profile: AgentModelProfile;
+  fallback_used: boolean;
+  sources: AgentSource[];
+  proposal: ActionProposal | null;
+};
+
+export type AgentStreamHandlers = {
+  onStatus?: (message: string) => void;
+  onModel?: (metadata: AgentModelMetadata) => void;
+  onDelta?: (text: string) => void;
 };
 
 export type ImportProposal = {
@@ -256,6 +297,78 @@ async function download(path: string): Promise<{ blob: Blob; filename: string }>
   const disposition = response.headers.get("Content-Disposition") || "";
   const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "yantu-export.json";
   return { blob: await response.blob(), filename };
+}
+
+async function streamAgentRequest(
+  agent: "coach" | "tutor" | "combined",
+  message: string,
+  threadId: string | undefined,
+  modelProfile: AgentModelProfile,
+  handlers: AgentStreamHandlers,
+  signal?: AbortSignal,
+): Promise<AgentRunResult> {
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  });
+  if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
+  const response = await fetch(`${API_URL}/api/v1/agents/${agent}/runs/stream`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message, thread_id: threadId, model_profile: modelProfile }),
+    signal,
+  });
+  if (!response.ok) {
+    const detail = await responseErrorMessage(response);
+    if (response.status === 401) {
+      accessToken = null;
+      authFailureHandler?.();
+    }
+    throw new ApiError(response.status, detail);
+  }
+  if (!response.body) throw new ApiError(502, "Agent stream is unavailable");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: AgentRunResult | undefined;
+
+  const consumeFrame = (frame: string) => {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    }
+    if (!dataLines.length) return;
+    const payload = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+    if (eventName === "status" && typeof payload.message === "string") {
+      handlers.onStatus?.(payload.message);
+    } else if (eventName === "model") {
+      handlers.onModel?.(payload as AgentModelMetadata);
+    } else if (eventName === "delta" && typeof payload.text === "string") {
+      handlers.onDelta?.(payload.text);
+    } else if (eventName === "done") {
+      result = payload as AgentRunResult;
+    } else if (eventName === "error") {
+      throw new ApiError(502, String(payload.message || "Agent stream failed"));
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    let boundary = buffer.match(/\r?\n\r?\n/);
+    while (boundary?.index !== undefined) {
+      consumeFrame(buffer.slice(0, boundary.index));
+      buffer = buffer.slice(boundary.index + boundary[0].length);
+      boundary = buffer.match(/\r?\n\r?\n/);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) consumeFrame(buffer);
+  if (!result) throw new ApiError(502, "Agent stream ended before completion");
+  return result;
 }
 
 export const api = {
@@ -390,20 +503,20 @@ export const api = {
     document: ApiDocument;
     duplicate: boolean;
   }>(`/api/v1/documents/import-proposals/${id}/approve`, { method: "POST" }),
-  runAgent: (agent: "coach" | "tutor" | "combined", message: string, threadId?: string, signal?: AbortSignal) =>
-    request<{
-      thread_id: string;
-      answer: string;
-      route: string;
-      retrieval_mode: string;
-      model_status: "generated" | "fallback";
-      sources: AgentSource[];
-      proposal: ActionProposal | null;
-    }>(`/api/v1/agents/${agent}/runs`, {
+  runAgent: (agent: "coach" | "tutor" | "combined", message: string, modelProfile: AgentModelProfile, threadId?: string, signal?: AbortSignal) =>
+    request<AgentRunResult>(`/api/v1/agents/${agent}/runs`, {
       method: "POST",
-      body: JSON.stringify({ message, thread_id: threadId }),
+      body: JSON.stringify({ message, thread_id: threadId, model_profile: modelProfile }),
       signal,
     }),
+  runAgentStream: (
+    agent: "coach" | "tutor" | "combined",
+    message: string,
+    threadId: string | undefined,
+    modelProfile: AgentModelProfile,
+    handlers: AgentStreamHandlers,
+    signal?: AbortSignal,
+  ) => streamAgentRequest(agent, message, threadId, modelProfile, handlers, signal),
   latestAgentThread: () => request<AgentThreadHistory | null>("/api/v1/agents/threads/latest"),
   listAgentThreads: () => request<AgentThreadSummary[]>("/api/v1/agents/threads?limit=20"),
   getAgentThread: (id: string) => request<AgentThreadHistory>(`/api/v1/agents/threads/${id}`),

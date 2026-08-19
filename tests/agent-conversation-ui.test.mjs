@@ -21,11 +21,12 @@ test("Agent 页面展示历史对话并允许读取指定线程", () => {
   assert.match(pageSource, /api\.getAgentThread\(selectedThreadId\)/);
 });
 
-test("Agent 长请求可以停止等待且不会宣称服务端已经终止", () => {
+test("Agent 流式请求可以停止生成且不会写入未完成回答", () => {
   assert.match(pageSource, /new AbortController\(\)/);
   assert.match(pageSource, /agentRequest\.current\?\.abort\(\)/);
   assert.match(pageSource, /停止等待/);
-  assert.match(pageSource, /服务端可能仍在安全完成分析/);
+  assert.match(pageSource, /本次未完整回答不会写入对话历史/);
+  assert.match(pageSource, /api\.runAgentStream/);
 });
 
 test("Agent 新消息自动滚动并支持复制回答", () => {
@@ -33,4 +34,18 @@ test("Agent 新消息自动滚动并支持复制回答", () => {
   assert.match(pageSource, /messageList\.scrollTop = messageList\.scrollHeight/);
   assert.match(pageSource, /navigator\.clipboard\.writeText\(text\)/);
   assert.match(pageSource, /复制回答/);
+});
+
+test("Agent 页面允许手动选择双模型档位并展示实际来源", () => {
+  assert.match(pageSource, /value=\{modelProfile\}/);
+  assert.match(pageSource, /DeepSeek Flash · 快速/);
+  assert.match(pageSource, /DeepSeek Pro · 深度/);
+  assert.match(pageSource, /onModel: \(metadata\)/);
+  assert.match(pageSource, /Qwen 备用/);
+});
+
+test("Agent 恢复历史会话时保留模型档位和消息模型元数据", () => {
+  assert.match(pageSource, /setModelProfile\(thread\.model_profile\)/);
+  assert.match(pageSource, /restoredAgentModel\(message\.metadata\)/);
+  assert.match(pageSource, /setModelProfile\("flash"\)/);
 });

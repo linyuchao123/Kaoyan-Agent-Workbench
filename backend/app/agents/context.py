@@ -41,6 +41,7 @@ async def build_agent_context(
     route: Literal["coach", "tutor", "combined"],
     retrieval_mode: Literal["private", "web", "hybrid"],
     search_provider: WebSearchProvider | None = None,
+    query_embedding: list[float] | None = None,
 ) -> AgentContext:
     """Build a small, read-only and user-isolated context for one Agent run."""
 
@@ -61,7 +62,12 @@ async def build_agent_context(
         mistakes_task = asyncio.create_task(repository.list_mistakes(user, due_only=True))
     if route in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}:
         sources_task = asyncio.create_task(
-            repository.search_private_knowledge(user, message, limit=4)
+            repository.search_private_knowledge(
+                user,
+                message,
+                limit=4,
+                query_embedding=query_embedding,
+            )
         )
     if route in {"tutor", "combined"} and retrieval_mode in {"web", "hybrid"}:
         if search_provider and search_provider.configured:

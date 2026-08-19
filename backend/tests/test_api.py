@@ -1,12 +1,16 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+from pypdf import PdfWriter
 
 from app import main
 from app.auth import AuthUser, InvalidTokenError, get_current_user
+from app.config import Settings
+from app.schemas import AgentModelUsageBreakdown, AgentModelUsageSummary
 from app.services.repository import DemoRepository
 from app.services.search import WebResult
 from app.services.web_import import DownloadedWebDocument
@@ -64,9 +68,98 @@ class ApiFlowTests(TestCase):
         self.assertEqual(body["status"], "ok")
         self.assertEqual(body["agent"]["web_search_configured"], True)
         self.assertIn(body["agent"]["mode"], {"live", "partial", "fallback"})
+        self.assertIn(body["rag"]["mode"], {"keyword", "hybrid"})
+        self.assertEqual(body["rag"]["embedding_provider"], "qwen")
+        self.assertEqual(body["rag"]["embedding_model"], "text-embedding-v4")
+        self.assertEqual(body["rag"]["embedding_dimensions"], 1536)
         serialized = response.text.lower()
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("token", serialized)
+
+    def test_agent_sse_stream_reports_status_delta_and_persisted_done_event(self):
+        response = self.client.post(
+            "/api/v1/agents/tutor/runs/stream",
+            json={"message": "解释一个资料库里没有的概念"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertIn("event: status", response.text)
+        self.assertIn("event: delta", response.text)
+        self.assertIn("event: done", response.text)
+        self.assertIn('"model_status": "fallback"', response.text)
+        history = self.client.get("/api/v1/agents/threads/latest").json()
+        self.assertEqual(history["messages"][0]["role"], "user")
+        self.assertEqual(history["messages"][1]["role"], "agent")
+        usage = [
+            event
+            for event in main.repository.audit_logs
+            if event["event_type"] == "agent_model_usage"
+        ]
+        self.assertEqual(len(usage), 1)
+        self.assertEqual(usage[0]["payload"]["model_profile"], "flash")
+        self.assertIn(usage[0]["payload"]["status"], {"success", "degraded"})
+        self.assertGreaterEqual(usage[0]["payload"]["latency_ms"], 0)
+        self.assertNotIn("api_key", str(usage[0]).lower())
+
+        summary = self.client.get("/api/v1/analytics/model-usage?days=30")
+        self.assertEqual(summary.status_code, 200)
+        metrics = summary.json()
+        self.assertEqual(metrics["total_requests"], 1)
+        self.assertEqual(metrics["degraded_requests"], 1)
+        self.assertEqual(metrics["breakdown"][0]["model_profile"], "flash")
+        self.assertIsNone(metrics["estimated_cost"])
+        self.assertNotIn("message", summary.text.lower())
+
+    def test_model_usage_rejects_out_of_range_window(self):
+        self.assertEqual(
+            self.client.get("/api/v1/analytics/model-usage?days=0").status_code,
+            422,
+        )
+
+    def test_model_usage_estimates_cost_only_when_prices_are_configured(self):
+        stored_summary = AgentModelUsageSummary(
+            days=30,
+            total_requests=1,
+            successful_requests=1,
+            success_rate=1,
+            average_latency_ms=500,
+            input_tokens=100,
+            output_tokens=200,
+            breakdown=[
+                AgentModelUsageBreakdown(
+                    provider="deepseek",
+                    model="deepseek-v4-flash",
+                    model_profile="flash",
+                    request_count=1,
+                    average_latency_ms=500,
+                    input_tokens=100,
+                    output_tokens=200,
+                )
+            ],
+        )
+        priced_settings = Settings(
+            _env_file=None,
+            deepseek_flash_input_price_per_million=1,
+            deepseek_flash_output_price_per_million=2,
+        )
+        with (
+            patch.object(
+                main.repository,
+                "agent_model_usage_summary",
+                new=AsyncMock(return_value=stored_summary),
+            ),
+            patch.object(main, "settings", priced_settings),
+        ):
+            response = self.client.get("/api/v1/analytics/model-usage?days=30")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["estimated_cost"], 0.0005)
+        self.assertIn("供应商账单", response.json()["cost_note"])
+        self.assertEqual(
+            self.client.get("/api/v1/analytics/model-usage?days=366").status_code,
+            422,
+        )
 
     def test_study_loop_updates_contributions(self):
         task = self.client.post(
@@ -141,13 +234,14 @@ class ApiFlowTests(TestCase):
     def test_latest_agent_thread_restores_messages_and_is_user_isolated(self):
         run = self.client.post(
             "/api/v1/agents/tutor/runs",
-            json={"message": "解释二叉树的遍历"},
+            json={"message": "解释二叉树的遍历", "model_profile": "pro"},
         ).json()
 
         history = self.client.get("/api/v1/agents/threads/latest")
         self.assertEqual(history.status_code, 200)
         self.assertEqual(history.json()["id"], run["thread_id"])
         self.assertEqual(history.json()["mode"], "tutor")
+        self.assertEqual(history.json()["model_profile"], "pro")
         self.assertEqual(history.json()["messages"][0]["role"], "user")
         self.assertEqual(history.json()["messages"][0]["content"], "解释二叉树的遍历")
         self.assertEqual(history.json()["messages"][1]["role"], "agent")
@@ -170,6 +264,14 @@ class ApiFlowTests(TestCase):
             self.client.get(f"/api/v1/agents/threads/{run['thread_id']}").status_code,
             404,
         )
+
+    def test_agent_rejects_model_name_outside_public_profiles(self):
+        response = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "安排任务", "model_profile": "deepseek-v4-pro"},
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_separate_agent_runs_do_not_share_idempotency_key(self):
         payload = {"message": "安排明天的 408 复习"}
@@ -934,6 +1036,27 @@ class ApiFlowTests(TestCase):
             json={"url": "http://127.0.0.1/private"},
         )
         self.assertEqual(blocked.status_code, 422)
+
+    def test_scanned_pdf_is_queued_for_ocr_and_can_be_retried(self):
+        pdf = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.write(pdf)
+
+        uploaded = self.client.post(
+            "/api/v1/documents/upload",
+            files={"file": ("scan.pdf", pdf.getvalue(), "application/pdf")},
+        )
+
+        self.assertEqual(uploaded.status_code, 201)
+        body = uploaded.json()
+        self.assertEqual(body["ingestion_status"], "ocr_required")
+        self.assertEqual(body["ocr_job"]["status"], "queued")
+        status = self.client.get(f"/api/v1/documents/{body['id']}/ingestion-status")
+        self.assertEqual(status.json()["ocr_job"]["document_id"], body["id"])
+        retried = self.client.post(f"/api/v1/documents/{body['id']}/ocr/retry")
+        self.assertEqual(retried.status_code, 200)
+        self.assertEqual(retried.json()["attempts"], 0)
 
     def test_web_import_requires_approval_then_persists_searchable_document(self):
         preview = self.client.post(

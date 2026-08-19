@@ -6,7 +6,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from app.agents.context import AgentContext
-from app.agents.model import AgentModel
+from app.agents.model import AgentModel, AgentModelResult, ModelProfile
 from app.services.rag import choose_retrieval_mode
 
 
@@ -19,6 +19,11 @@ class WorkbenchState(TypedDict, total=False):
     context: AgentContext
     answer: str
     model_status: Literal["generated", "fallback"]
+    model_profile: ModelProfile
+    provider: str
+    model: str
+    fallback_used: bool
+    model_runs: list[dict[str, str | bool | int]]
     proposal_ids: list[str]
 
 
@@ -91,6 +96,34 @@ def choose_branch(state: WorkbenchState) -> str:
 
 
 def build_graph(model: AgentModel):
+    def generated_result(result: AgentModelResult) -> WorkbenchState:
+        run = {
+            "provider": result.provider,
+            "model": result.model,
+            "model_profile": result.model_profile,
+            "fallback_used": result.fallback_used,
+            "input_tokens": result.input_tokens,
+            "output_tokens": result.output_tokens,
+        }
+        return {
+            "answer": result.content,
+            "model_status": "generated",
+            "provider": result.provider,
+            "model": result.model,
+            "fallback_used": result.fallback_used,
+            "model_runs": [run],
+        }
+
+    def fallback_result(answer: str) -> WorkbenchState:
+        return {
+            "answer": answer,
+            "model_status": "fallback",
+            "provider": "deterministic",
+            "model": "safe-fallback",
+            "fallback_used": False,
+            "model_runs": [],
+        }
+
     async def coach_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = coach_fallback(state)
         question = str(state["messages"][-1].content)
@@ -99,28 +132,24 @@ def build_graph(model: AgentModel):
             question=question,
             context=state.get("context", {}),
             fallback=fallback,
+            model_profile=state.get("model_profile", "flash"),
         )
-        return {
-            "answer": answer or fallback,
-            "model_status": "generated" if answer else "fallback",
-        }
+        return generated_result(answer) if answer else fallback_result(fallback)
 
     async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = tutor_fallback(state)
         context = state.get("context", {})
         if not context.get("private_sources") and not context.get("web_sources"):
-            return {"answer": fallback, "model_status": "fallback"}
+            return fallback_result(fallback)
         question = str(state["messages"][-1].content)
         answer = await model.generate(
             agent="tutor",
             question=question,
             context=state.get("context", {}),
             fallback=fallback,
+            model_profile=state.get("model_profile", "flash"),
         )
-        return {
-            "answer": answer or fallback,
-            "model_status": "generated" if answer else "fallback",
-        }
+        return generated_result(answer) if answer else fallback_result(fallback)
 
     async def combined_subgraph(state: WorkbenchState) -> WorkbenchState:
         coach, tutor = await asyncio.gather(coach_subgraph(state), tutor_subgraph(state))
@@ -129,7 +158,17 @@ def build_graph(model: AgentModel):
             if "generated" in {coach["model_status"], tutor["model_status"]}
             else "fallback"
         )
-        return {"answer": f"{coach['answer']}\n{tutor['answer']}", "model_status": model_status}
+        model_runs = [*coach.get("model_runs", []), *tutor.get("model_runs", [])]
+        providers = {str(run["provider"]) for run in model_runs}
+        models = {str(run["model"]) for run in model_runs}
+        return {
+            "answer": f"{coach['answer']}\n{tutor['answer']}",
+            "model_status": model_status,
+            "provider": next(iter(providers)) if len(providers) == 1 else "mixed",
+            "model": next(iter(models)) if len(models) == 1 else "mixed",
+            "fallback_used": any(bool(run["fallback_used"]) for run in model_runs),
+            "model_runs": model_runs,
+        }
 
     graph = StateGraph(WorkbenchState)
     graph.add_node("route", route_request)

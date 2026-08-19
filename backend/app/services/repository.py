@@ -13,6 +13,8 @@ from app.schemas import (
     ActionProposal,
     AgentCitation,
     AgentMessage,
+    AgentModelUsageBreakdown,
+    AgentModelUsageSummary,
     AgentThreadHistory,
     AgentThreadSummary,
     CareerItemCreate,
@@ -21,6 +23,7 @@ from app.schemas import (
     ImportProposal,
     MistakeCardCreate,
     MistakeReviewCreate,
+    OcrJob,
     PlanCreate,
     PlanProgress,
     PlanUpdate,
@@ -33,6 +36,7 @@ from app.schemas import (
     TaskUpdate,
     WebSearchRecord,
 )
+from app.services.embeddings import EmbeddingDescriptor
 from app.services.ingestion import TextChunk
 from app.services.store import DemoStore
 
@@ -47,6 +51,104 @@ class RepositoryConflictError(RepositoryError):
 
 class RepositoryValidationError(RepositoryError):
     pass
+
+
+def storage_object_filename(content_type: str) -> str:
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    suffix = {
+        "application/pdf": ".pdf",
+        "text/markdown": ".md",
+        "text/x-markdown": ".md",
+    }.get(normalized, ".bin")
+    return f"source{suffix}"
+
+
+def summarize_agent_model_usage(
+    rows: list[Mapping[str, Any]], *, days: int
+) -> AgentModelUsageSummary:
+    grouped: dict[tuple[str, str, str], dict[str, int]] = {}
+    totals = {
+        "successful": 0,
+        "degraded": 0,
+        "errors": 0,
+        "fallbacks": 0,
+        "latency": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    for row in rows:
+        status = str(row.get("status", "error"))
+        fallback_used = bool(row.get("fallback_used", False))
+        latency_ms = max(int(row.get("latency_ms", 0)), 0)
+        input_tokens = max(int(row.get("input_tokens", 0)), 0)
+        output_tokens = max(int(row.get("output_tokens", 0)), 0)
+        totals["successful"] += int(status in {"success", "degraded"})
+        totals["degraded"] += int(status == "degraded")
+        totals["errors"] += int(status == "error")
+        totals["fallbacks"] += int(fallback_used)
+        totals["latency"] += latency_ms
+        totals["input_tokens"] += input_tokens
+        totals["output_tokens"] += output_tokens
+
+        key = (
+            str(row.get("provider", "unknown")),
+            str(row.get("model", "unknown")),
+            str(row.get("model_profile", "flash")),
+        )
+        bucket = grouped.setdefault(
+            key,
+            {
+                "requests": 0,
+                "degraded": 0,
+                "errors": 0,
+                "fallbacks": 0,
+                "latency": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+            },
+        )
+        bucket["requests"] += 1
+        bucket["degraded"] += int(status == "degraded")
+        bucket["errors"] += int(status == "error")
+        bucket["fallbacks"] += int(fallback_used)
+        bucket["latency"] += latency_ms
+        bucket["input_tokens"] += input_tokens
+        bucket["output_tokens"] += output_tokens
+
+    total_requests = len(rows)
+    breakdown = [
+        AgentModelUsageBreakdown(
+            provider=provider,
+            model=model,
+            model_profile=cast(Any, profile),
+            request_count=bucket["requests"],
+            degraded_count=bucket["degraded"],
+            error_count=bucket["errors"],
+            fallback_count=bucket["fallbacks"],
+            average_latency_ms=round(bucket["latency"] / bucket["requests"]),
+            input_tokens=bucket["input_tokens"],
+            output_tokens=bucket["output_tokens"],
+        )
+        for (provider, model, profile), bucket in sorted(grouped.items())
+    ]
+    return AgentModelUsageSummary(
+        days=days,
+        total_requests=total_requests,
+        successful_requests=totals["successful"],
+        degraded_requests=totals["degraded"],
+        error_requests=totals["errors"],
+        fallback_requests=totals["fallbacks"],
+        success_rate=round(totals["successful"] / total_requests, 4)
+        if total_requests
+        else 0,
+        error_rate=round(totals["errors"] / total_requests, 4) if total_requests else 0,
+        average_latency_ms=round(totals["latency"] / total_requests)
+        if total_requests
+        else 0,
+        input_tokens=totals["input_tokens"],
+        output_tokens=totals["output_tokens"],
+        breakdown=breakdown,
+    )
 
 
 class StudyRepository(Protocol):
@@ -125,11 +227,18 @@ class StudyRepository(Protocol):
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]: ...
 
     async def list_documents(self, user: AuthUser) -> list[dict]: ...
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
+
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob: ...
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None: ...
 
     async def create_import_proposal(
         self, user: AuthUser, proposal: ImportProposal
@@ -149,6 +258,7 @@ class StudyRepository(Protocol):
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]: ...
 
     async def record_web_search(
@@ -163,6 +273,26 @@ class StudyRepository(Protocol):
     async def list_web_search_records(
         self, user: AuthUser, limit: int = 20
     ) -> list[WebSearchRecord]: ...
+
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None: ...
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary: ...
 
     async def create_agent_proposal(
         self,
@@ -181,6 +311,14 @@ class StudyRepository(Protocol):
         mode: str,
         title: str,
     ) -> UUID: ...
+
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None: ...
 
     async def append_agent_exchange(
         self,
@@ -232,6 +370,7 @@ class DemoRepository:
         self.documents: dict[tuple[UUID, UUID], dict] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
+        self.ocr_jobs: dict[tuple[UUID, UUID], OcrJob] = {}
         self.import_proposals: dict[tuple[UUID, UUID], ImportProposal] = {}
         self.web_search_records: dict[tuple[UUID, UUID], WebSearchRecord] = {}
         self.agent_threads: dict[tuple[UUID, UUID], dict[str, Any]] = {}
@@ -245,6 +384,7 @@ class DemoRepository:
         self.documents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
+        self.ocr_jobs.clear()
         self.import_proposals.clear()
         self.web_search_records.clear()
         self.agent_threads.clear()
@@ -366,6 +506,7 @@ class DemoRepository:
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]:
         existing_id = self.document_ids_by_hash.get((user.id, digest))
         if existing_id:
@@ -381,6 +522,10 @@ class DemoRepository:
             "sha256": digest,
             "storage_path": None,
             "ingestion_status": ingestion_status,
+            "embedding_provider": embedding_metadata.provider if embedding_metadata else None,
+            "embedding_model": embedding_metadata.model if embedding_metadata else None,
+            "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
+            "embedding_version": embedding_metadata.version if embedding_metadata else None,
             "chunk_count": len(chunks),
             "flagged_chunk_count": sum(chunk.flagged_untrusted_instruction for chunk in chunks),
         }
@@ -398,6 +543,31 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
+        document = self.documents.get((user.id, document_id))
+        if not document:
+            raise RepositoryValidationError("document not found")
+        now = self.now_factory() if self.now_factory else datetime.now(UTC)
+        existing = self.ocr_jobs.get((user.id, document_id))
+        job = OcrJob(
+            id=existing.id if existing else uuid4(),
+            document_id=document_id,
+            status="queued",
+            attempts=0 if existing and existing.status == "failed" else existing.attempts if existing else 0,
+            max_attempts=existing.max_attempts if existing else 3,
+            available_at=now,
+            last_error=None,
+            created_at=existing.created_at if existing else now,
+            updated_at=now,
+        )
+        self.ocr_jobs[(user.id, document_id)] = job
+        return job
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None:
+        return self.ocr_jobs.get((user.id, document_id))
 
     async def create_import_proposal(
         self, user: AuthUser, proposal: ImportProposal
@@ -426,6 +596,7 @@ class DemoRepository:
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]:
         normalized = query.casefold().strip()
         allowed = set(document_ids) if document_ids else None
@@ -485,6 +656,55 @@ class DemoRepository:
         ]
         return records[:limit]
 
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None:
+        self.audit_logs.append(
+            {
+                "user_id": user.id,
+                "thread_id": thread_id,
+                "event_type": "agent_model_usage",
+                "created_at": self.now_factory() if self.now_factory else datetime.now(UTC),
+                "payload": {
+                    "model_profile": model_profile,
+                    "provider": provider,
+                    "model": model,
+                    "fallback_used": fallback_used,
+                    "status": status,
+                    "latency_ms": latency_ms,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "error_type": error_type,
+                },
+            }
+        )
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary:
+        now = self.now_factory() if self.now_factory else datetime.now(UTC)
+        threshold = now.timestamp() - days * 86400
+        rows = [
+            {**event["payload"], "created_at": event["created_at"]}
+            for event in self.audit_logs
+            if event.get("event_type") == "agent_model_usage"
+            and event.get("user_id") == user.id
+            and event["created_at"].timestamp() >= threshold
+        ]
+        return summarize_agent_model_usage(rows, days=days)
+
     async def create_agent_proposal(
         self,
         user: AuthUser,
@@ -498,6 +718,9 @@ class DemoRepository:
             self.agent_threads[(user.id, thread_id)] = {
                 "mode": mode,
                 "title": proposal.summary,
+                "model_profile": "flash",
+                "last_provider": None,
+                "last_model": None,
                 "updated_at": datetime.now(UTC),
             }
         elif (user.id, thread_id) not in self.agent_threads:
@@ -525,11 +748,29 @@ class DemoRepository:
             self.agent_threads[(user.id, thread_id)] = {
                 "mode": mode,
                 "title": title,
+                "model_profile": "flash",
+                "last_provider": None,
+                "last_model": None,
                 "updated_at": datetime.now(UTC),
             }
         elif (user.id, thread_id) not in self.agent_threads:
             raise RepositoryValidationError("agent thread not found")
         return thread_id
+
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None:
+        thread = self.agent_threads.get((user.id, thread_id))
+        if not thread:
+            raise RepositoryValidationError("agent thread not found")
+        if model_profile not in {"flash", "pro"}:
+            raise RepositoryValidationError("unknown model profile")
+        thread["model_profile"] = model_profile
+        thread["updated_at"] = datetime.now(UTC)
 
     async def append_agent_exchange(
         self,
@@ -562,6 +803,9 @@ class DemoRepository:
             ]
         )
         thread["updated_at"] = now
+        thread["model_profile"] = metadata.get("model_profile", "flash")
+        thread["last_provider"] = metadata.get("provider")
+        thread["last_model"] = metadata.get("model")
 
     async def latest_agent_thread(self, user: AuthUser) -> AgentThreadHistory | None:
         owned = [
@@ -579,6 +823,9 @@ class DemoRepository:
             id=thread_id,
             mode=thread["mode"],
             title=thread["title"],
+            model_profile=thread.get("model_profile", "flash"),
+            last_provider=thread.get("last_provider"),
+            last_model=thread.get("last_model"),
             messages=self.agent_messages.get((user.id, thread_id), []),
         )
 
@@ -590,6 +837,9 @@ class DemoRepository:
                 id=thread_id,
                 mode=thread["mode"],
                 title=thread["title"],
+                model_profile=thread.get("model_profile", "flash"),
+                last_provider=thread.get("last_provider"),
+                last_model=thread.get("last_model"),
                 updated_at=thread.get("updated_at", datetime.now(UTC)),
             )
             for (owner_id, thread_id), thread in self.agent_threads.items()
@@ -607,6 +857,9 @@ class DemoRepository:
             id=thread_id,
             mode=thread["mode"],
             title=thread["title"],
+            model_profile=thread.get("model_profile", "flash"),
+            last_provider=thread.get("last_provider"),
+            last_model=thread.get("last_model"),
             messages=self.agent_messages.get((user.id, thread_id), []),
         )
 
@@ -1196,6 +1449,7 @@ class SupabaseRepository:
         chunks: list[TextChunk],
         source_url: str | None = None,
         title: str | None = None,
+        embedding_metadata: EmbeddingDescriptor | None = None,
     ) -> tuple[dict, bool]:
         existing = await self._request(
             user,
@@ -1204,7 +1458,8 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,content_type,byte_size,sha256,storage_path,"
-                    "ingestion_status"
+                    "ingestion_status,embedding_provider,embedding_model,embedding_dimensions,"
+                    "embedding_version"
                 ),
                 "user_id": f"eq.{user.id}",
                 "sha256": f"eq.{digest}",
@@ -1239,7 +1494,8 @@ class SupabaseRepository:
                 params={
                     "select": (
                         "id,title,original_filename,source_type,source_url,content_type,"
-                        "byte_size,sha256,storage_path,ingestion_status"
+                        "byte_size,sha256,storage_path,ingestion_status,embedding_provider,"
+                        "embedding_model,embedding_dimensions,embedding_version"
                     ),
                     "user_id": f"eq.{user.id}",
                     "source_url": f"eq.{source_url}",
@@ -1249,7 +1505,10 @@ class SupabaseRepository:
             if same_url:
                 return {**same_url[0], "chunk_count": 0, "flagged_chunk_count": 0}, True
 
-        storage_path = f"{user.id}/{document_id}/{filename}"
+        # Supabase Storage rejects some Unicode object keys. Keep the original
+        # filename in document metadata, while using a stable ASCII-only key.
+        object_filename = storage_object_filename(content_type)
+        storage_path = f"{user.id}/{document_id}/{object_filename}"
         encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
         await self._storage_request(
             user,
@@ -1274,6 +1533,10 @@ class SupabaseRepository:
                 "byte_size": len(content),
                 "sha256": digest,
                 "ingestion_status": ingestion_status,
+                "embedding_provider": embedding_metadata.provider if embedding_metadata else None,
+                "embedding_model": embedding_metadata.model if embedding_metadata else None,
+                "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
+                "embedding_version": embedding_metadata.version if embedding_metadata else None,
             },
             prefer="return=representation",
         )
@@ -1292,6 +1555,7 @@ class SupabaseRepository:
                         "locator": chunk.locator,
                         "content": chunk.content,
                         "flagged_untrusted_instruction": chunk.flagged_untrusted_instruction,
+                        "embedding": chunk.embedding,
                     }
                     for chunk in chunks
                 ],
@@ -1313,7 +1577,9 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
-                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
+                    "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
+                    "ocr_fallback_pages,created_at,updated_at"
                 ),
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.desc",
@@ -1328,13 +1594,45 @@ class SupabaseRepository:
             params={
                 "select": (
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
-                    "sha256,storage_path,version,ingestion_status,ingestion_error,created_at,updated_at"
+                    "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
+                    "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
+                    "ocr_fallback_pages,created_at,updated_at"
                 ),
                 "id": f"eq.{document_id}",
                 "user_id": f"eq.{user.id}",
             },
         )
         return rows[0] if rows else None
+
+    async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/enqueue_document_ocr",
+            json={"requested_document_id": str(document_id)},
+        )
+        if not rows:
+            raise RepositoryError("OCR job was not queued")
+        return OcrJob.model_validate(rows[0])
+
+    async def get_document_ocr_job(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob | None:
+        rows = await self._request(
+            user,
+            "GET",
+            "ocr_jobs",
+            params={
+                "select": (
+                    "id,document_id,status,attempts,max_attempts,available_at,last_error,"
+                    "created_at,updated_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "document_id": f"eq.{document_id}",
+                "limit": "1",
+            },
+        )
+        return OcrJob.model_validate(rows[0]) if rows else None
 
     @staticmethod
     def _import_proposal(row: Mapping[str, Any]) -> ImportProposal:
@@ -1403,20 +1701,29 @@ class SupabaseRepository:
         query: str,
         limit: int = 8,
         document_ids: list[UUID] | None = None,
+        query_embedding: list[float] | None = None,
     ) -> list[PrivateKnowledgeSource]:
+        rpc_name = (
+            "hybrid_search_private_document_chunks"
+            if query_embedding is not None
+            else "search_private_document_chunks"
+        )
+        payload: dict[str, Any] = {
+            "query_text": query,
+            "match_count": limit,
+            "filter_document_ids": (
+                [str(document_id) for document_id in document_ids]
+                if document_ids
+                else None
+            ),
+        }
+        if query_embedding is not None:
+            payload["query_embedding"] = query_embedding
         rows = await self._request(
             user,
             "POST",
-            "rpc/search_private_document_chunks",
-            json={
-                "query_text": query,
-                "match_count": limit,
-                "filter_document_ids": (
-                    [str(document_id) for document_id in document_ids]
-                    if document_ids
-                    else None
-                ),
-            },
+            f"rpc/{rpc_name}",
+            json=payload,
         )
         return [PrivateKnowledgeSource.model_validate(row) for row in rows]
 
@@ -1457,6 +1764,59 @@ class SupabaseRepository:
             },
         )
         return [WebSearchRecord.model_validate(row) for row in rows]
+
+    async def record_agent_model_usage(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+        provider: str,
+        model: str,
+        fallback_used: bool,
+        status: str,
+        latency_ms: int,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        error_type: str | None = None,
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/record_agent_model_usage",
+            json={
+                "requested_thread_id": str(thread_id),
+                "requested_model_profile": model_profile,
+                "requested_provider": provider,
+                "requested_model": model,
+                "requested_fallback_used": fallback_used,
+                "requested_status": status,
+                "requested_latency_ms": latency_ms,
+                "requested_input_tokens": input_tokens,
+                "requested_output_tokens": output_tokens,
+                "requested_error_type": error_type,
+            },
+        )
+
+    async def agent_model_usage_summary(
+        self, user: AuthUser, *, days: int
+    ) -> AgentModelUsageSummary:
+        since = datetime.fromtimestamp(datetime.now(UTC).timestamp() - days * 86400, UTC)
+        rows = await self._request(
+            user,
+            "GET",
+            "agent_model_usage",
+            params={
+                "select": (
+                    "model_profile,provider,model,fallback_used,status,latency_ms,"
+                    "input_tokens,output_tokens,created_at"
+                ),
+                "user_id": f"eq.{user.id}",
+                "created_at": f"gte.{since.isoformat()}",
+                "order": "created_at.desc",
+            },
+        )
+        return summarize_agent_model_usage(rows, days=days)
 
     async def create_agent_proposal(
         self,
@@ -1508,6 +1868,23 @@ class SupabaseRepository:
             raise RepositoryError("Agent thread was not persisted")
         return UUID(str(value))
 
+    async def set_agent_thread_model_profile(
+        self,
+        user: AuthUser,
+        *,
+        thread_id: UUID,
+        model_profile: str,
+    ) -> None:
+        await self._request(
+            user,
+            "POST",
+            "rpc/set_agent_thread_model_profile",
+            json={
+                "requested_thread_id": str(thread_id),
+                "requested_model_profile": model_profile,
+            },
+        )
+
     async def append_agent_exchange(
         self,
         user: AuthUser,
@@ -1537,7 +1914,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title",
+                "select": "id,mode,title,model_profile,last_provider,last_model",
                 "user_id": f"eq.{user.id}",
                 "order": "updated_at.desc",
                 "limit": "1",
@@ -1570,7 +1947,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title,updated_at",
+                "select": "id,mode,title,model_profile,last_provider,last_model,updated_at",
                 "user_id": f"eq.{user.id}",
                 "order": "updated_at.desc",
                 "limit": str(limit),
@@ -1586,7 +1963,7 @@ class SupabaseRepository:
             "GET",
             "agent_threads",
             params={
-                "select": "id,mode,title",
+                "select": "id,mode,title,model_profile,last_provider,last_model",
                 "user_id": f"eq.{user.id}",
                 "id": f"eq.{thread_id}",
                 "limit": "1",
