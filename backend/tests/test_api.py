@@ -219,6 +219,17 @@ class ApiFlowTests(TestCase):
         self.assertEqual(dashboard["weekly_completion_rate"], 100)
         self.assertEqual(dashboard["current_streak_days"], 1)
 
+        deleted = self.client.delete(f"/api/v1/sessions/{session.json()['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        contribution = self.client.get(
+            "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
+        ).json()[0]
+        self.assertEqual(contribution["effective_minutes"], 0)
+        self.assertEqual(
+            self.client.delete(f"/api/v1/sessions/{session.json()['id']}").status_code,
+            404,
+        )
+
     def test_subject_analytics_returns_only_the_four_academic_subjects(self):
         self.client.post(
             "/api/v1/tasks",
@@ -479,6 +490,28 @@ class ApiFlowTests(TestCase):
         self.assertEqual(self.client.delete(f"/api/v1/tasks/{first['id']}").status_code, 404)
         self.current_user = self.user
         self.assertEqual(self.task_count(), 1)
+
+    def test_users_cannot_read_or_delete_each_others_sessions(self):
+        first = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "subject": "cs408",
+                "started_at": "2026-08-10T03:00:00Z",
+                "ended_at": "2026-08-10T04:00:00Z",
+                "paused_seconds": 0,
+                "source": "manual",
+                "note": "用户一学习记录",
+            },
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/sessions").json(), [])
+        self.assertEqual(self.client.delete(f"/api/v1/sessions/{first['id']}").status_code, 404)
+        self.current_user = self.user
+        self.assertEqual(len(self.client.get("/api/v1/sessions").json()), 1)
 
     def test_three_level_plans_are_created_and_isolated_by_user(self):
         stage = self.client.post(

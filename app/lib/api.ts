@@ -32,6 +32,19 @@ export type ApiTask = {
   completed_at?: string | null;
 };
 
+export type ApiStudySession = {
+  id: string;
+  task_id: string | null;
+  subject: Subject;
+  started_at: string;
+  ended_at: string;
+  paused_seconds: number;
+  source: "timer" | "manual";
+  note: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type ApiPlan = {
   id: string;
   parent_id: string | null;
@@ -180,7 +193,7 @@ export type DashboardMetrics = {
 export type ApiTodaySnapshot = {
   date: string;
   tasks: ApiTask[];
-  sessions: unknown[];
+  sessions: ApiStudySession[];
   metrics: DashboardMetrics;
 };
 
@@ -553,7 +566,8 @@ export const api = {
     paused_seconds: number;
     source: "timer" | "manual";
     note: string;
-  }) => request("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
+  }) => request<ApiStudySession>("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
+  deleteSession: (id: string) => request<void>(`/api/v1/sessions/${id}`, { method: "DELETE" }),
   listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
   searchPrivateKnowledge: (query: string, documentId?: string) => {
     const params = new URLSearchParams({ query, limit: "8" });

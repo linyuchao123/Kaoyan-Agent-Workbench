@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -177,6 +177,29 @@ function formatMinutes(minutes: number) {
   const rest = minutes % 60;
   if (!hours) return `${rest} 分钟`;
   return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+}
+
+function sessionTouchesShanghaiDay(session: ApiStudySession, day: string) {
+  const dayStart = new Date(`${day}T00:00:00+08:00`).getTime();
+  const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+  return new Date(session.ended_at).getTime() > dayStart
+    && new Date(session.started_at).getTime() < dayEnd;
+}
+
+function studySessionMinutes(session: ApiStudySession) {
+  const durationSeconds = Math.floor(
+    (new Date(session.ended_at).getTime() - new Date(session.started_at).getTime()) / 1000,
+  );
+  return Math.max(0, Math.floor((durationSeconds - session.paused_seconds) / 60));
+}
+
+function formatSessionTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
 }
 
 function formatTimer(seconds: number) {
@@ -369,6 +392,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [manualEndedTime, setManualEndedTime] = useState("20:00");
   const [manualNote, setManualNote] = useState("");
   const [manualError, setManualError] = useState("");
+  const [todaySessions, setTodaySessions] = useState<ApiStudySession[]>([]);
+  const [sessionBusyId, setSessionBusyId] = useState<string | null>(null);
   const [mistakes, setMistakes] = useState<ApiMistakeCard[]>(() => isDemo ? initialMistakes : []);
   const [mistakeFormOpen, setMistakeFormOpen] = useState(false);
   const [mistakeBusy, setMistakeBusy] = useState(false);
@@ -391,6 +416,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         setDayPlans(todayPlans);
         setNewTaskPlanId(todayPlans.find((plan) => plan.status === "active")?.id ?? todayPlans[0]?.id ?? "");
         setTasks(snapshot.tasks.map((task) => taskFromApi(task, task.plan_id ? planTitleById.get(task.plan_id) : undefined)));
+        setTodaySessions(snapshot.sessions
+          .filter((session) => sessionTouchesShanghaiDay(session, today))
+          .sort((left, right) => new Date(right.started_at).getTime() - new Date(left.started_at).getTime()));
         setMistakes(dueMistakes);
         setDashboardMetrics(snapshot.metrics);
         setTodayMinutes(snapshot.metrics.today_effective_minutes);
@@ -600,6 +628,17 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
     setRunning(false);
     if (isDemo) {
+      const demoSession: ApiStudySession = {
+        id: `demo-session-${Date.now()}`,
+        task_id: null,
+        subject: focusSubject,
+        started_at: sessionStartedAt.toISOString(),
+        ended_at: endedAt.toISOString(),
+        paused_seconds: finalPausedSeconds,
+        source: "timer",
+        note: "由今日工作台计时器记录",
+      };
+      setTodaySessions((items) => [demoSession, ...items]);
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`演示专注已记录在本页 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setSessionStartedAt(null);
@@ -609,7 +648,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       return;
     }
     try {
-      await api.createSession({
+      const saved = await api.createSession({
         subject: focusSubject,
         started_at: sessionStartedAt.toISOString(),
         ended_at: endedAt.toISOString(),
@@ -617,6 +656,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         source: "timer",
         note: "由今日工作台计时器记录",
       });
+      if (sessionTouchesShanghaiDay(saved, shanghaiDateKey(new Date()))) {
+        setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      }
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setContributionRevision((value) => value + 1);
@@ -653,7 +695,18 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     }
 
     if (isDemo) {
+      const demoSession: ApiStudySession = {
+        id: `demo-session-${Date.now()}`,
+        task_id: null,
+        subject: manualSubject,
+        started_at: interval.startedAt.toISOString(),
+        ended_at: interval.endedAt.toISOString(),
+        paused_seconds: 0,
+        source: "manual",
+        note: manualNote.trim() || "由今日工作台手动补录",
+      };
       if (manualDate === shanghaiDateKey(new Date())) {
+        setTodaySessions((items) => [demoSession, ...items]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
       }
       setRecordStatus(`演示补录仅保留在本页 · ${formatMinutes(interval.effectiveMinutes)}`);
@@ -664,7 +717,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
 
     setManualBusy(true);
     try {
-      await api.createSession({
+      const saved = await api.createSession({
         subject: manualSubject,
         started_at: interval.startedAt.toISOString(),
         ended_at: interval.endedAt.toISOString(),
@@ -673,6 +726,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         note: manualNote.trim() || "由今日工作台手动补录",
       });
       if (manualDate === shanghaiDateKey(new Date())) {
+        setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
       }
       setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
@@ -685,6 +739,28 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       setManualError(detail.includes("overlap") ? "该时间段与已有学习记录重叠，请调整后重试" : detail);
     } finally {
       setManualBusy(false);
+    }
+  }
+
+  async function deleteStudySession(session: ApiStudySession) {
+    if (!window.confirm(`确定删除这条${subjectMeta[session.subject].label}学习记录吗？`)) return;
+    if (isDemo || session.id.startsWith("demo-session-")) {
+      setTodaySessions((items) => items.filter((item) => item.id !== session.id));
+      setTodayMinutes((value) => Math.max(0, (value ?? 0) - studySessionMinutes(session)));
+      setRecordStatus("演示学习记录已从当前页面删除");
+      return;
+    }
+    setSessionBusyId(session.id);
+    try {
+      await api.deleteSession(session.id);
+      setTodaySessions((items) => items.filter((item) => item.id !== session.id));
+      setRecordStatus("误录的学习记录已从 Supabase 云端删除");
+      setContributionRevision((value) => value + 1);
+      await refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `学习记录删除失败：${error.message}` : "学习记录删除失败");
+    } finally {
+      setSessionBusyId(null);
     }
   }
 
@@ -761,6 +837,15 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
               {manualError && <p className="manual-error" role="alert">{manualError}</p>}
               <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
             </form>}
+            <div className="recent-session-heading"><strong>今日最近记录</strong><span>{todaySessions.length} 次</span></div>
+            <div className="recent-session-list">
+              {todaySessions.length === 0 && <p className="recent-session-empty">今天还没有学习记录，完成一次专注或补录后会显示在这里。</p>}
+              {todaySessions.slice(0, 5).map((session) => <article className="recent-session-item" key={session.id}>
+                <span className={`subject-badge ${session.subject}`}>{subjectMeta[session.subject].short}</span>
+                <span className="recent-session-copy"><strong>{subjectMeta[session.subject].label} · {formatMinutes(studySessionMinutes(session))}</strong><small>{formatSessionTime(session.started_at)}–{formatSessionTime(session.ended_at)} · {session.source === "timer" ? "专注计时" : "手动补录"}</small>{session.note && <small>{session.note}</small>}</span>
+                <button type="button" onClick={() => void deleteStudySession(session)} disabled={sessionBusyId === session.id}>{sessionBusyId === session.id ? "删除中" : "删除"}</button>
+              </article>)}
+            </div>
           </section>
           <section className="panel review-card">
             <div className="review-heading"><div><div className="eyebrow">错题复习</div><strong>{mistakes.length} 道待复习</strong></div><button type="button" onClick={() => { setMistakeFormOpen((value) => !value); setMistakeStatus(""); }}>{mistakeFormOpen ? "收起" : "＋ 速记"}</button></div>

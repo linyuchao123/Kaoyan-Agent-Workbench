@@ -113,3 +113,16 @@ class DemoStoreTests(TestCase):
         )
         next_day = self.store.contributions(date(2026, 8, 11), date(2026, 8, 11), "all")[0]
         self.assertEqual(next_day.session_count, 0)
+
+    def test_session_can_be_deleted(self):
+        session = self.store.create_session(
+            StudySessionCreate(
+                subject="math",
+                started_at=self.start,
+                ended_at=self.start + timedelta(hours=1),
+            )
+        )
+
+        self.assertTrue(self.store.delete_session(session["id"]))
+        self.assertFalse(self.store.delete_session(session["id"]))
+        self.assertEqual(self.store.list_sessions(), [])

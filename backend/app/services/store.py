@@ -182,6 +182,12 @@ class DemoStore:
         self.sessions[item["id"]] = item
         return item
 
+    def delete_session(self, session_id: UUID) -> bool:
+        if session_id not in self.sessions:
+            return False
+        self.sessions.pop(session_id)
+        return True
+
     def list_mistakes(self, due_only: bool = False) -> list[dict]:
         now = self.now()
         cards = list(self.mistake_cards.values())

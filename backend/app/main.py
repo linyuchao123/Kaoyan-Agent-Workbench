@@ -308,6 +308,16 @@ async def create_session(
         raise HTTPException(409, str(error)) from error
 
 
+@app.delete("/api/v1/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_session(user, session_id):
+        raise HTTPException(404, "study session not found")
+    return Response(status_code=204)
+
+
 @app.get("/api/v1/mistakes")
 async def list_mistakes(
     user: Annotated[AuthUser, Depends(get_current_user)],

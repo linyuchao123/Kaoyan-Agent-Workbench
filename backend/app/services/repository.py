@@ -181,6 +181,8 @@ class StudyRepository(Protocol):
 
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict: ...
 
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool: ...
+
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
     ) -> list[ContributionDay]: ...
@@ -460,6 +462,9 @@ class DemoRepository:
 
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict:
         return self._store(user).create_session(payload)
+
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool:
+        return self._store(user).delete_session(session_id)
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
@@ -1402,6 +1407,16 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "study_sessions",
+            params={"id": f"eq.{session_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
         params = {
