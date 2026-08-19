@@ -92,6 +92,43 @@ function taskFromApi(task: ApiTask, planTitle?: string, knownActualMinutes?: num
   };
 }
 
+function TaskStudyProgress({ task }: { task: Task }) {
+  const plannedMinutes = Math.max(1, task.plannedMinutes);
+  const percentage = Math.round((task.actualMinutes / plannedMinutes) * 100);
+  const visualPercentage = Math.min(100, percentage);
+  const status = task.actualMinutes === 0
+    ? "not-started"
+    : task.actualMinutes < plannedMinutes
+      ? "in-progress"
+      : task.actualMinutes === plannedMinutes
+        ? "reached"
+        : "exceeded";
+  const statusLabel = task.actualMinutes === 0
+    ? "未开始"
+    : task.actualMinutes < plannedMinutes
+      ? `还差 ${formatMinutes(plannedMinutes - task.actualMinutes)}`
+      : task.actualMinutes === plannedMinutes
+        ? "刚好达标"
+        : `超出 ${formatMinutes(task.actualMinutes - plannedMinutes)}`;
+
+  return <span className={`task-study-progress ${status}`}>
+    <span className="task-study-progress-copy">
+      <small>实际 {formatMinutes(task.actualMinutes)} / 计划 {formatMinutes(task.plannedMinutes)}</small>
+      <small>{statusLabel}</small>
+    </span>
+    <span
+      className="task-study-progress-track"
+      role="progressbar"
+      aria-label={`${task.title}学习时长进度`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={visualPercentage}
+    >
+      <span style={{ width: `${visualPercentage}%` }} />
+    </span>
+  </span>;
+}
+
 function seededValue(seed: number) {
   const x = Math.sin(seed * 9283.17) * 43758.5453;
   return x - Math.floor(x);
@@ -936,7 +973,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
                   <span className="fake-check">✓</span>
                 </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
-                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small><small className={`task-time-progress ${task.actualMinutes >= task.plannedMinutes ? "reached" : ""}`}>实际 {formatMinutes(task.actualMinutes)} / 计划 {formatMinutes(task.plannedMinutes)}{task.actualMinutes >= task.plannedMinutes ? " · 已达成" : ""}</small></span>
+                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small><TaskStudyProgress task={task} /></span>
                 <span className="task-actions">
                   {!task.done && <button type="button" onClick={() => beginTaskFocus(task)} disabled={Boolean(sessionStartedAt) || task.id.startsWith("local-")}>专注</button>}
                   <button type="button" onClick={() => beginTaskEdit(task)} disabled={taskBusyId === task.id}>编辑</button>
