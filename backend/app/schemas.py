@@ -38,6 +38,17 @@ class ContributionDay(BaseModel):
     subject_minutes: dict[str, int] = Field(default_factory=dict)
 
 
+class DashboardMetrics(BaseModel):
+    week_start: date
+    week_end: date
+    weekly_task_count: int = 0
+    weekly_completed_tasks: int = 0
+    weekly_completion_rate: int = Field(default=0, ge=0, le=100)
+    today_effective_minutes: int = 0
+    current_streak_days: int = 0
+    longest_streak_days: int = 0
+
+
 class AgentModelUsageBreakdown(BaseModel):
     provider: str
     model: str

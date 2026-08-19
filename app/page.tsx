@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -333,6 +333,16 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
+  const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics | null>(() => isDemo ? {
+    week_start: "2026-08-10",
+    week_end: "2026-08-16",
+    weekly_task_count: 25,
+    weekly_completed_tasks: 17,
+    weekly_completion_rate: 68,
+    today_effective_minutes: 260,
+    current_streak_days: 12,
+    longest_streak_days: 28,
+  } : null);
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
   const [contributionRevision, setContributionRevision] = useState(0);
@@ -358,8 +368,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     if (isDemo) return;
     let active = true;
     const today = shanghaiDateKey(new Date());
-    Promise.all([api.today(), api.contributions(today, today, "all"), api.listPlans("day"), api.listMistakes(true)])
-      .then(([snapshot, contributions, plans, dueMistakes]) => {
+    Promise.all([api.today(), api.listPlans("day"), api.listMistakes(true)])
+      .then(([snapshot, plans, dueMistakes]) => {
         if (!active) return;
         const todayPlans = plans.filter((plan) => plan.starts_on === today);
         const planTitleById = new Map(todayPlans.map((plan) => [plan.id, plan.title]));
@@ -367,7 +377,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         setNewTaskPlanId(todayPlans.find((plan) => plan.status === "active")?.id ?? todayPlans[0]?.id ?? "");
         setTasks(snapshot.tasks.map((task) => taskFromApi(task, task.plan_id ? planTitleById.get(task.plan_id) : undefined)));
         setMistakes(dueMistakes);
-        setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
+        setDashboardMetrics(snapshot.metrics);
+        setTodayMinutes(snapshot.metrics.today_effective_minutes);
         setCloudState("ready");
         setRecordStatus("已同步至 Supabase 云端 · 数据来自学习会话");
       })
@@ -378,6 +389,17 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       });
     return () => { active = false; };
   }, [isDemo]);
+
+  async function refreshDashboardMetrics() {
+    if (isDemo) return;
+    try {
+      const snapshot = await api.today();
+      setDashboardMetrics(snapshot.metrics);
+      setTodayMinutes(snapshot.metrics.today_effective_minutes);
+    } catch {
+      // Keep the last confirmed values; the next page refresh will retry.
+    }
+  }
 
   useEffect(() => {
     if (!running) return;
@@ -401,6 +423,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30, plan_id: newTaskPlanId || undefined });
       setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved, selectedPlan?.title) : item));
       setRecordStatus(selectedPlan ? `任务已关联日计划“${selectedPlan.title}”` : "任务已写入 Supabase 云端");
+      void refreshDashboardMetrics();
     } catch {
       setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
     }
@@ -414,6 +437,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
     }
@@ -508,6 +532,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
       setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
@@ -564,6 +589,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       }
       setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
       setManualOpen(false);
       setManualNote("");
     } catch (error) {
@@ -589,8 +615,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
 
       <div className="metric-grid">
         <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round((todayMinutes ?? 0) / 360 * 100))}%</em></>}</article>
-        <article className="metric-card"><span>本周完成率</span><strong>68<small>%</small></strong><em>已完成 17 / 25 项</em></article>
-        <article className="metric-card"><span>连续学习</span><strong>12<small>天</small></strong><em>最长记录 28 天</em></article>
+        <article className="metric-card"><span>本周完成率</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计本周任务</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.weekly_completion_rate}<small>%</small></strong><em>已完成 {dashboardMetrics.weekly_completed_tasks} / {dashboardMetrics.weekly_task_count} 项</em></>}</article>
+        <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
 

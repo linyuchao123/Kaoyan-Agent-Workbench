@@ -163,6 +163,24 @@ export type ContributionDay = {
   subject_minutes: Record<string, number>;
 };
 
+export type DashboardMetrics = {
+  week_start: string;
+  week_end: string;
+  weekly_task_count: number;
+  weekly_completed_tasks: number;
+  weekly_completion_rate: number;
+  today_effective_minutes: number;
+  current_streak_days: number;
+  longest_streak_days: number;
+};
+
+export type ApiTodaySnapshot = {
+  date: string;
+  tasks: ApiTask[];
+  sessions: unknown[];
+  metrics: DashboardMetrics;
+};
+
 export type ActionProposal = {
   id: string;
   agent: "coach" | "tutor";
@@ -400,7 +418,7 @@ async function streamAgentRequest(
 
 export const api = {
   health: () => request<ApiHealth>("/health"),
-  today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
+  today: () => request<ApiTodaySnapshot>("/api/v1/today"),
   listPlans: (level?: PlanLevel) => request<ApiPlan[]>(`/api/v1/plans${level ? `?level=${level}` : ""}`),
   createPlan: (payload: {
     parent_id?: string;

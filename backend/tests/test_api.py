@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from io import BytesIO
 from unittest import TestCase
 from unittest.mock import AsyncMock, patch
@@ -191,6 +191,13 @@ class ApiFlowTests(TestCase):
         ).json()[0]
         self.assertEqual(contribution["effective_minutes"], 80)
         self.assertEqual(contribution["completed_tasks"], 1)
+        with patch.object(main, "shanghai_today", return_value=date(2026, 8, 10)):
+            dashboard = self.client.get("/api/v1/today").json()["metrics"]
+        self.assertEqual(dashboard["today_effective_minutes"], 80)
+        self.assertEqual(dashboard["weekly_task_count"], 1)
+        self.assertEqual(dashboard["weekly_completed_tasks"], 1)
+        self.assertEqual(dashboard["weekly_completion_rate"], 100)
+        self.assertEqual(dashboard["current_streak_days"], 1)
 
     def test_web_search_history_is_persisted_and_user_isolated(self):
         searched = self.client.post(

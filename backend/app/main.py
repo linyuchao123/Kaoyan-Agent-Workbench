@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from io import BytesIO
 from time import perf_counter
@@ -21,6 +21,7 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
+from app.domain.dashboard import build_dashboard_metrics
 from app.schemas import (
     ActionProposal,
     AgentCitation,
@@ -34,6 +35,7 @@ from app.schemas import (
     CareerItemUpdate,
     CareerStatus,
     ContributionDay,
+    DashboardMetrics,
     ImportPreviewRequest,
     ImportProposal,
     MistakeCardCreate,
@@ -163,12 +165,31 @@ async def queue_document_ocr(user: AuthUser, document_id: UUID):
         return None
 
 
+def shanghai_today() -> date:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+
+
 @app.get("/api/v1/today")
 async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
+    current_date = shanghai_today()
+    contribution_start = current_date - timedelta(days=364)
+    tasks, sessions, day_plans, contribution_days = await asyncio.gather(
+        repository.list_tasks(user),
+        repository.list_sessions(user),
+        repository.list_plans(user, "day"),
+        repository.contributions(user, contribution_start, current_date, "all"),
+    )
+    metrics: DashboardMetrics = build_dashboard_metrics(
+        today=current_date,
+        tasks=tasks,
+        day_plans=day_plans,
+        contributions=contribution_days,
+    )
     return {
-        "date": datetime.now(ZoneInfo("Asia/Shanghai")).date(),
-        "tasks": await repository.list_tasks(user),
-        "sessions": await repository.list_sessions(user),
+        "date": current_date,
+        "tasks": tasks,
+        "sessions": sessions,
+        "metrics": metrics,
     }
 
 
