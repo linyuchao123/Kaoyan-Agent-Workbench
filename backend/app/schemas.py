@@ -45,6 +45,9 @@ class DashboardMetrics(BaseModel):
     weekly_completed_tasks: int = 0
     weekly_completion_rate: int = Field(default=0, ge=0, le=100)
     today_effective_minutes: int = 0
+    today_task_count: int = 0
+    today_planned_minutes: int = 0
+    active_stage_title: str | None = None
     current_streak_days: int = 0
     longest_streak_days: int = 0
 

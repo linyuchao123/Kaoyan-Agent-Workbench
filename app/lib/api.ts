@@ -170,6 +170,9 @@ export type DashboardMetrics = {
   weekly_completed_tasks: number;
   weekly_completion_rate: number;
   today_effective_minutes: number;
+  today_task_count: number;
+  today_planned_minutes: number;
+  active_stage_title: string | null;
   current_streak_days: number;
   longest_streak_days: number;
 };

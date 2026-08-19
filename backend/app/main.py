@@ -21,7 +21,7 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
-from app.domain.dashboard import build_dashboard_metrics
+from app.domain.dashboard import active_stage_title, build_dashboard_metrics, select_today_tasks
 from app.domain.subjects import build_subject_summaries
 from app.schemas import (
     ActionProposal,
@@ -179,21 +179,29 @@ def shanghai_today() -> date:
 async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
     current_date = shanghai_today()
     contribution_start = current_date - timedelta(days=364)
-    tasks, sessions, day_plans, contribution_days = await asyncio.gather(
+    tasks, sessions, plans, contribution_days = await asyncio.gather(
         repository.list_tasks(user),
         repository.list_sessions(user),
-        repository.list_plans(user, "day"),
+        repository.list_plans(user),
         repository.contributions(user, contribution_start, current_date, "all"),
+    )
+    day_plans = [plan for plan in plans if plan.get("level") == "day"]
+    today_tasks = select_today_tasks(
+        today=current_date,
+        tasks=tasks,
+        day_plans=day_plans,
     )
     metrics: DashboardMetrics = build_dashboard_metrics(
         today=current_date,
         tasks=tasks,
         day_plans=day_plans,
         contributions=contribution_days,
+        today_tasks=today_tasks,
+        stage_title=active_stage_title(today=current_date, plans=plans),
     )
     return {
         "date": current_date,
-        "tasks": tasks,
+        "tasks": today_tasks,
         "sessions": sessions,
         "metrics": metrics,
     }

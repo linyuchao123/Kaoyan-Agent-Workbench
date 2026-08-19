@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime, timedelta
 from unittest import TestCase
 from uuid import UUID
 
-from app.domain.dashboard import build_dashboard_metrics
+from app.domain.dashboard import active_stage_title, build_dashboard_metrics, select_today_tasks
 from app.schemas import ContributionDay
 
 
@@ -16,6 +16,68 @@ def contribution(day: date, minutes: int) -> ContributionDay:
 
 
 class DashboardMetricsTests(TestCase):
+    def test_selects_today_tasks_and_carries_only_unfinished_backlog(self):
+        today = date(2026, 8, 19)
+        today_plan_id = UUID("11111111-1111-1111-1111-111111111111")
+        future_plan_id = UUID("22222222-2222-2222-2222-222222222222")
+        tasks = [
+            {"id": "today", "plan_id": today_plan_id, "completed": False},
+            {"id": "future", "plan_id": future_plan_id, "completed": False},
+            {
+                "id": "backlog",
+                "plan_id": None,
+                "created_at": "2026-08-18T09:00:00+08:00",
+                "completed": False,
+            },
+            {
+                "id": "old-completed",
+                "plan_id": None,
+                "created_at": "2026-08-18T09:00:00+08:00",
+                "completed": True,
+            },
+        ]
+
+        selected = select_today_tasks(
+            today=today,
+            tasks=tasks,
+            day_plans=[
+                {"id": today_plan_id, "starts_on": today},
+                {"id": future_plan_id, "starts_on": today + timedelta(days=1)},
+            ],
+        )
+
+        self.assertEqual([task["id"] for task in selected], ["today", "backlog"])
+
+    def test_finds_active_stage_and_uses_today_task_minutes_as_goal(self):
+        today = date(2026, 8, 19)
+        stage = active_stage_title(
+            today=today,
+            plans=[
+                {
+                    "level": "stage",
+                    "title": "基础阶段",
+                    "starts_on": "2026-08-01",
+                    "ends_on": "2026-12-31",
+                    "status": "active",
+                }
+            ],
+        )
+        metrics = build_dashboard_metrics(
+            today=today,
+            day_plans=[],
+            tasks=[],
+            today_tasks=[
+                {"planned_minutes": 60},
+                {"planned_minutes": 90},
+            ],
+            contributions=[],
+            stage_title=stage,
+        )
+
+        self.assertEqual(metrics.today_task_count, 2)
+        self.assertEqual(metrics.today_planned_minutes, 150)
+        self.assertEqual(metrics.active_stage_title, "基础阶段")
+
     def test_builds_weekly_completion_from_day_plans_and_unlinked_tasks(self):
         today = date(2026, 8, 19)
         weekly_plan_id = UUID("11111111-1111-1111-1111-111111111111")

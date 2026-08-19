@@ -340,6 +340,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     weekly_completed_tasks: 17,
     weekly_completion_rate: 68,
     today_effective_minutes: 260,
+    today_task_count: 4,
+    today_planned_minutes: 360,
+    active_stage_title: "基础阶段",
     current_streak_days: 12,
     longest_streak_days: 28,
   } : null);
@@ -606,7 +609,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     <>
       <div className="hero-row">
         <div>
-          <div className="eyebrow">{shanghaiDisplayDate(new Date())} · 基础阶段</div>
+          <div className="eyebrow">{shanghaiDisplayDate(new Date())}{dashboardMetrics?.active_stage_title ? ` · ${dashboardMetrics.active_stage_title}` : ""}</div>
           <h1>早上好，{displayName}</h1>
           <p>今天把注意力留给最重要的事。完成基础任务，就是向目标院校靠近一步。</p>
         </div>
@@ -614,7 +617,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       </div>
 
       <div className="metric-grid">
-        <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round((todayMinutes ?? 0) / 360 * 100))}%</em></>}</article>
+        <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>{dashboardMetrics?.today_planned_minutes ? `任务目标 ${formatMinutes(dashboardMetrics.today_planned_minutes)} · ${Math.min(100, Math.round((todayMinutes ?? 0) / dashboardMetrics.today_planned_minutes * 100))}%` : "今天还没有安排任务目标"}</em></>}</article>
         <article className="metric-card"><span>本周完成率</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计本周任务</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.weekly_completion_rate}<small>%</small></strong><em>已完成 {dashboardMetrics.weekly_completed_tasks} / {dashboardMetrics.weekly_task_count} 项</em></>}</article>
         <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
