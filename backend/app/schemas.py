@@ -129,6 +129,7 @@ class TaskCreate(StrictRequestModel):
 
 class TaskUpdate(StrictRequestModel):
     title: str | None = Field(default=None, min_length=1, max_length=160)
+    subject: Subject | None = None
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None

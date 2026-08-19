@@ -61,6 +61,26 @@ class ApiFlowTests(TestCase):
     def task_count(self) -> int:
         return len(self.client.get("/api/v1/tasks").json())
 
+    def test_task_can_be_edited_and_deleted(self):
+        created = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 30},
+        ).json()
+
+        updated = self.client.patch(
+            f"/api/v1/tasks/{created['id']}",
+            json={"title": "极限与连续复盘", "subject": "english", "planned_minutes": 50},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["title"], "极限与连续复盘")
+        self.assertEqual(updated.json()["subject"], "english")
+        self.assertEqual(updated.json()["planned_minutes"], 50)
+
+        deleted = self.client.delete(f"/api/v1/tasks/{created['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.task_count(), 0)
+        self.assertEqual(self.client.delete(f"/api/v1/tasks/{created['id']}").status_code, 404)
+
     def test_health_exposes_agent_capabilities_without_secrets(self):
         response = self.client.get("/health")
         self.assertEqual(response.status_code, 200)
@@ -456,6 +476,7 @@ class ApiFlowTests(TestCase):
             self.client.patch(f"/api/v1/tasks/{first['id']}", json={"completed": True}).status_code,
             404,
         )
+        self.assertEqual(self.client.delete(f"/api/v1/tasks/{first['id']}").status_code, 404)
         self.current_user = self.user
         self.assertEqual(self.task_count(), 1)
 

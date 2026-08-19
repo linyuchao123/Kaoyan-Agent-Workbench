@@ -154,6 +154,12 @@ class DemoStore:
         item["updated_at"] = self.now()
         return item
 
+    def delete_task(self, task_id: UUID) -> bool:
+        if task_id not in self.tasks:
+            return False
+        self.tasks.pop(task_id)
+        return True
+
     def _validate_task_plan(self, plan_id: UUID | None) -> None:
         if plan_id is None:
             return

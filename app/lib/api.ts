@@ -467,8 +467,15 @@ export const api = {
   subjectSummaries: () => request<SubjectSummary[]>("/api/v1/analytics/subjects"),
   createTask: (payload: { title: string; subject: Subject; planned_minutes: number; plan_id?: string }) =>
     request<ApiTask>("/api/v1/tasks", { method: "POST", body: JSON.stringify(payload) }),
-  updateTask: (id: string, payload: { completed?: boolean; plan_id?: string | null }) =>
+  updateTask: (id: string, payload: Partial<{
+    title: string;
+    subject: Subject;
+    planned_minutes: number;
+    completed: boolean;
+    plan_id: string | null;
+  }>) =>
     request<ApiTask>(`/api/v1/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteTask: (id: string) => request<void>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
   listMistakes: (dueOnly = false) =>
     request<ApiMistakeCard[]>(`/api/v1/mistakes?due_only=${dueOnly}`),
   createMistake: (payload: {

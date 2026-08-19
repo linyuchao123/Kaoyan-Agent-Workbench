@@ -280,6 +280,16 @@ async def update_task(
     return task
 
 
+@app.delete("/api/v1/tasks/{task_id}", status_code=204)
+async def delete_task(
+    task_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_task(user, task_id):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204)
+
+
 @app.get("/api/v1/sessions")
 async def list_sessions(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
     return await repository.list_sessions(user)

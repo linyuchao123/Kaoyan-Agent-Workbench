@@ -175,6 +175,8 @@ class StudyRepository(Protocol):
         self, user: AuthUser, task_id: UUID, payload: TaskUpdate
     ) -> dict | None: ...
 
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool: ...
+
     async def list_sessions(self, user: AuthUser) -> list[dict]: ...
 
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict: ...
@@ -449,6 +451,9 @@ class DemoRepository:
             return self._store(user).update_task(task_id, payload)
         except ValueError as error:
             raise RepositoryValidationError(str(error)) from error
+
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool:
+        return self._store(user).delete_task(task_id)
 
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_sessions()
@@ -1363,6 +1368,16 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return self._task(rows[0]) if rows else None
+
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "tasks",
+            params={"id": f"eq.{task_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return await self._request(

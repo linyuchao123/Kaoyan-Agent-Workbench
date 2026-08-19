@@ -23,6 +23,9 @@ type Task = {
   detail: string;
   subject: Subject;
   done: boolean;
+  plannedMinutes: number;
+  planId: string | null;
+  dueAt: string | null;
 };
 
 const scopes: { key: Scope; label: string }[] = [
@@ -54,10 +57,10 @@ const navItems: { key: View; label: string; icon: string }[] = [
 ];
 
 const initialTasks: Task[] = [
-  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false },
-  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true },
-  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false },
-  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
+  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false, plannedMinutes: 90, planId: null, dueAt: null },
+  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true, plannedMinutes: 60, planId: null, dueAt: null },
+  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false, plannedMinutes: 90, planId: null, dueAt: null },
+  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false, plannedMinutes: 60, planId: null, dueAt: null },
 ];
 
 const initialMistakes: ApiMistakeCard[] = [
@@ -72,6 +75,9 @@ function taskFromApi(task: ApiTask, planTitle?: string): Task {
     detail: `计划 ${task.planned_minutes} 分钟${planTitle ? ` · ${planTitle}` : ""}${task.due_at ? ` · ${task.due_at.slice(0, 10)}` : ""}`,
     subject: task.subject,
     done: task.completed,
+    plannedMinutes: task.planned_minutes,
+    planId: task.plan_id,
+    dueAt: task.due_at,
   };
 }
 
@@ -326,6 +332,12 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
   const [dayPlans, setDayPlans] = useState<ApiPlan[]>([]);
   const [newTaskPlanId, setNewTaskPlanId] = useState("");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTaskTitle, setEditTaskTitle] = useState("");
+  const [editTaskSubject, setEditTaskSubject] = useState<Subject>("math");
+  const [editTaskMinutes, setEditTaskMinutes] = useState(30);
+  const [editTaskPlanId, setEditTaskPlanId] = useState("");
+  const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
   const [focusSubject, setFocusSubject] = useState<Subject>("math");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
@@ -416,7 +428,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     const title = newTask.trim();
     const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
-    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false }]);
+    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false, plannedMinutes: 30, planId: newTaskPlanId || null, dueAt: null }]);
     setNewTask("");
     if (isDemo) {
       setRecordStatus("演示任务仅保留在当前页面");
@@ -443,6 +455,79 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       void refreshDashboardMetrics();
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    }
+  }
+
+  function beginTaskEdit(task: Task) {
+    setEditingTaskId(task.id);
+    setEditTaskTitle(task.title);
+    setEditTaskSubject(task.subject);
+    setEditTaskMinutes(task.plannedMinutes);
+    setEditTaskPlanId(task.planId ?? "");
+    setRecordStatus(`正在编辑任务“${task.title}”`);
+  }
+
+  async function saveTaskEdit(event: FormEvent, task: Task) {
+    event.preventDefault();
+    const title = editTaskTitle.trim();
+    if (!title || editTaskMinutes < 1 || editTaskMinutes > 1440) {
+      setRecordStatus("请填写任务标题，预计时长需在 1–1440 分钟之间");
+      return;
+    }
+    const selectedPlan = dayPlans.find((plan) => plan.id === editTaskPlanId);
+    const nextTask: Task = {
+      ...task,
+      title,
+      subject: editTaskSubject,
+      plannedMinutes: editTaskMinutes,
+      planId: editTaskPlanId || null,
+      detail: `计划 ${editTaskMinutes} 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}${task.dueAt ? ` · ${task.dueAt.slice(0, 10)}` : ""}`,
+    };
+    if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
+      setTasks((items) => items.map((item) => item.id === task.id ? nextTask : item));
+      setEditingTaskId(null);
+      setRecordStatus("演示任务修改仅保留在当前页面");
+      return;
+    }
+    setTaskBusyId(task.id);
+    try {
+      const saved = await api.updateTask(task.id, {
+        title,
+        subject: editTaskSubject,
+        planned_minutes: editTaskMinutes,
+        plan_id: editTaskPlanId || null,
+      });
+      setTasks((items) => items.map((item) => item.id === task.id ? taskFromApi(saved, selectedPlan?.title) : item));
+      setEditingTaskId(null);
+      setRecordStatus("任务修改已同步至 Supabase 云端");
+      void refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `任务修改失败：${error.message}` : "任务修改失败");
+    } finally {
+      setTaskBusyId(null);
+    }
+  }
+
+  async function deleteTask(task: Task) {
+    if (!window.confirm(`确定删除任务“${task.title}”吗？`)) return;
+    if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
+      setTasks((items) => items.filter((item) => item.id !== task.id));
+      setEditingTaskId(null);
+      setRecordStatus("演示任务已从当前页面删除");
+      return;
+    }
+    setTaskBusyId(task.id);
+    try {
+      await api.deleteTask(task.id);
+      setTasks((items) => items.filter((item) => item.id !== task.id));
+      setEditingTaskId(null);
+      setRecordStatus("任务已从 Supabase 云端删除");
+      setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `任务删除失败：${error.message}` : "任务删除失败");
+    } finally {
+      setTaskBusyId(null);
     }
   }
 
@@ -632,14 +717,27 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
           <div className="task-list">
             {cloudState === "loading" && <div className="task-loading cloud-loading-text">正在同步你的今日任务…</div>}
             {cloudState === "ready" && tasks.length === 0 && <div className="task-loading">今天还没有任务，可以从下方添加第一项。</div>}
-            {tasks.map((task) => (
-              <label className={`task-item ${task.done ? "done" : ""}`} key={task.id}>
-                <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
-                <span className="fake-check">✓</span>
+            {tasks.map((task) => <div className={`task-item-shell ${task.done ? "done" : ""}`} key={task.id}>
+              <div className="task-item">
+                <label className="task-check" aria-label={`${task.done ? "恢复" : "完成"}任务 ${task.title}`}>
+                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
+                  <span className="fake-check">✓</span>
+                </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
                 <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span>
-              </label>
-            ))}
+                <span className="task-actions">
+                  <button type="button" onClick={() => beginTaskEdit(task)} disabled={taskBusyId === task.id}>编辑</button>
+                  <button type="button" className="danger" onClick={() => void deleteTask(task)} disabled={taskBusyId === task.id}>{taskBusyId === task.id ? "处理中" : "删除"}</button>
+                </span>
+              </div>
+              {editingTaskId === task.id && <form className="task-edit-form" onSubmit={(event) => void saveTaskEdit(event, task)}>
+                <label>任务标题<input value={editTaskTitle} onChange={(event) => setEditTaskTitle(event.target.value)} maxLength={160} required /></label>
+                <label>科目<select value={editTaskSubject} onChange={(event) => setEditTaskSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+                <label>预计分钟<input type="number" min="1" max="1440" value={editTaskMinutes} onChange={(event) => setEditTaskMinutes(Number(event.target.value))} required /></label>
+                <label>所属日计划<select value={editTaskPlanId} onChange={(event) => setEditTaskPlanId(event.target.value)}><option value="">不关联日计划</option>{task.planId && !dayPlans.some((plan) => plan.id === task.planId) && <option value={task.planId}>当前关联的历史日计划</option>}{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select></label>
+                <div className="task-edit-actions"><button type="button" onClick={() => setEditingTaskId(null)} disabled={taskBusyId === task.id}>取消</button><button type="submit" disabled={taskBusyId === task.id}>{taskBusyId === task.id ? "正在保存…" : "保存修改"}</button></div>
+              </form>}
+            </div>)}
           </div>
           <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划"><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
           <p className="record-status">● {recordStatus}</p>
