@@ -69,7 +69,7 @@ from app.services.web_import import download_public_document
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
-app = FastAPI(title="研途 API", version="0.8.0", docs_url="/docs")
+app = FastAPI(title="研途 API", version="0.9.0", docs_url="/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
