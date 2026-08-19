@@ -729,6 +729,17 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
     setPauseStartedAt(new Date());
   }
 
+  function cancelFocus() {
+    if (!sessionStartedAt || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
+    setRunning(false);
+    setSessionStartedAt(null);
+    setPauseStartedAt(null);
+    setPausedSeconds(0);
+    setSeconds(0);
+    setFocusTaskId("");
+    setRecordStatus("本次专注已放弃，未写入学习记录");
+  }
+
   async function finishFocus() {
     if (!sessionStartedAt) return;
     const endedAt = new Date();
@@ -951,7 +962,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
             <strong className="timer">{formatTimer(seconds)}</strong>
             <select className="focus-select" value={focusTaskId} onChange={selectFocusTask} disabled={Boolean(sessionStartedAt)} aria-label="关联今日任务"><option value="">自由专注（不关联任务）</option>{tasks.filter((task) => !task.done && (isDemo || !task.id.startsWith("local-"))).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select>
             <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt) || Boolean(focusTaskId)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
-            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
+            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt}>放弃</button></div>
           </section>
           <section className="panel manual-card">
             <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
