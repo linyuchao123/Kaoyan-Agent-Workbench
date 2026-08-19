@@ -86,6 +86,30 @@ class DemoStoreTests(TestCase):
         self.assertEqual(math.effective_minutes, 80)
         self.assertEqual(overall.subject_minutes["math"], 80)
 
+    def test_session_can_link_only_to_task_with_same_subject(self):
+        task = self.store.create_task(
+            TaskCreate(title="极限基础题", subject="math", planned_minutes=45)
+        )
+        linked = self.store.create_session(
+            StudySessionCreate(
+                task_id=task["id"],
+                subject="math",
+                started_at=self.start,
+                ended_at=self.start + timedelta(minutes=45),
+            )
+        )
+        self.assertEqual(linked["task_id"], task["id"])
+
+        with self.assertRaisesRegex(ValueError, "same subject"):
+            self.store.create_session(
+                StudySessionCreate(
+                    task_id=task["id"],
+                    subject="english",
+                    started_at=self.start + timedelta(hours=1),
+                    ended_at=self.start + timedelta(hours=2),
+                )
+            )
+
     def test_overlapping_sessions_are_rejected(self):
         self.store.create_session(
             StudySessionCreate(

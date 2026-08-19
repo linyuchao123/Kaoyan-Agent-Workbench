@@ -171,6 +171,12 @@ class DemoStore:
         return sorted(self.sessions.values(), key=lambda item: item["started_at"])
 
     def create_session(self, payload: StudySessionCreate) -> dict:
+        if payload.task_id is not None:
+            task = self.tasks.get(payload.task_id)
+            if not task or task["subject"] != payload.subject:
+                raise ValueError(
+                    "study session task must be an owned task with the same subject"
+                )
         for current in self.sessions.values():
             if (
                 payload.started_at < current["ended_at"]

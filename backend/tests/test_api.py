@@ -197,6 +197,7 @@ class ApiFlowTests(TestCase):
         session = self.client.post(
             "/api/v1/sessions",
             json={
+                "task_id": task_id,
                 "subject": "math",
                 "started_at": "2026-08-10T01:00:00Z",
                 "ended_at": "2026-08-10T02:30:00Z",
@@ -206,6 +207,7 @@ class ApiFlowTests(TestCase):
             },
         )
         self.assertEqual(session.status_code, 201)
+        self.assertEqual(session.json()["task_id"], task_id)
         contribution = self.client.get(
             "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
         ).json()[0]
@@ -512,6 +514,38 @@ class ApiFlowTests(TestCase):
         self.assertEqual(self.client.delete(f"/api/v1/sessions/{first['id']}").status_code, 404)
         self.current_user = self.user
         self.assertEqual(len(self.client.get("/api/v1/sessions").json()), 1)
+
+    def test_session_rejects_foreign_or_mismatched_task(self):
+        task = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 30},
+        ).json()
+        mismatched = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "task_id": task["id"],
+                "subject": "english",
+                "started_at": "2026-08-10T05:00:00Z",
+                "ended_at": "2026-08-10T06:00:00Z",
+            },
+        )
+        self.assertEqual(mismatched.status_code, 422)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        foreign = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "task_id": task["id"],
+                "subject": "math",
+                "started_at": "2026-08-10T05:00:00Z",
+                "ended_at": "2026-08-10T06:00:00Z",
+            },
+        )
+        self.assertEqual(foreign.status_code, 422)
 
     def test_three_level_plans_are_created_and_isolated_by_user(self):
         stage = self.client.post(

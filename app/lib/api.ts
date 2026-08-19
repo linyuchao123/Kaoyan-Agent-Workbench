@@ -560,6 +560,7 @@ export const api = {
   deleteCareerItem: (id: string) => request<void>(`/api/v1/career-items/${id}`, { method: "DELETE" }),
   exportData: (format: ExportFormat) => download(`/api/v1/export?format=${format}`),
   createSession: (payload: {
+    task_id?: string;
     subject: Subject;
     started_at: string;
     ended_at: string;

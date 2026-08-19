@@ -362,6 +362,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [editTaskPlanId, setEditTaskPlanId] = useState("");
   const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
   const [focusSubject, setFocusSubject] = useState<Subject>("math");
+  const [focusTaskId, setFocusTaskId] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
@@ -526,6 +527,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         plan_id: editTaskPlanId || null,
       });
       setTasks((items) => items.map((item) => item.id === task.id ? taskFromApi(saved, selectedPlan?.title) : item));
+      if (focusTaskId === task.id) setFocusSubject(saved.subject);
       setEditingTaskId(null);
       setRecordStatus("任务修改已同步至 Supabase 云端");
       void refreshDashboardMetrics();
@@ -537,9 +539,14 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   }
 
   async function deleteTask(task: Task) {
+    if (focusTaskId === task.id && sessionStartedAt) {
+      setRecordStatus("该任务正在专注计时，请先结束并记录本次专注");
+      return;
+    }
     if (!window.confirm(`确定删除任务“${task.title}”吗？`)) return;
     if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
       setTasks((items) => items.filter((item) => item.id !== task.id));
+      if (focusTaskId === task.id) setFocusTaskId("");
       setEditingTaskId(null);
       setRecordStatus("演示任务已从当前页面删除");
       return;
@@ -548,6 +555,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     try {
       await api.deleteTask(task.id);
       setTasks((items) => items.filter((item) => item.id !== task.id));
+      if (focusTaskId === task.id) setFocusTaskId("");
       setEditingTaskId(null);
       setRecordStatus("任务已从 Supabase 云端删除");
       setContributionRevision((value) => value + 1);
@@ -617,6 +625,24 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     setRunning(true);
   }
 
+  function beginTaskFocus(task: Task) {
+    if (sessionStartedAt) {
+      setRecordStatus("已有专注正在进行，请先结束当前计时");
+      return;
+    }
+    setFocusTaskId(task.id);
+    setFocusSubject(task.subject);
+    setRecordStatus(`正在专注任务“${task.title}”`);
+    beginFocus();
+  }
+
+  function selectFocusTask(event: ChangeEvent<HTMLSelectElement>) {
+    const taskId = event.target.value;
+    setFocusTaskId(taskId);
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) setFocusSubject(task.subject);
+  }
+
   function pauseFocus() {
     setRunning(false);
     setPauseStartedAt(new Date());
@@ -625,12 +651,13 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   async function finishFocus() {
     if (!sessionStartedAt) return;
     const endedAt = new Date();
+    const linkedTask = tasks.find((task) => task.id === focusTaskId);
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
     setRunning(false);
     if (isDemo) {
       const demoSession: ApiStudySession = {
         id: `demo-session-${Date.now()}`,
-        task_id: null,
+        task_id: linkedTask?.id ?? null,
         subject: focusSubject,
         started_at: sessionStartedAt.toISOString(),
         ended_at: endedAt.toISOString(),
@@ -645,10 +672,12 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       setPauseStartedAt(null);
       setPausedSeconds(0);
       setSeconds(0);
+      setFocusTaskId("");
       return;
     }
     try {
       const saved = await api.createSession({
+        task_id: linkedTask?.id,
         subject: focusSubject,
         started_at: sessionStartedAt.toISOString(),
         ended_at: endedAt.toISOString(),
@@ -660,13 +689,14 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
       }
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
-      setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setRecordStatus(`${linkedTask ? `任务“${linkedTask.title}”` : subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
       setSeconds(0);
+      setFocusTaskId("");
     } catch {
       setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
       setPausedSeconds(finalPausedSeconds);
@@ -802,6 +832,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
                 <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span>
                 <span className="task-actions">
+                  {!task.done && <button type="button" onClick={() => beginTaskFocus(task)} disabled={Boolean(sessionStartedAt) || task.id.startsWith("local-")}>专注</button>}
                   <button type="button" onClick={() => beginTaskEdit(task)} disabled={taskBusyId === task.id}>编辑</button>
                   <button type="button" className="danger" onClick={() => void deleteTask(task)} disabled={taskBusyId === task.id}>{taskBusyId === task.id ? "处理中" : "删除"}</button>
                 </span>
@@ -821,9 +852,10 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
 
         <aside className="right-stack">
           <section className="panel focus-card">
-            <div className="focus-top"><span className="focus-dot" /><span>{running ? `正在专注 · ${subjectMeta[focusSubject].label}` : "专注计时器"}</span></div>
+            <div className="focus-top"><span className="focus-dot" /><span>{running ? `正在专注 · ${tasks.find((task) => task.id === focusTaskId)?.title ?? subjectMeta[focusSubject].label}` : "专注计时器"}</span></div>
             <strong className="timer">{formatTimer(seconds)}</strong>
-            <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
+            <select className="focus-select" value={focusTaskId} onChange={selectFocusTask} disabled={Boolean(sessionStartedAt)} aria-label="关联今日任务"><option value="">自由专注（不关联任务）</option>{tasks.filter((task) => !task.done && (isDemo || !task.id.startsWith("local-"))).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select>
+            <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt) || Boolean(focusTaskId)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
             <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
           </section>
           <section className="panel manual-card">
@@ -842,7 +874,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
               {todaySessions.length === 0 && <p className="recent-session-empty">今天还没有学习记录，完成一次专注或补录后会显示在这里。</p>}
               {todaySessions.slice(0, 5).map((session) => <article className="recent-session-item" key={session.id}>
                 <span className={`subject-badge ${session.subject}`}>{subjectMeta[session.subject].short}</span>
-                <span className="recent-session-copy"><strong>{subjectMeta[session.subject].label} · {formatMinutes(studySessionMinutes(session))}</strong><small>{formatSessionTime(session.started_at)}–{formatSessionTime(session.ended_at)} · {session.source === "timer" ? "专注计时" : "手动补录"}</small>{session.note && <small>{session.note}</small>}</span>
+                <span className="recent-session-copy"><strong>{tasks.find((task) => task.id === session.task_id)?.title ?? subjectMeta[session.subject].label} · {formatMinutes(studySessionMinutes(session))}</strong><small>{formatSessionTime(session.started_at)}–{formatSessionTime(session.ended_at)} · {session.source === "timer" ? "专注计时" : "手动补录"}</small>{session.task_id && <small>关联任务 · {tasks.find((task) => task.id === session.task_id)?.title ?? "已删除任务"}</small>}{session.note && <small>{session.note}</small>}</span>
                 <button type="button" onClick={() => void deleteStudySession(session)} disabled={sessionBusyId === session.id}>{sessionBusyId === session.id ? "删除中" : "删除"}</button>
               </article>)}
             </div>

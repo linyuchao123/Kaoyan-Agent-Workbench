@@ -871,6 +871,65 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                 ),
             )
 
+    async def test_supabase_session_link_validates_owned_task_and_subject(self):
+        requests: list[httpx.Request] = []
+        task_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=[{"id": str(task_id)}])
+            body = json.loads(request.content)
+            return httpx.Response(
+                201,
+                json=[{"id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", **body}],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+        created = await repository.create_session(
+            self.user,
+            StudySessionCreate(
+                task_id=task_id,
+                subject="math",
+                started_at=started_at,
+                ended_at=started_at + timedelta(hours=1),
+            ),
+        )
+
+        self.assertEqual(created["task_id"], str(task_id))
+        self.assertIn("subject=eq.math", str(requests[0].url))
+        self.assertEqual(requests[1].method, "POST")
+
+    async def test_supabase_session_link_rejects_missing_owned_task(self):
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(lambda _: httpx.Response(200, json=[])),
+        )
+        started_at = datetime(2026, 8, 11, 1, tzinfo=UTC)
+
+        with self.assertRaisesRegex(RepositoryValidationError, "same subject"):
+            await repository.create_session(
+                self.user,
+                StudySessionCreate(
+                    task_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                    subject="math",
+                    started_at=started_at,
+                    ended_at=started_at + timedelta(hours=1),
+                ),
+            )
+
     async def test_supabase_agent_proposal_uses_authenticated_rpc_without_owner_input(self):
         requests: list[httpx.Request] = []
         thread_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

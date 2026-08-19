@@ -104,6 +104,7 @@ class AgentModelUsageSummary(BaseModel):
 
 
 class StudySessionCreate(StrictRequestModel):
+    task_id: UUID | None = None
     subject: Subject
     started_at: datetime
     ended_at: datetime
