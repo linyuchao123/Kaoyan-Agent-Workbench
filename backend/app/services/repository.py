@@ -38,6 +38,7 @@ from app.schemas import (
 )
 from app.services.embeddings import EmbeddingDescriptor
 from app.services.ingestion import CHUNKING_VERSION, TextChunk
+from app.services.rag import enrich_private_source
 from app.services.store import DemoStore
 
 
@@ -703,7 +704,10 @@ class DemoRepository:
                     )
                 )
         matches.sort(key=lambda item: item.score, reverse=True)
-        return matches[:limit]
+        return [
+            enrich_private_source(source, query, "keyword")
+            for source in matches[:limit]
+        ]
 
     async def record_web_search(
         self,
@@ -1902,7 +1906,13 @@ class SupabaseRepository:
             f"rpc/{rpc_name}",
             json=payload,
         )
-        return [PrivateKnowledgeSource.model_validate(row) for row in rows]
+        retrieval_mode = "hybrid" if query_embedding is not None else "keyword"
+        return [
+            enrich_private_source(
+                PrivateKnowledgeSource.model_validate(row), query, retrieval_mode
+            )
+            for row in rows
+        ]
 
     async def record_web_search(
         self,

@@ -721,6 +721,9 @@ class RepositoryTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(len(sources), 1)
         self.assertEqual(sources[0].locator, "线性表 · 片段 1")
+        self.assertEqual(sources[0].snippet, "顺序表支持按下标随机访问。")
+        self.assertEqual(sources[0].matched_terms, ["顺序表"])
+        self.assertEqual(sources[0].retrieval_mode, "keyword")
         self.assertTrue(requests[0].url.path.endswith("/rpc/search_private_document_chunks"))
         self.assertEqual(requests[0].headers["authorization"], "Bearer signed-user-jwt")
         payload = json.loads(requests[0].content)

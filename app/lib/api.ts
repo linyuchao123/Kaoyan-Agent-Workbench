@@ -122,6 +122,9 @@ export type ApiPrivateKnowledgeSource = {
   page_number: number | null;
   locator: string;
   content: string;
+  snippet: string;
+  matched_terms: string[];
+  retrieval_mode: "keyword" | "hybrid";
   score: number;
 };
 

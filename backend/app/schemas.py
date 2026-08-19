@@ -260,6 +260,9 @@ class PrivateKnowledgeSource(BaseModel):
     page_number: int | None = None
     locator: str
     content: str
+    snippet: str = ""
+    matched_terms: list[str] = Field(default_factory=list)
+    retrieval_mode: Literal["keyword", "hybrid"] = "keyword"
     score: float = Field(ge=0)
 
 
