@@ -128,6 +128,20 @@ class MigrationContractTests(TestCase):
         ).read_text()
         self.assertIn("grant select on public.ocr_jobs to service_role", sql)
         self.assertIn("grant select on public.documents to service_role", sql)
+
+    def test_document_reindex_is_atomic_owned_and_versioned(self):
+        sql = Path(
+            "supabase/migrations/202608190001_document_reindex.sql"
+        ).read_text()
+        self.assertIn("chunking_version", sql)
+        self.assertIn("indexed_at", sql)
+        self.assertIn("replace_document_chunks", sql)
+        self.assertIn("where id = requested_document_id and user_id = owner_id", sql)
+        self.assertIn("for update", sql)
+        self.assertIn("delete from public.document_chunks", sql)
+        self.assertIn("jsonb_array_elements(replacement_chunks)", sql)
+        self.assertIn("enqueue_document_reindex_ocr", sql)
+        self.assertIn("to authenticated", sql)
         self.assertNotIn("grant insert", sql)
         self.assertNotIn("grant update", sql)
         self.assertNotIn("grant delete", sql)

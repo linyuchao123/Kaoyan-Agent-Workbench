@@ -551,6 +551,101 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         self.assertEqual(len(requests), 2)
         self.assertFalse(any("/storage/v1/" in str(request.url) for request in requests))
 
+    async def test_supabase_reads_owned_document_source_from_private_storage(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+        storage_path = f"{self.user.id}/{document_id}/source.md"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.endswith("/rest/v1/documents"):
+                return httpx.Response(
+                    200,
+                    json=[
+                        {
+                            "id": str(document_id),
+                            "content_type": "text/markdown",
+                            "storage_path": storage_path,
+                        }
+                    ],
+                )
+            return httpx.Response(200, content=b"# Limits\nDefinition")
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        content = await repository.read_document_content(self.user, document_id)
+
+        self.assertEqual(content, b"# Limits\nDefinition")
+        self.assertIn(
+            f"/storage/v1/object/authenticated/study-materials/{storage_path}",
+            str(requests[1].url),
+        )
+        self.assertEqual(requests[1].headers["authorization"], "Bearer signed-user-jwt")
+
+    async def test_supabase_replaces_document_chunks_through_atomic_rpc(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": str(document_id),
+                        "version": 2,
+                        "chunking_version": 2,
+                        "ingestion_status": "ready",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+        chunks = [
+            TextChunk(
+                index=0,
+                heading="函数",
+                locator="第 1 页 · 函数 · 片段 1",
+                content="函数的定义。",
+                page_number=1,
+                flagged_untrusted_instruction=False,
+                embedding=[0.1, 0.2, 0.3],
+            )
+        ]
+
+        document = await repository.replace_document_chunks(
+            self.user,
+            document_id,
+            chunks,
+            EmbeddingDescriptor(
+                provider="qwen",
+                model="text-embedding-v4",
+                dimensions=1536,
+                version="1",
+            ),
+        )
+
+        self.assertEqual(document["chunk_count"], 1)
+        self.assertTrue(requests[0].url.path.endswith("/rpc/replace_document_chunks"))
+        payload = json.loads(requests[0].content)
+        self.assertEqual(payload["requested_chunking_version"], 2)
+        self.assertEqual(payload["requested_embedding_provider"], "qwen")
+        self.assertEqual(payload["replacement_chunks"][0]["content"], "函数的定义。")
+
     async def test_supabase_ocr_queue_uses_owned_rpc_and_read_filter(self):
         requests: list[httpx.Request] = []
         document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

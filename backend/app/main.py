@@ -551,6 +551,38 @@ async def list_documents(user: Annotated[AuthUser, Depends(get_current_user)]) -
     return await repository.list_documents(user)
 
 
+@app.post("/api/v1/documents/{document_id}/reindex")
+async def reindex_document(
+    document_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
+) -> dict:
+    document = await repository.get_document(user, document_id)
+    if not document:
+        raise HTTPException(404, "document not found")
+
+    content = await repository.read_document_content(user, document_id)
+    chunks, status = prepare_document_chunks(content, str(document["content_type"]))
+    if status == "ocr_required":
+        ocr_job = await repository.enqueue_document_reindex_ocr(user, document_id)
+        updated = await repository.get_document(user, document_id)
+        return {**(updated or document), "reindex_status": "ocr_queued", "ocr_job": ocr_job}
+
+    chunks = await embed_safe_chunks(chunks, embedding_provider)
+    embedding_metadata = (
+        embedding_provider.descriptor
+        if any(chunk.embedding is not None for chunk in chunks)
+        else None
+    )
+    updated = await repository.replace_document_chunks(
+        user,
+        document_id,
+        chunks,
+        embedding_metadata,
+    )
+    if not updated:
+        raise HTTPException(404, "document not found")
+    return {**updated, "reindex_status": "ready", "ocr_job": None}
+
+
 @app.get(
     "/api/v1/knowledge/private-search",
     response_model=list[PrivateKnowledgeSource],

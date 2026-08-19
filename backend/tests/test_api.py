@@ -1037,6 +1037,42 @@ class ApiFlowTests(TestCase):
         )
         self.assertEqual(blocked.status_code, 422)
 
+    def test_document_can_be_reindexed_from_its_private_source_file(self):
+        content = ("# 函数\n\n函数的定义与性质。" * 180).encode()
+        uploaded = self.client.post(
+            "/api/v1/documents/upload",
+            files={"file": ("高等数学.md", content, "text/markdown")},
+        )
+        document_id = uploaded.json()["id"]
+
+        reindexed = self.client.post(f"/api/v1/documents/{document_id}/reindex")
+
+        self.assertEqual(reindexed.status_code, 200)
+        body = reindexed.json()
+        self.assertEqual(body["reindex_status"], "ready")
+        self.assertEqual(body["version"], 2)
+        self.assertEqual(body["chunking_version"], 2)
+        self.assertGreater(body["chunk_count"], 1)
+        self.assertIsNotNone(body["indexed_at"])
+
+    def test_scanned_pdf_reindex_preserves_chunks_until_ocr_is_queued(self):
+        pdf = BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.write(pdf)
+        uploaded = self.client.post(
+            "/api/v1/documents/upload",
+            files={"file": ("scan.pdf", pdf.getvalue(), "application/pdf")},
+        )
+
+        reindexed = self.client.post(
+            f"/api/v1/documents/{uploaded.json()['id']}/reindex"
+        )
+
+        self.assertEqual(reindexed.status_code, 200)
+        self.assertEqual(reindexed.json()["reindex_status"], "ocr_queued")
+        self.assertEqual(reindexed.json()["ocr_job"]["status"], "queued")
+
     def test_scanned_pdf_is_queued_for_ocr_and_can_be_retried(self):
         pdf = BytesIO()
         writer = PdfWriter()

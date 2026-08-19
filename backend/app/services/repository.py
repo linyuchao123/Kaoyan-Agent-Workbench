@@ -37,7 +37,7 @@ from app.schemas import (
     WebSearchRecord,
 )
 from app.services.embeddings import EmbeddingDescriptor
-from app.services.ingestion import TextChunk
+from app.services.ingestion import CHUNKING_VERSION, TextChunk
 from app.services.store import DemoStore
 
 
@@ -234,6 +234,20 @@ class StudyRepository(Protocol):
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None: ...
 
+    async def read_document_content(self, user: AuthUser, document_id: UUID) -> bytes: ...
+
+    async def replace_document_chunks(
+        self,
+        user: AuthUser,
+        document_id: UUID,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None = None,
+    ) -> dict | None: ...
+
+    async def enqueue_document_reindex_ocr(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob: ...
+
     async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob: ...
 
     async def get_document_ocr_job(
@@ -368,6 +382,7 @@ class DemoRepository:
         self.now_factory = now_factory
         self.stores: dict[UUID, DemoStore] = {}
         self.documents: dict[tuple[UUID, UUID], dict] = {}
+        self.document_contents: dict[tuple[UUID, UUID], bytes] = {}
         self.document_ids_by_hash: dict[tuple[UUID, str], UUID] = {}
         self.document_chunks: dict[tuple[UUID, UUID], list[TextChunk]] = {}
         self.ocr_jobs: dict[tuple[UUID, UUID], OcrJob] = {}
@@ -382,6 +397,7 @@ class DemoRepository:
     def clear(self) -> None:
         self.stores.clear()
         self.documents.clear()
+        self.document_contents.clear()
         self.document_ids_by_hash.clear()
         self.document_chunks.clear()
         self.ocr_jobs.clear()
@@ -526,10 +542,18 @@ class DemoRepository:
             "embedding_model": embedding_metadata.model if embedding_metadata else None,
             "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
             "embedding_version": embedding_metadata.version if embedding_metadata else None,
+            "version": 1,
+            "chunking_version": CHUNKING_VERSION,
+            "indexed_at": (
+                (self.now_factory() if self.now_factory else datetime.now(UTC)).isoformat()
+                if ingestion_status == "ready"
+                else None
+            ),
             "chunk_count": len(chunks),
             "flagged_chunk_count": sum(chunk.flagged_untrusted_instruction for chunk in chunks),
         }
         self.documents[(user.id, document_id)] = item
+        self.document_contents[(user.id, document_id)] = content
         self.document_ids_by_hash[(user.id, digest)] = document_id
         self.document_chunks[(user.id, document_id)] = chunks
         return item, False
@@ -543,6 +567,59 @@ class DemoRepository:
 
     async def get_document(self, user: AuthUser, document_id: UUID) -> dict | None:
         return self.documents.get((user.id, document_id))
+
+    async def read_document_content(self, user: AuthUser, document_id: UUID) -> bytes:
+        try:
+            return self.document_contents[(user.id, document_id)]
+        except KeyError as error:
+            raise RepositoryValidationError("document content not found") from error
+
+    async def replace_document_chunks(
+        self,
+        user: AuthUser,
+        document_id: UUID,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None = None,
+    ) -> dict | None:
+        document = self.documents.get((user.id, document_id))
+        if not document:
+            return None
+        now = self.now_factory() if self.now_factory else datetime.now(UTC)
+        updated = {
+            **document,
+            "version": int(document.get("version", 1)) + 1,
+            "chunking_version": CHUNKING_VERSION,
+            "indexed_at": now.isoformat(),
+            "ingestion_status": "ready",
+            "ingestion_error": None,
+            "embedding_provider": embedding_metadata.provider if embedding_metadata else None,
+            "embedding_model": embedding_metadata.model if embedding_metadata else None,
+            "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
+            "embedding_version": embedding_metadata.version if embedding_metadata else None,
+            "chunk_count": len(chunks),
+            "flagged_chunk_count": sum(
+                chunk.flagged_untrusted_instruction for chunk in chunks
+            ),
+        }
+        self.documents[(user.id, document_id)] = updated
+        self.document_chunks[(user.id, document_id)] = chunks
+        return updated
+
+    async def enqueue_document_reindex_ocr(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob:
+        document = self.documents.get((user.id, document_id))
+        if not document:
+            raise RepositoryValidationError("document not found")
+        document.update(
+            {
+                "ingestion_status": "ocr_required",
+                "ingestion_error": None,
+                "chunking_version": CHUNKING_VERSION,
+                "indexed_at": None,
+            }
+        )
+        return await self.enqueue_document_ocr(user, document_id)
 
     async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
         document = self.documents.get((user.id, document_id))
@@ -1015,6 +1092,27 @@ class SupabaseRepository:
             except ValueError:
                 message = response.text
             raise RepositoryError(str(message or "Supabase Storage request failed"))
+
+    async def _download_storage_object(self, user: AuthUser, storage_path: str) -> bytes:
+        expected_prefix = f"{user.id}/"
+        if not storage_path.startswith(expected_prefix):
+            raise RepositoryValidationError("document storage path is not owned by user")
+        encoded_path = "/".join(quote(part, safe="") for part in storage_path.split("/"))
+        headers = {
+            "apikey": self.anon_key,
+            "Authorization": f"Bearer {user.access_token}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
+                response = await client.get(
+                    f"{self.storage_url}/object/authenticated/study-materials/{encoded_path}",
+                    headers=headers,
+                )
+        except httpx.HTTPError as error:
+            raise RepositoryError("Supabase Storage is unavailable") from error
+        if response.status_code >= 400:
+            raise RepositoryError("document content could not be downloaded")
+        return response.content
 
     @staticmethod
     def _task(row: Mapping[str, Any]) -> dict:
@@ -1537,6 +1635,8 @@ class SupabaseRepository:
                 "embedding_model": embedding_metadata.model if embedding_metadata else None,
                 "embedding_dimensions": embedding_metadata.dimensions if embedding_metadata else None,
                 "embedding_version": embedding_metadata.version if embedding_metadata else None,
+                "chunking_version": CHUNKING_VERSION,
+                "indexed_at": datetime.now(UTC).isoformat() if ingestion_status == "ready" else None,
             },
             prefer="return=representation",
         )
@@ -1579,7 +1679,7 @@ class SupabaseRepository:
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
                     "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
                     "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
-                    "ocr_fallback_pages,created_at,updated_at"
+                    "ocr_fallback_pages,chunking_version,indexed_at,created_at,updated_at"
                 ),
                 "user_id": f"eq.{user.id}",
                 "order": "created_at.desc",
@@ -1596,13 +1696,90 @@ class SupabaseRepository:
                     "id,title,original_filename,source_type,source_url,content_type,byte_size,"
                     "sha256,storage_path,version,ingestion_status,ingestion_error,embedding_provider,"
                     "embedding_model,embedding_dimensions,embedding_version,ocr_failed_pages,"
-                    "ocr_fallback_pages,created_at,updated_at"
+                    "ocr_fallback_pages,chunking_version,indexed_at,created_at,updated_at"
                 ),
                 "id": f"eq.{document_id}",
                 "user_id": f"eq.{user.id}",
             },
         )
         return rows[0] if rows else None
+
+    async def read_document_content(self, user: AuthUser, document_id: UUID) -> bytes:
+        document = await self.get_document(user, document_id)
+        if not document:
+            raise RepositoryValidationError("document not found")
+        storage_path = document.get("storage_path")
+        if not storage_path:
+            raise RepositoryValidationError("document has no stored source file")
+        return await self._download_storage_object(user, str(storage_path))
+
+    async def replace_document_chunks(
+        self,
+        user: AuthUser,
+        document_id: UUID,
+        chunks: list[TextChunk],
+        embedding_metadata: EmbeddingDescriptor | None = None,
+    ) -> dict | None:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/replace_document_chunks",
+            json={
+                "requested_document_id": str(document_id),
+                "replacement_chunks": [
+                    {
+                        "chunk_index": chunk.index,
+                        "heading": chunk.heading,
+                        "page_number": chunk.page_number,
+                        "locator": chunk.locator,
+                        "content": chunk.content,
+                        "flagged_untrusted_instruction": (
+                            chunk.flagged_untrusted_instruction
+                        ),
+                        "embedding": chunk.embedding,
+                    }
+                    for chunk in chunks
+                ],
+                "requested_chunking_version": CHUNKING_VERSION,
+                "requested_embedding_provider": (
+                    embedding_metadata.provider if embedding_metadata else None
+                ),
+                "requested_embedding_model": (
+                    embedding_metadata.model if embedding_metadata else None
+                ),
+                "requested_embedding_dimensions": (
+                    embedding_metadata.dimensions if embedding_metadata else None
+                ),
+                "requested_embedding_version": (
+                    embedding_metadata.version if embedding_metadata else None
+                ),
+            },
+        )
+        if not rows:
+            return None
+        return {
+            **rows[0],
+            "chunk_count": len(chunks),
+            "flagged_chunk_count": sum(
+                chunk.flagged_untrusted_instruction for chunk in chunks
+            ),
+        }
+
+    async def enqueue_document_reindex_ocr(
+        self, user: AuthUser, document_id: UUID
+    ) -> OcrJob:
+        rows = await self._request(
+            user,
+            "POST",
+            "rpc/enqueue_document_reindex_ocr",
+            json={
+                "requested_document_id": str(document_id),
+                "requested_chunking_version": CHUNKING_VERSION,
+            },
+        )
+        if not rows:
+            raise RepositoryError("OCR reindex job was not queued")
+        return OcrJob.model_validate(rows[0])
 
     async def enqueue_document_ocr(self, user: AuthUser, document_id: UUID) -> OcrJob:
         rows = await self._request(
