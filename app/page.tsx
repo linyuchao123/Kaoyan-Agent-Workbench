@@ -390,6 +390,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSubject, setManualSubject] = useState<Subject>("math");
+  const [manualTaskId, setManualTaskId] = useState("");
   const [manualDate, setManualDate] = useState(() => shanghaiDateKey(new Date()));
   const [manualStartedTime, setManualStartedTime] = useState("19:00");
   const [manualEndedTime, setManualEndedTime] = useState("20:00");
@@ -553,6 +554,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
       setTasks((items) => items.filter((item) => item.id !== task.id));
       if (focusTaskId === task.id) setFocusTaskId("");
+      if (manualTaskId === task.id) setManualTaskId("");
       setEditingTaskId(null);
       setRecordStatus("演示任务已从当前页面删除");
       return;
@@ -562,6 +564,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       await api.deleteTask(task.id);
       setTasks((items) => items.filter((item) => item.id !== task.id));
       if (focusTaskId === task.id) setFocusTaskId("");
+      if (manualTaskId === task.id) setManualTaskId("");
       setEditingTaskId(null);
       setRecordStatus("任务已从 Supabase 云端删除");
       setContributionRevision((value) => value + 1);
@@ -733,10 +736,12 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       return;
     }
 
+    const linkedTask = tasks.find((task) => task.id === manualTaskId);
+
     if (isDemo) {
       const demoSession: ApiStudySession = {
         id: `demo-session-${Date.now()}`,
-        task_id: null,
+        task_id: linkedTask?.id ?? null,
         subject: manualSubject,
         started_at: interval.startedAt.toISOString(),
         ended_at: interval.endedAt.toISOString(),
@@ -747,9 +752,13 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       if (manualDate === shanghaiDateKey(new Date())) {
         setTodaySessions((items) => [demoSession, ...items]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+        if (linkedTask) setTasks((items) => items.map((task) => task.id === linkedTask.id
+          ? { ...task, actualMinutes: task.actualMinutes + interval.effectiveMinutes }
+          : task));
       }
-      setRecordStatus(`演示补录仅保留在本页 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setRecordStatus(`演示补录仅保留在本页${linkedTask ? ` · 已关联“${linkedTask.title}”` : ""} · ${formatMinutes(interval.effectiveMinutes)}`);
       setManualOpen(false);
+      setManualTaskId("");
       setManualNote("");
       return;
     }
@@ -757,6 +766,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     setManualBusy(true);
     try {
       const saved = await api.createSession({
+        task_id: linkedTask?.id,
         subject: manualSubject,
         started_at: interval.startedAt.toISOString(),
         ended_at: interval.endedAt.toISOString(),
@@ -768,10 +778,11 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
       }
-      setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setRecordStatus(`${manualDate} ${linkedTask ? `任务“${linkedTask.title}”` : subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
       setManualOpen(false);
+      setManualTaskId("");
       setManualNote("");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "云端写入失败";
@@ -874,7 +885,8 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
             <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
             {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
               <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
-              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务"><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
               <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
               <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
               <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
