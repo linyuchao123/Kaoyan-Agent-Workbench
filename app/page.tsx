@@ -24,6 +24,7 @@ type Task = {
   subject: Subject;
   done: boolean;
   plannedMinutes: number;
+  actualMinutes: number;
   planId: string | null;
   dueAt: string | null;
 };
@@ -57,10 +58,10 @@ const navItems: { key: View; label: string; icon: string }[] = [
 ];
 
 const initialTasks: Task[] = [
-  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false, plannedMinutes: 90, planId: null, dueAt: null },
-  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true, plannedMinutes: 60, planId: null, dueAt: null },
-  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false, plannedMinutes: 90, planId: null, dueAt: null },
-  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false, plannedMinutes: 60, planId: null, dueAt: null },
+  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false, plannedMinutes: 90, actualMinutes: 35, planId: null, dueAt: null },
+  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true, plannedMinutes: 60, actualMinutes: 65, planId: null, dueAt: null },
+  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false, plannedMinutes: 90, actualMinutes: 0, planId: null, dueAt: null },
+  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false, plannedMinutes: 60, actualMinutes: 20, planId: null, dueAt: null },
 ];
 
 const initialMistakes: ApiMistakeCard[] = [
@@ -68,7 +69,7 @@ const initialMistakes: ApiMistakeCard[] = [
   { id: "demo-mistake-2", subject: "math", title: "等价无穷小替换条件", question: "何时不能直接进行等价无穷小替换？", answer: "加减关系中需要先变形，不能直接替换", error_reason: "混淆乘除和加减场景", mastery: 2, next_review_at: new Date().toISOString(), review_count: 1 },
 ];
 
-function taskFromApi(task: ApiTask, planTitle?: string): Task {
+function taskFromApi(task: ApiTask, planTitle?: string, knownActualMinutes?: number): Task {
   return {
     id: task.id,
     title: task.title,
@@ -76,6 +77,7 @@ function taskFromApi(task: ApiTask, planTitle?: string): Task {
     subject: task.subject,
     done: task.completed,
     plannedMinutes: task.planned_minutes,
+    actualMinutes: task.actual_minutes ?? knownActualMinutes ?? 0,
     planId: task.plan_id,
     dueAt: task.due_at,
   };
@@ -440,6 +442,10 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       const snapshot = await api.today();
       setDashboardMetrics(snapshot.metrics);
       setTodayMinutes(snapshot.metrics.today_effective_minutes);
+      const actualMinutesByTask = new Map(snapshot.tasks.map((task) => [task.id, task.actual_minutes ?? 0]));
+      setTasks((items) => items.map((task) => actualMinutesByTask.has(task.id)
+        ? { ...task, actualMinutes: actualMinutesByTask.get(task.id) ?? 0 }
+        : task));
     } catch {
       // Keep the last confirmed values; the next page refresh will retry.
     }
@@ -457,7 +463,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     const title = newTask.trim();
     const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
-    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false, plannedMinutes: 30, planId: newTaskPlanId || null, dueAt: null }]);
+    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false, plannedMinutes: 30, actualMinutes: 0, planId: newTaskPlanId || null, dueAt: null }]);
     setNewTask("");
     if (isDemo) {
       setRecordStatus("演示任务仅保留在当前页面");
@@ -526,7 +532,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         planned_minutes: editTaskMinutes,
         plan_id: editTaskPlanId || null,
       });
-      setTasks((items) => items.map((item) => item.id === task.id ? taskFromApi(saved, selectedPlan?.title) : item));
+      setTasks((items) => items.map((item) => item.id === task.id ? taskFromApi(saved, selectedPlan?.title, task.actualMinutes) : item));
       if (focusTaskId === task.id) setFocusSubject(saved.subject);
       setEditingTaskId(null);
       setRecordStatus("任务修改已同步至 Supabase 云端");
@@ -667,6 +673,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       };
       setTodaySessions((items) => [demoSession, ...items]);
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
+      if (linkedTask) setTasks((items) => items.map((task) => task.id === linkedTask.id
+        ? { ...task, actualMinutes: task.actualMinutes + studySessionMinutes(demoSession) }
+        : task));
       setRecordStatus(`演示专注已记录在本页 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setSessionStartedAt(null);
       setPauseStartedAt(null);
@@ -777,6 +786,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     if (isDemo || session.id.startsWith("demo-session-")) {
       setTodaySessions((items) => items.filter((item) => item.id !== session.id));
       setTodayMinutes((value) => Math.max(0, (value ?? 0) - studySessionMinutes(session)));
+      if (session.task_id) setTasks((items) => items.map((task) => task.id === session.task_id
+        ? { ...task, actualMinutes: Math.max(0, task.actualMinutes - studySessionMinutes(session)) }
+        : task));
       setRecordStatus("演示学习记录已从当前页面删除");
       return;
     }
@@ -830,7 +842,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
                   <span className="fake-check">✓</span>
                 </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
-                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span>
+                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small><small className={`task-time-progress ${task.actualMinutes >= task.plannedMinutes ? "reached" : ""}`}>实际 {formatMinutes(task.actualMinutes)} / 计划 {formatMinutes(task.plannedMinutes)}{task.actualMinutes >= task.plannedMinutes ? " · 已达成" : ""}</small></span>
                 <span className="task-actions">
                   {!task.done && <button type="button" onClick={() => beginTaskFocus(task)} disabled={Boolean(sessionStartedAt) || task.id.startsWith("local-")}>专注</button>}
                   <button type="button" onClick={() => beginTaskEdit(task)} disabled={taskBusyId === task.id}>编辑</button>

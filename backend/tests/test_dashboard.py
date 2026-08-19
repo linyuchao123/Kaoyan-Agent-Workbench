@@ -2,7 +2,12 @@ from datetime import UTC, date, datetime, timedelta
 from unittest import TestCase
 from uuid import UUID
 
-from app.domain.dashboard import active_stage_title, build_dashboard_metrics, select_today_tasks
+from app.domain.dashboard import (
+    active_stage_title,
+    attach_task_actual_minutes,
+    build_dashboard_metrics,
+    select_today_tasks,
+)
 from app.schemas import ContributionDay
 
 
@@ -16,6 +21,34 @@ def contribution(day: date, minutes: int) -> ContributionDay:
 
 
 class DashboardMetricsTests(TestCase):
+    def test_attaches_effective_minutes_to_each_linked_task(self):
+        tasks = [{"id": "math"}, {"id": "english"}]
+        sessions = [
+            {
+                "task_id": "math",
+                "started_at": "2026-08-19T08:00:00+08:00",
+                "ended_at": "2026-08-19T09:30:00+08:00",
+                "paused_seconds": 600,
+            },
+            {
+                "task_id": "math",
+                "started_at": datetime(2026, 8, 19, 10, tzinfo=UTC),
+                "ended_at": datetime(2026, 8, 19, 10, 30, tzinfo=UTC),
+                "paused_seconds": 0,
+            },
+            {
+                "task_id": None,
+                "started_at": "2026-08-19T11:00:00+08:00",
+                "ended_at": "2026-08-19T12:00:00+08:00",
+                "paused_seconds": 0,
+            },
+        ]
+
+        enriched = attach_task_actual_minutes(tasks=tasks, sessions=sessions)
+
+        self.assertEqual(enriched[0]["actual_minutes"], 110)
+        self.assertEqual(enriched[1]["actual_minutes"], 0)
+
     def test_selects_today_tasks_and_carries_only_unfinished_backlog(self):
         today = date(2026, 8, 19)
         today_plan_id = UUID("11111111-1111-1111-1111-111111111111")

@@ -30,6 +30,7 @@ export type ApiTask = {
   due_at: string | null;
   completed: boolean;
   completed_at?: string | null;
+  actual_minutes?: number;
 };
 
 export type ApiStudySession = {

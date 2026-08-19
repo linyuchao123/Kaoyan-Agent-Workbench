@@ -214,7 +214,9 @@ class ApiFlowTests(TestCase):
         self.assertEqual(contribution["effective_minutes"], 80)
         self.assertEqual(contribution["completed_tasks"], 1)
         with patch.object(main, "shanghai_today", return_value=date(2026, 8, 10)):
-            dashboard = self.client.get("/api/v1/today").json()["metrics"]
+            today_snapshot = self.client.get("/api/v1/today").json()
+        dashboard = today_snapshot["metrics"]
+        self.assertEqual(today_snapshot["tasks"][0]["actual_minutes"], 80)
         self.assertEqual(dashboard["today_effective_minutes"], 80)
         self.assertEqual(dashboard["weekly_task_count"], 1)
         self.assertEqual(dashboard["weekly_completed_tasks"], 1)
@@ -227,6 +229,11 @@ class ApiFlowTests(TestCase):
             "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
         ).json()[0]
         self.assertEqual(contribution["effective_minutes"], 0)
+        with patch.object(main, "shanghai_today", return_value=date(2026, 8, 10)):
+            self.assertEqual(
+                self.client.get("/api/v1/today").json()["tasks"][0]["actual_minutes"],
+                0,
+            )
         self.assertEqual(
             self.client.delete(f"/api/v1/sessions/{session.json()['id']}").status_code,
             404,

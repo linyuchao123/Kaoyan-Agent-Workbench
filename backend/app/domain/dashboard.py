@@ -28,6 +28,41 @@ def _local_date(value: Any, timezone: ZoneInfo) -> date | None:
     return None
 
 
+def _effective_session_minutes(session: dict[str, Any]) -> int:
+    started_at = session.get("started_at")
+    ended_at = session.get("ended_at")
+    if isinstance(started_at, str):
+        try:
+            started_at = datetime.fromisoformat(started_at)
+        except ValueError:
+            return 0
+    if isinstance(ended_at, str):
+        try:
+            ended_at = datetime.fromisoformat(ended_at)
+        except ValueError:
+            return 0
+    if not isinstance(started_at, datetime) or not isinstance(ended_at, datetime):
+        return 0
+    elapsed_seconds = max(0, int((ended_at - started_at).total_seconds()))
+    paused_seconds = max(0, int(session.get("paused_seconds") or 0))
+    return max(0, elapsed_seconds - paused_seconds) // 60
+
+
+def attach_task_actual_minutes(*, tasks: list[dict], sessions: list[dict]) -> list[dict]:
+    actual_minutes: dict[str, int] = {}
+    for session in sessions:
+        task_id = session.get("task_id")
+        if task_id:
+            key = str(task_id)
+            actual_minutes[key] = actual_minutes.get(key, 0) + _effective_session_minutes(
+                session
+            )
+    return [
+        {**task, "actual_minutes": actual_minutes.get(str(task["id"]), 0)}
+        for task in tasks
+    ]
+
+
 def select_today_tasks(
     *,
     today: date,

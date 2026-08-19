@@ -21,7 +21,12 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
-from app.domain.dashboard import active_stage_title, build_dashboard_metrics, select_today_tasks
+from app.domain.dashboard import (
+    active_stage_title,
+    attach_task_actual_minutes,
+    build_dashboard_metrics,
+    select_today_tasks,
+)
 from app.domain.subjects import build_subject_summaries
 from app.schemas import (
     ActionProposal,
@@ -191,6 +196,7 @@ async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
         tasks=tasks,
         day_plans=day_plans,
     )
+    today_tasks = attach_task_actual_minutes(tasks=today_tasks, sessions=sessions)
     metrics: DashboardMetrics = build_dashboard_metrics(
         today=current_date,
         tasks=tasks,
