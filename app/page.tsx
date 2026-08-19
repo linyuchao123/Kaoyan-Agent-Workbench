@@ -250,6 +250,32 @@ function formatSessionTime(value: string) {
   }).format(new Date(value));
 }
 
+function TodaySubjectBreakdown({ sessions }: { sessions: ApiStudySession[] }) {
+  const subjectMinutes = sessions.reduce<Record<Subject, number>>((totals, session) => {
+    totals[session.subject] += studySessionMinutes(session);
+    return totals;
+  }, { math: 0, english: 0, politics: 0, cs408: 0, career: 0 });
+  const totalMinutes = Object.values(subjectMinutes).reduce((sum, minutes) => sum + minutes, 0);
+  const rows = scopes
+    .filter((scope): scope is { key: Subject; label: string } => scope.key !== "all")
+    .map((scope) => ({ ...scope, minutes: subjectMinutes[scope.key] }))
+    .filter((scope) => scope.minutes > 0)
+    .sort((left, right) => right.minutes - left.minutes);
+
+  return <div className="today-subject-breakdown">
+    <div className="today-subject-heading"><strong>今日学习结构</strong><span>{formatMinutes(totalMinutes)}</span></div>
+    {rows.length === 0
+      ? <p>完成一次专注或补录后，这里会按科目汇总有效学习时长。</p>
+      : <div className="today-subject-list">{rows.map((row) => {
+        const percentage = Math.round((row.minutes / totalMinutes) * 100);
+        return <div className="today-subject-row" key={row.key}>
+          <span className={`subject-badge ${row.key}`}>{subjectMeta[row.key].short}</span>
+          <span className="today-subject-copy"><span><strong>{row.label}</strong><small>{formatMinutes(row.minutes)} · {percentage}%</small></span><span className="today-subject-track"><span style={{ width: `${percentage}%` }} /></span></span>
+        </div>;
+      })}</div>}
+  </div>;
+}
+
 function formatTimer(seconds: number) {
   const hours = Math.floor(seconds / 3600).toString().padStart(2, "0");
   const minutes = Math.floor((seconds % 3600) / 60).toString().padStart(2, "0");
@@ -1013,6 +1039,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               {manualError && <p className="manual-error" role="alert">{manualError}</p>}
               <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
             </form>}
+            <TodaySubjectBreakdown sessions={todaySessions} />
             <div className="recent-session-heading"><strong>今日最近记录</strong><span>{todaySessions.length} 次</span></div>
             <div className="recent-session-list">
               {todaySessions.length === 0 && <p className="recent-session-empty">今天还没有学习记录，完成一次专注或补录后会显示在这里。</p>}
