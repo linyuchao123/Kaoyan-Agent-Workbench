@@ -110,8 +110,32 @@ export type ApiDocument = {
   embedding_version?: string | null;
   ocr_failed_pages?: number[];
   ocr_fallback_pages?: number[];
+  chunking_version?: number;
+  indexed_at?: string | null;
+  chunk_count?: number;
+  flagged_chunk_count?: number;
   created_at: string;
   updated_at: string;
+};
+
+export type ApiOcrJob = {
+  id: string;
+  document_id: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  attempts: number;
+  max_attempts: number;
+  available_at: string;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ApiDocumentIngestionStatus = {
+  document_id: string;
+  status: ApiDocument["ingestion_status"];
+  chunks: number;
+  flagged_chunks: number;
+  ocr_job: ApiOcrJob | null;
 };
 
 export type ApiPrivateKnowledgeSource = {
@@ -122,6 +146,9 @@ export type ApiPrivateKnowledgeSource = {
   page_number: number | null;
   locator: string;
   content: string;
+  snippet: string;
+  matched_terms: string[];
+  retrieval_mode: "keyword" | "hybrid";
   score: number;
 };
 
@@ -494,6 +521,13 @@ export const api = {
       duplicate: boolean;
     }>("/api/v1/documents/upload", { method: "POST", body });
   },
+  reindexDocument: (id: string) => request<ApiDocument & {
+    reindex_status: "ready" | "ocr_queued";
+    ocr_job: ApiOcrJob | null;
+  }>(`/api/v1/documents/${id}/reindex`, { method: "POST" }),
+  getDocumentIngestionStatus: (id: string) => request<ApiDocumentIngestionStatus>(
+    `/api/v1/documents/${id}/ingestion-status`,
+  ),
   previewImport: (url: string) => request<ImportProposal>(
     "/api/v1/documents/import-preview",
     { method: "POST", body: JSON.stringify({ url }) },

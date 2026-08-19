@@ -16,6 +16,8 @@ const documentRecord = {
   version: 1,
   ingestion_status: "ready",
   ingestion_error: null,
+  chunking_version: 2,
+  indexed_at: "2026-08-19T08:00:00Z",
   created_at: "2026-08-12T00:00:00Z",
   updated_at: "2026-08-12T00:00:00Z",
 };
@@ -143,6 +145,44 @@ test("网页资料只有确认后才调用批准入库接口", async () => {
     assert.equal(requests[1].init.method, "POST");
     assert.equal(new Headers(requests[1].init.headers).get("Authorization"), "Bearer current-user-token");
     assert.doesNotMatch(String(requests[1].init.body), /user_id/);
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("资料可以请求重新解析并读取处理状态", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init) => {
+    requests.push({ input: String(input), init });
+    if (String(input).endsWith("/reindex")) {
+      return new Response(JSON.stringify({
+        ...documentRecord,
+        version: 2,
+        chunk_count: 12,
+        reindex_status: "ready",
+        ocr_job: null,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      document_id: documentRecord.id,
+      status: "ready",
+      chunks: 12,
+      flagged_chunks: 0,
+      ocr_job: null,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const reindexed = await api.reindexDocument(documentRecord.id);
+    const status = await api.getDocumentIngestionStatus(documentRecord.id);
+    assert.equal(reindexed.chunk_count, 12);
+    assert.equal(status.chunks, 12);
+    assert.match(requests[0].input, new RegExp(`/documents/${documentRecord.id}/reindex$`));
+    assert.equal(requests[0].init.method, "POST");
+    assert.match(requests[1].input, new RegExp(`/documents/${documentRecord.id}/ingestion-status$`));
   } finally {
     setApiAccessToken(null);
     globalThis.fetch = originalFetch;

@@ -23,6 +23,23 @@ class IngestionSecurityTests(TestCase):
         self.assertTrue(chunks[0].locator.startswith("第 1 页"))
         self.assertTrue(chunks[-1].locator.startswith("第 2 页"))
 
+    def test_pdf_page_is_split_into_smaller_semantic_chunks(self):
+        text = (
+            "一、函数\n\n函数的定义。设 x 和 y 是两个变量。" * 90
+            + "\n\n二、极限\n\n极限的定义。" * 40
+        )
+        chunks = chunk_pages([text])
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(len(chunk.content) <= 1600 for chunk in chunks))
+        self.assertTrue(any("函数" in chunk.heading for chunk in chunks))
+
+    def test_markdown_chunks_prefer_heading_and_paragraph_boundaries(self):
+        text = "# 函数\n\n" + "函数定义。" * 180 + "\n\n## 极限\n\n" + "极限定义。" * 180
+        chunks = chunk_markdown(text)
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(any("极限" in chunk.heading for chunk in chunks))
+        self.assertTrue(all(len(chunk.content) <= 1600 for chunk in chunks))
+
     def test_private_urls_are_rejected(self):
         for url in ("http://localhost/admin", "http://127.0.0.1/data", "http://10.0.0.2/a"):
             with self.assertRaises(UnsafeUrlError):
