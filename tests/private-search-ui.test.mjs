@@ -20,3 +20,10 @@ test("检索结果高亮匹配词并标明检索模式", () => {
   assert.match(pageSource, /source\.matched_terms/);
   assert.match(pageSource, /source\.retrieval_mode === "hybrid"/);
 });
+
+test("资料列表支持重新解析并自动轮询 OCR 状态", () => {
+  assert.match(pageSource, /api\.reindexDocument\(document\.id\)/);
+  assert.match(pageSource, /分块 v\{doc\.chunking_version/);
+  assert.match(pageSource, /window\.setInterval/);
+  assert.match(pageSource, /页面会自动刷新处理状态/);
+});

@@ -1517,6 +1517,12 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const [searchBusy, setSearchBusy] = useState(false);
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<number>>(new Set());
+  const [reindexingId, setReindexingId] = useState<string | null>(null);
+  const pendingDocumentIds = docs
+    .filter((document) => ["queued", "processing", "ocr_required"].includes(document.ingestion_status))
+    .map((document) => document.id)
+    .sort()
+    .join(",");
 
   useEffect(() => {
     if (isDemo) return;
@@ -1535,6 +1541,14 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [isDemo]);
+
+  useEffect(() => {
+    if (isDemo || !pendingDocumentIds) return;
+    const timer = window.setInterval(() => {
+      void api.listDocuments().then(setDocs).catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [isDemo, pendingDocumentIds]);
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -1619,9 +1633,56 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
+  async function reindexDocument(document: ApiDocument) {
+    if (isDemo || reindexingId) return;
+    setReindexingId(document.id);
+    setImportStatus(`正在重新解析 ${document.original_filename || document.title}…`);
+    try {
+      const result = await api.reindexDocument(document.id);
+      setDocs((items) => items.map((item) => item.id === result.id ? result : item));
+      setSearchResults([]);
+      setSearchStatus("资料索引已更新，请重新发起检索");
+      setImportStatus(result.reindex_status === "ocr_queued"
+        ? "已进入 OCR 重建队列，页面会自动刷新处理状态"
+        : `重新解析完成 · 分块 v${result.chunking_version ?? 2} · ${result.chunk_count ?? 0} 个片段`);
+    } catch (error) {
+      setImportStatus(error instanceof Error ? `重新解析失败：${error.message}` : "重新解析失败");
+    } finally {
+      setReindexingId(null);
+    }
+  }
+
   const ingestionLabels: Record<ApiDocument["ingestion_status"], string> = { queued: "等待处理", processing: "正在处理", ocr_required: "等待 OCR", ready: "索引就绪", failed: "处理失败" };
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div><div className="material-layout"><section className="panel upload-zone"><input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} /><div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p><button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button><form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setImportProposal(null); }} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form><small className="import-status">{importStatus}</small>{importProposal && <div className="import-confirm"><strong>待确认网络资料</strong><span>{importProposal.url}</span><p>{importProposal.summary}</p><button type="button" disabled={busy} onClick={() => void approveUrlImport()}>确认下载并入库</button></div>}</section><section className="panel material-list"><div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>{loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}><span className="document-icon">▤</span><div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`}</small></div><em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em><span className={`document-status status-${doc.ingestion_status}`}>● {ingestionLabels[doc.ingestion_status]}</span></div>)}</section></div><section className="panel private-search-panel"><div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>已启用关键词与 Embedding 混合检索；向量服务不可用时自动回退关键词检索。</p></div><span className="subtle-pill">仅当前账户</span></div><form className="private-search-form" onSubmit={searchPrivateKnowledge}><select value={selectedDocumentId} onChange={(event) => setSelectedDocumentId(event.target.value)} aria-label="限定检索资料"><option value="">全部资料</option>{visibleDocuments.filter((doc) => doc.ingestion_status === "ready").map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename || doc.title}</option>)}</select><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：函数的定义" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form><small className="private-search-status">{searchStatus}</small>{searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span><span>相关度 {Math.max(0, source.score).toFixed(2)}</span></div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}</section></section>;
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div>
+    <div className="material-layout">
+      <section className="panel upload-zone">
+        <input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} />
+        <div className="upload-icon">⇧</div><h2>导入 PDF 或 Markdown</h2><p>文本 PDF 直接保留页码切分；扫描版自动标记为待 OCR。文件上限 25 MB。</p>
+        <button className="outline-button" disabled={busy} onClick={() => fileInput.current?.click()}>{busy ? "处理中…" : "选择文件"}</button>
+        <form className="url-import" onSubmit={previewUrl}><input type="url" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); setImportProposal(null); }} placeholder="粘贴公开网页或 PDF 链接" aria-label="资料链接" /><button type="submit" disabled={busy}>生成预览</button></form>
+        <small className="import-status">{importStatus}</small>
+        {importProposal && <div className="import-confirm"><strong>待确认网络资料</strong><span>{importProposal.url}</span><p>{importProposal.summary}</p><button type="button" disabled={busy} onClick={() => void approveUrlImport()}>确认下载并入库</button></div>}
+      </section>
+      <section className="panel material-list">
+        <div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>
+        {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}>
+          <span className="document-icon">▤</span>
+          <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>
+          <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
+          <span className={`document-status status-${doc.ingestion_status}`} title={doc.ingestion_error || undefined}>● {ingestionLabels[doc.ingestion_status]}</span>
+          <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
+        </div>)}
+      </section>
+    </div>
+    <section className="panel private-search-panel">
+      <div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>已启用关键词与 Embedding 混合检索；向量服务不可用时自动回退关键词检索。</p></div><span className="subtle-pill">仅当前账户</span></div>
+      <form className="private-search-form" onSubmit={searchPrivateKnowledge}><select value={selectedDocumentId} onChange={(event) => setSelectedDocumentId(event.target.value)} aria-label="限定检索资料"><option value="">全部资料</option>{visibleDocuments.filter((doc) => doc.ingestion_status === "ready").map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename || doc.title}</option>)}</select><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：函数的定义" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form>
+      <small className="private-search-status">{searchStatus}</small>
+      {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span><span>相关度 {Math.max(0, source.score).toFixed(2)}</span></div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
+    </section>
+  </section>;
 }
 
 function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onStartEdit, onCancelEdit, onSaveEdit, onApprove, onReject }: { proposal: ActionProposal; draft: AgentProposalEdit | null; editing: boolean; busy: boolean; onDraftChange: (draft: AgentProposalEdit) => void; onStartEdit: () => void; onCancelEdit: () => void; onSaveEdit: (event: FormEvent) => void; onApprove: () => void; onReject: () => void }) {
