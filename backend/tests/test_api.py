@@ -199,6 +199,33 @@ class ApiFlowTests(TestCase):
         self.assertEqual(dashboard["weekly_completion_rate"], 100)
         self.assertEqual(dashboard["current_streak_days"], 1)
 
+    def test_subject_analytics_returns_only_the_four_academic_subjects(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 60},
+        )
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "完善作品集", "subject": "career", "planned_minutes": 60},
+        )
+
+        with patch.object(
+            main,
+            "shanghai_now",
+            return_value=datetime(2026, 8, 10, 16, tzinfo=UTC),
+        ):
+            response = self.client.get("/api/v1/analytics/subjects")
+
+        self.assertEqual(response.status_code, 200)
+        summaries = response.json()
+        self.assertEqual(
+            [item["subject"] for item in summaries],
+            ["math", "english", "politics", "cs408"],
+        )
+        self.assertEqual(summaries[0]["task_count"], 1)
+        self.assertEqual(summaries[0]["completed_tasks"], 0)
+        self.assertNotIn("career", [item["subject"] for item in summaries])
+
     def test_web_search_history_is_persisted_and_user_isolated(self):
         searched = self.client.post(
             "/api/v1/search/web",

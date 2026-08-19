@@ -22,6 +22,7 @@ from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgent
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
 from app.domain.dashboard import build_dashboard_metrics
+from app.domain.subjects import build_subject_summaries
 from app.schemas import (
     ActionProposal,
     AgentCitation,
@@ -49,6 +50,7 @@ from app.schemas import (
     SchoolOptionUpdate,
     SearchSource,
     StudySessionCreate,
+    SubjectSummary,
     TaskCreate,
     TaskUpdate,
     WebSearchRecord,
@@ -165,8 +167,12 @@ async def queue_document_ocr(user: AuthUser, document_id: UUID):
         return None
 
 
+def shanghai_now() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+
 def shanghai_today() -> date:
-    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    return shanghai_now().date()
 
 
 @app.get("/api/v1/today")
@@ -451,6 +457,31 @@ async def contributions(
     if scope not in {"all", "math", "english", "politics", "cs408", "career"}:
         raise HTTPException(422, "unknown contribution scope")
     return await repository.contributions(user, from_date, to_date, scope)
+
+
+@app.get("/api/v1/analytics/subjects", response_model=list[SubjectSummary])
+async def subject_summaries(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> list[SubjectSummary]:
+    current_time = shanghai_now()
+    current_date = current_time.date()
+    tasks, mistakes, contribution_days = await asyncio.gather(
+        repository.list_tasks(user),
+        repository.list_mistakes(user),
+        repository.contributions(
+            user,
+            current_date - timedelta(days=364),
+            current_date,
+            "all",
+        ),
+    )
+    return build_subject_summaries(
+        today=current_date,
+        now=current_time,
+        tasks=tasks,
+        mistakes=mistakes,
+        contributions=contribution_days,
+    )
 
 
 @app.get("/api/v1/analytics/model-usage", response_model=AgentModelUsageSummary)

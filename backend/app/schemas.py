@@ -49,6 +49,27 @@ class DashboardMetrics(BaseModel):
     longest_streak_days: int = 0
 
 
+class SubjectWeakPoint(BaseModel):
+    id: UUID
+    title: str
+    mastery: int = Field(default=0, ge=0, le=5)
+    review_count: int = 0
+    next_review_at: datetime
+
+
+class SubjectSummary(BaseModel):
+    subject: AcademicSubject
+    weekly_minutes: int = 0
+    total_minutes: int = 0
+    task_count: int = 0
+    completed_tasks: int = 0
+    task_completion_rate: int = Field(default=0, ge=0, le=100)
+    mistake_count: int = 0
+    due_mistake_count: int = 0
+    review_count: int = 0
+    weak_points: list[SubjectWeakPoint] = Field(default_factory=list)
+
+
 class AgentModelUsageBreakdown(BaseModel):
     provider: str
     model: str

@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -1116,14 +1116,85 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
-function SubjectsView() {
-  const cards = [
-    ["数学一", "极限与连续", "18 / 84 节", 21, "本周 8h 20m"],
-    ["英语一", "核心词汇与长难句", "1,260 / 5,500 词", 23, "本周 5h 10m"],
-    ["计算机 408", "数据结构 · 线性表", "12 / 96 节", 13, "本周 6h 45m"],
-    ["政治", "计划 2027 暑期启动", "暂未开始", 0, "保持资料关注"],
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用章节、题目和错题复习衡量真实进度。</p></div><button className="primary-button">＋ 添加学习资源</button></div><div className="subject-card-grid">{cards.map(([title, chapter, count, progress, time], index) => <article className="panel subject-card" key={String(title)}><div className={`subject-icon s${index}`}>{index === 2 ? "408" : String(title).slice(0,1)}</div><span>{time}</span><h2>{title}</h2><p>{chapter}</p><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><div className="subject-bottom"><strong>{count}</strong><small>{progress}%</small></div></article>)}</div><section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button">进入错题本</button></div><div className="knowledge-table"><div><strong>函数极限的等价无穷小替换</strong><span>数学一 · 错误 3 次</span><em>明天复习</em></div><div><strong>二叉树的非递归遍历</strong><span>数据结构 · 错误 2 次</span><em>今天复习</em></div><div><strong>长难句中的同位语从句</strong><span>英语一 · 掌握度 45%</span><em>后天复习</em></div></div></section></section>;
+const demoSubjectSummaries: SubjectSummary[] = [
+  { subject: "math", weekly_minutes: 500, total_minutes: 2520, task_count: 12, completed_tasks: 8, task_completion_rate: 67, mistake_count: 5, due_mistake_count: 2, review_count: 9, weak_points: initialMistakes.filter((item) => item.subject === "math").map((item) => ({ id: item.id, title: item.title, mastery: item.mastery, review_count: item.review_count, next_review_at: item.next_review_at })) },
+  { subject: "english", weekly_minutes: 310, total_minutes: 1740, task_count: 9, completed_tasks: 6, task_completion_rate: 67, mistake_count: 0, due_mistake_count: 0, review_count: 0, weak_points: [] },
+  { subject: "cs408", weekly_minutes: 405, total_minutes: 2160, task_count: 10, completed_tasks: 5, task_completion_rate: 50, mistake_count: 4, due_mistake_count: 1, review_count: 6, weak_points: initialMistakes.filter((item) => item.subject === "cs408").map((item) => ({ id: item.id, title: item.title, mastery: item.mastery, review_count: item.review_count, next_review_at: item.next_review_at })) },
+  { subject: "politics", weekly_minutes: 0, total_minutes: 0, task_count: 0, completed_tasks: 0, task_completion_rate: 0, mistake_count: 0, due_mistake_count: 0, review_count: 0, weak_points: [] },
+];
+
+function reviewDateLabel(value: string) {
+  const date = new Date(value);
+  const today = shanghaiDateKey(new Date());
+  const reviewDate = shanghaiDateKey(date);
+  const difference = Math.round((Date.parse(`${reviewDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  if (difference < 0) return `逾期 ${Math.abs(difference)} 天`;
+  if (difference === 0) return "今天复习";
+  if (difference === 1) return "明天复习";
+  return `${reviewDate} 复习`;
+}
+
+function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolean; onOpenMaterials: () => void; onOpenToday: () => void }) {
+  const [summaries, setSummaries] = useState<SubjectSummary[]>(isDemo ? demoSubjectSummaries : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [status, setStatus] = useState(isDemo ? "当前显示演示学科统计" : "正在读取云端学科统计…");
+
+  async function loadSummaries() {
+    if (isDemo) return;
+    setLoading(true);
+    setStatus("正在读取云端学科统计…");
+    try {
+      const items = await api.subjectSummaries();
+      setSummaries(items);
+      setStatus("已根据任务、学习时长和错题记录生成真实统计");
+    } catch (error) {
+      setSummaries([]);
+      setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    void api.subjectSummaries()
+      .then((items) => {
+        if (!active) return;
+        setSummaries(items);
+        setStatus("已根据任务、学习时长和错题记录生成真实统计");
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setSummaries([]);
+        setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [isDemo]);
+
+  const weakPoints = summaries.flatMap((summary) => summary.weak_points.map((item) => ({ ...item, subject: summary.subject }))).sort((left, right) => left.mastery - right.mastery || left.next_review_at.localeCompare(right.next_review_at)).slice(0, 8);
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用真实任务、学习时长和错题复习衡量四门科目的进度。</p></div><button className="primary-button" type="button" onClick={onOpenMaterials}>＋ 添加学习资源</button></div>
+    <p className={`plan-status-line ${loading ? "cloud-loading-text" : ""}`}>● {status}</p>
+    <div className="subject-card-grid">{summaries.map((summary, index) => {
+      const meta = subjectMeta[summary.subject];
+      return <article className="panel subject-card" key={summary.subject}>
+        <div className={`subject-icon s${index}`}>{meta.short}</div><span>本周 {formatMinutes(summary.weekly_minutes)}</span>
+        <h2>{meta.label}</h2><p>{summary.task_count ? `${summary.completed_tasks} / ${summary.task_count} 项任务已完成` : "还没有学习任务"}</p>
+        <div className="progress-track"><span style={{ width: `${summary.task_completion_rate}%` }} /></div>
+        <div className="subject-bottom"><strong>近一年 {formatMinutes(summary.total_minutes)}</strong><small>完成率 {summary.task_completion_rate}%</small></div>
+        <div className="subject-bottom"><strong>{summary.mistake_count} 道错题</strong><small>{summary.due_mistake_count} 道待复习</small></div>
+      </article>;
+    })}</div>
+    {!loading && summaries.length === 0 && <div className="panel plan-empty"><strong>暂时无法显示学科统计</strong><span>{status}</span><button className="outline-button" type="button" onClick={() => void loadSummaries()}>重新读取</button></div>}
+    <section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button" type="button" onClick={onOpenToday}>进入今日错题复习</button></div>
+      {weakPoints.length ? <div className="knowledge-table">{weakPoints.map((item) => <div key={item.id}><strong>{item.title}</strong><span>{subjectMeta[item.subject].label} · 掌握度 {item.mastery}/5 · 已复习 {item.review_count} 次</span><em>{reviewDateLabel(item.next_review_at)}</em></div>)}</div> : <div className="plan-empty compact"><span>{loading ? "正在读取薄弱点…" : "当前没有错题薄弱点，完成错题记录后会自动显示。"}</span></div>}
+    </section>
+  </section>;
 }
 
 const demoSchools: ApiSchoolOption[] = [
@@ -2414,7 +2485,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

@@ -181,6 +181,27 @@ export type ApiTodaySnapshot = {
   metrics: DashboardMetrics;
 };
 
+export type SubjectWeakPoint = {
+  id: string;
+  title: string;
+  mastery: number;
+  review_count: number;
+  next_review_at: string;
+};
+
+export type SubjectSummary = {
+  subject: MistakeSubject;
+  weekly_minutes: number;
+  total_minutes: number;
+  task_count: number;
+  completed_tasks: number;
+  task_completion_rate: number;
+  mistake_count: number;
+  due_mistake_count: number;
+  review_count: number;
+  weak_points: SubjectWeakPoint[];
+};
+
 export type ActionProposal = {
   id: string;
   agent: "coach" | "tutor";
@@ -440,6 +461,7 @@ export const api = {
   deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
+  subjectSummaries: () => request<SubjectSummary[]>("/api/v1/analytics/subjects"),
   createTask: (payload: { title: string; subject: Subject; planned_minutes: number; plan_id?: string }) =>
     request<ApiTask>("/api/v1/tasks", { method: "POST", body: JSON.stringify(payload) }),
   updateTask: (id: string, payload: { completed?: boolean; plan_id?: string | null }) =>
