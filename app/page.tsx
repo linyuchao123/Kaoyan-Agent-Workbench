@@ -29,6 +29,15 @@ type Task = {
   dueAt: string | null;
 };
 
+type StoredFocusSession = {
+  startedAt: string;
+  pauseStartedAt: string | null;
+  pausedSeconds: number;
+  taskId: string;
+  subject: Subject;
+  running: boolean;
+};
+
 const scopes: { key: Scope; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "math", label: "数学" },
@@ -351,7 +360,7 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
   );
 }
 
-function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: string }) {
+function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displayName: string; accountKey: string }) {
   const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
@@ -370,6 +379,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
+  const [focusHydrated, setFocusHydrated] = useState(false);
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
   const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics | null>(() => isDemo ? {
     week_start: "2026-08-10",
@@ -452,11 +462,73 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     }
   }
 
+  const focusStorageKey = `kaoyan-focus-session:${accountKey}`;
+
   useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
+    const hydrationTimer = window.setTimeout(() => {
+      try {
+        const raw = window.localStorage.getItem(focusStorageKey);
+        if (raw) {
+          const stored = JSON.parse(raw) as StoredFocusSession;
+          const startedAt = new Date(stored.startedAt);
+          const pauseStartedAt = stored.pauseStartedAt ? new Date(stored.pauseStartedAt) : null;
+          const validSubject = Object.hasOwn(subjectMeta, stored.subject);
+          if (!Number.isNaN(startedAt.getTime()) && (!pauseStartedAt || !Number.isNaN(pauseStartedAt.getTime())) && validSubject) {
+            setSessionStartedAt(startedAt);
+            setPauseStartedAt(pauseStartedAt);
+            setPausedSeconds(Math.max(0, stored.pausedSeconds));
+            setFocusTaskId(stored.taskId || "");
+            setFocusSubject(stored.subject);
+            setRunning(Boolean(stored.running));
+            setRecordStatus(stored.running ? "已恢复正在进行的专注计时" : "已恢复暂停中的专注计时");
+          } else {
+            window.localStorage.removeItem(focusStorageKey);
+          }
+        }
+      } catch {
+        window.localStorage.removeItem(focusStorageKey);
+      } finally {
+        setFocusHydrated(true);
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(hydrationTimer);
+    };
+  }, [focusStorageKey]);
+
+  useEffect(() => {
+    if (!focusHydrated) return;
+    if (!sessionStartedAt) {
+      window.localStorage.removeItem(focusStorageKey);
+      return;
+    }
+    const stored: StoredFocusSession = {
+      startedAt: sessionStartedAt.toISOString(),
+      pauseStartedAt: pauseStartedAt?.toISOString() ?? null,
+      pausedSeconds,
+      taskId: focusTaskId,
+      subject: focusSubject,
+      running,
+    };
+    window.localStorage.setItem(focusStorageKey, JSON.stringify(stored));
+  }, [focusHydrated, focusStorageKey, focusSubject, focusTaskId, pauseStartedAt, pausedSeconds, running, sessionStartedAt]);
+
+  useEffect(() => {
+    if (!sessionStartedAt) return;
+    const updateElapsedSeconds = () => {
+      const now = Date.now();
+      const currentPauseSeconds = pauseStartedAt ? Math.max(0, Math.floor((now - pauseStartedAt.getTime()) / 1000)) : 0;
+      const totalSeconds = Math.max(0, Math.floor((now - sessionStartedAt.getTime()) / 1000) - pausedSeconds - currentPauseSeconds);
+      setSeconds(totalSeconds);
+    };
+    const initialFrame = window.requestAnimationFrame(updateElapsedSeconds);
+    if (!running) return () => window.cancelAnimationFrame(initialFrame);
+    const timer = window.setInterval(updateElapsedSeconds, 1000);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      window.clearInterval(timer);
+    };
+  }, [pauseStartedAt, pausedSeconds, running, sessionStartedAt]);
 
   async function addTask(event: FormEvent) {
     event.preventDefault();
@@ -2727,7 +2799,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={user?.id ?? "demo"} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
