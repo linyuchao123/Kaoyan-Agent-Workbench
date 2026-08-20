@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject } from "./lib/api";
+import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -23,6 +23,19 @@ type Task = {
   detail: string;
   subject: Subject;
   done: boolean;
+  plannedMinutes: number;
+  actualMinutes: number;
+  planId: string | null;
+  dueAt: string | null;
+};
+
+type StoredFocusSession = {
+  startedAt: string;
+  pauseStartedAt: string | null;
+  pausedSeconds: number;
+  taskId: string;
+  subject: Subject;
+  running: boolean;
 };
 
 const scopes: { key: Scope; label: string }[] = [
@@ -54,10 +67,10 @@ const navItems: { key: View; label: string; icon: string }[] = [
 ];
 
 const initialTasks: Task[] = [
-  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false },
-  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true },
-  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false },
-  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false },
+  { id: "demo-math", title: "高等数学：极限与连续", detail: "复习讲义 1.3 · 完成 20 道基础题", subject: "math", done: false, plannedMinutes: 90, actualMinutes: 35, planId: null, dueAt: null },
+  { id: "demo-english", title: "英语：核心词汇复习", detail: "新词 50 个 · 复习 100 个", subject: "english", done: true, plannedMinutes: 60, actualMinutes: 65, planId: null, dueAt: null },
+  { id: "demo-cs408", title: "408：数据结构线性表", detail: "王道第 2 章 · 错题回顾", subject: "cs408", done: false, plannedMinutes: 90, actualMinutes: 0, planId: null, dueAt: null },
+  { id: "demo-career", title: "Agent 工作台开发", detail: "完成热力图与学习会话接口", subject: "career", done: false, plannedMinutes: 60, actualMinutes: 20, planId: null, dueAt: null },
 ];
 
 const initialMistakes: ApiMistakeCard[] = [
@@ -65,14 +78,55 @@ const initialMistakes: ApiMistakeCard[] = [
   { id: "demo-mistake-2", subject: "math", title: "等价无穷小替换条件", question: "何时不能直接进行等价无穷小替换？", answer: "加减关系中需要先变形，不能直接替换", error_reason: "混淆乘除和加减场景", mastery: 2, next_review_at: new Date().toISOString(), review_count: 1 },
 ];
 
-function taskFromApi(task: ApiTask, planTitle?: string): Task {
+function taskFromApi(task: ApiTask, planTitle?: string, knownActualMinutes?: number): Task {
   return {
     id: task.id,
     title: task.title,
     detail: `计划 ${task.planned_minutes} 分钟${planTitle ? ` · ${planTitle}` : ""}${task.due_at ? ` · ${task.due_at.slice(0, 10)}` : ""}`,
     subject: task.subject,
     done: task.completed,
+    plannedMinutes: task.planned_minutes,
+    actualMinutes: task.actual_minutes ?? knownActualMinutes ?? 0,
+    planId: task.plan_id,
+    dueAt: task.due_at,
   };
+}
+
+function TaskStudyProgress({ task }: { task: Task }) {
+  const plannedMinutes = Math.max(1, task.plannedMinutes);
+  const percentage = Math.round((task.actualMinutes / plannedMinutes) * 100);
+  const visualPercentage = Math.min(100, percentage);
+  const status = task.actualMinutes === 0
+    ? "not-started"
+    : task.actualMinutes < plannedMinutes
+      ? "in-progress"
+      : task.actualMinutes === plannedMinutes
+        ? "reached"
+        : "exceeded";
+  const statusLabel = task.actualMinutes === 0
+    ? "未开始"
+    : task.actualMinutes < plannedMinutes
+      ? `还差 ${formatMinutes(plannedMinutes - task.actualMinutes)}`
+      : task.actualMinutes === plannedMinutes
+        ? "刚好达标"
+        : `超出 ${formatMinutes(task.actualMinutes - plannedMinutes)}`;
+
+  return <span className={`task-study-progress ${status}`}>
+    <span className="task-study-progress-copy">
+      <small>实际 {formatMinutes(task.actualMinutes)} / 计划 {formatMinutes(task.plannedMinutes)}</small>
+      <small>{statusLabel}</small>
+    </span>
+    <span
+      className="task-study-progress-track"
+      role="progressbar"
+      aria-label={`${task.title}学习时长进度`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={visualPercentage}
+    >
+      <span style={{ width: `${visualPercentage}%` }} />
+    </span>
+  </span>;
 }
 
 function seededValue(seed: number) {
@@ -171,6 +225,55 @@ function formatMinutes(minutes: number) {
   const rest = minutes % 60;
   if (!hours) return `${rest} 分钟`;
   return rest ? `${hours} 小时 ${rest} 分钟` : `${hours} 小时`;
+}
+
+function sessionTouchesShanghaiDay(session: ApiStudySession, day: string) {
+  const dayStart = new Date(`${day}T00:00:00+08:00`).getTime();
+  const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+  return new Date(session.ended_at).getTime() > dayStart
+    && new Date(session.started_at).getTime() < dayEnd;
+}
+
+function studySessionMinutes(session: ApiStudySession) {
+  const durationSeconds = Math.floor(
+    (new Date(session.ended_at).getTime() - new Date(session.started_at).getTime()) / 1000,
+  );
+  return Math.max(0, Math.floor((durationSeconds - session.paused_seconds) / 60));
+}
+
+function formatSessionTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
+function TodaySubjectBreakdown({ sessions }: { sessions: ApiStudySession[] }) {
+  const subjectMinutes = sessions.reduce<Record<Subject, number>>((totals, session) => {
+    totals[session.subject] += studySessionMinutes(session);
+    return totals;
+  }, { math: 0, english: 0, politics: 0, cs408: 0, career: 0 });
+  const totalMinutes = Object.values(subjectMinutes).reduce((sum, minutes) => sum + minutes, 0);
+  const rows = scopes
+    .filter((scope): scope is { key: Subject; label: string } => scope.key !== "all")
+    .map((scope) => ({ ...scope, minutes: subjectMinutes[scope.key] }))
+    .filter((scope) => scope.minutes > 0)
+    .sort((left, right) => right.minutes - left.minutes);
+
+  return <div className="today-subject-breakdown">
+    <div className="today-subject-heading"><strong>今日学习结构</strong><span>{formatMinutes(totalMinutes)}</span></div>
+    {rows.length === 0
+      ? <p>完成一次专注或补录后，这里会按科目汇总有效学习时长。</p>
+      : <div className="today-subject-list">{rows.map((row) => {
+        const percentage = Math.round((row.minutes / totalMinutes) * 100);
+        return <div className="today-subject-row" key={row.key}>
+          <span className={`subject-badge ${row.key}`}>{subjectMeta[row.key].short}</span>
+          <span className="today-subject-copy"><span><strong>{row.label}</strong><small>{formatMinutes(row.minutes)} · {percentage}%</small></span><span className="today-subject-track"><span style={{ width: `${percentage}%` }} /></span></span>
+        </div>;
+      })}</div>}
+  </div>;
 }
 
 function formatTimer(seconds: number) {
@@ -320,30 +423,54 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
   );
 }
 
-function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: string }) {
+function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displayName: string; accountKey: string }) {
   const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
   const [dayPlans, setDayPlans] = useState<ApiPlan[]>([]);
   const [newTaskPlanId, setNewTaskPlanId] = useState("");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editTaskTitle, setEditTaskTitle] = useState("");
+  const [editTaskSubject, setEditTaskSubject] = useState<Subject>("math");
+  const [editTaskMinutes, setEditTaskMinutes] = useState(30);
+  const [editTaskPlanId, setEditTaskPlanId] = useState("");
+  const [taskBusyId, setTaskBusyId] = useState<string | null>(null);
   const [focusSubject, setFocusSubject] = useState<Subject>("math");
+  const [focusTaskId, setFocusTaskId] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
+  const [focusHydrated, setFocusHydrated] = useState(false);
   const [todayMinutes, setTodayMinutes] = useState<number | null>(() => isDemo ? 260 : null);
+  const [dashboardMetrics, setDashboardMetrics] = useState<DashboardMetrics | null>(() => isDemo ? {
+    week_start: "2026-08-10",
+    week_end: "2026-08-16",
+    weekly_task_count: 25,
+    weekly_completed_tasks: 17,
+    weekly_completion_rate: 68,
+    today_effective_minutes: 260,
+    today_task_count: 4,
+    today_planned_minutes: 360,
+    active_stage_title: "基础阶段",
+    current_streak_days: 12,
+    longest_streak_days: 28,
+  } : null);
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
   const [contributionRevision, setContributionRevision] = useState(0);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSubject, setManualSubject] = useState<Subject>("math");
+  const [manualTaskId, setManualTaskId] = useState("");
   const [manualDate, setManualDate] = useState(() => shanghaiDateKey(new Date()));
   const [manualStartedTime, setManualStartedTime] = useState("19:00");
   const [manualEndedTime, setManualEndedTime] = useState("20:00");
   const [manualNote, setManualNote] = useState("");
   const [manualError, setManualError] = useState("");
+  const [todaySessions, setTodaySessions] = useState<ApiStudySession[]>([]);
+  const [sessionBusyId, setSessionBusyId] = useState<string | null>(null);
   const [mistakes, setMistakes] = useState<ApiMistakeCard[]>(() => isDemo ? initialMistakes : []);
   const [mistakeFormOpen, setMistakeFormOpen] = useState(false);
   const [mistakeBusy, setMistakeBusy] = useState(false);
@@ -358,16 +485,20 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     if (isDemo) return;
     let active = true;
     const today = shanghaiDateKey(new Date());
-    Promise.all([api.today(), api.contributions(today, today, "all"), api.listPlans("day"), api.listMistakes(true)])
-      .then(([snapshot, contributions, plans, dueMistakes]) => {
+    Promise.all([api.today(), api.listPlans("day"), api.listMistakes(true)])
+      .then(([snapshot, plans, dueMistakes]) => {
         if (!active) return;
         const todayPlans = plans.filter((plan) => plan.starts_on === today);
         const planTitleById = new Map(todayPlans.map((plan) => [plan.id, plan.title]));
         setDayPlans(todayPlans);
         setNewTaskPlanId(todayPlans.find((plan) => plan.status === "active")?.id ?? todayPlans[0]?.id ?? "");
         setTasks(snapshot.tasks.map((task) => taskFromApi(task, task.plan_id ? planTitleById.get(task.plan_id) : undefined)));
+        setTodaySessions(snapshot.sessions
+          .filter((session) => sessionTouchesShanghaiDay(session, today))
+          .sort((left, right) => new Date(right.started_at).getTime() - new Date(left.started_at).getTime()));
         setMistakes(dueMistakes);
-        setTodayMinutes(contributions[0]?.effective_minutes ?? 0);
+        setDashboardMetrics(snapshot.metrics);
+        setTodayMinutes(snapshot.metrics.today_effective_minutes);
         setCloudState("ready");
         setRecordStatus("已同步至 Supabase 云端 · 数据来自学习会话");
       })
@@ -379,11 +510,88 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     return () => { active = false; };
   }, [isDemo]);
 
+  async function refreshDashboardMetrics() {
+    if (isDemo) return;
+    try {
+      const snapshot = await api.today();
+      setDashboardMetrics(snapshot.metrics);
+      setTodayMinutes(snapshot.metrics.today_effective_minutes);
+      const actualMinutesByTask = new Map(snapshot.tasks.map((task) => [task.id, task.actual_minutes ?? 0]));
+      setTasks((items) => items.map((task) => actualMinutesByTask.has(task.id)
+        ? { ...task, actualMinutes: actualMinutesByTask.get(task.id) ?? 0 }
+        : task));
+    } catch {
+      // Keep the last confirmed values; the next page refresh will retry.
+    }
+  }
+
+  const focusStorageKey = `kaoyan-focus-session:${accountKey}`;
+
   useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
+    const hydrationTimer = window.setTimeout(() => {
+      try {
+        const raw = window.localStorage.getItem(focusStorageKey);
+        if (raw) {
+          const stored = JSON.parse(raw) as StoredFocusSession;
+          const startedAt = new Date(stored.startedAt);
+          const pauseStartedAt = stored.pauseStartedAt ? new Date(stored.pauseStartedAt) : null;
+          const validSubject = Object.hasOwn(subjectMeta, stored.subject);
+          if (!Number.isNaN(startedAt.getTime()) && (!pauseStartedAt || !Number.isNaN(pauseStartedAt.getTime())) && validSubject) {
+            setSessionStartedAt(startedAt);
+            setPauseStartedAt(pauseStartedAt);
+            setPausedSeconds(Math.max(0, stored.pausedSeconds));
+            setFocusTaskId(stored.taskId || "");
+            setFocusSubject(stored.subject);
+            setRunning(Boolean(stored.running));
+            setRecordStatus(stored.running ? "已恢复正在进行的专注计时" : "已恢复暂停中的专注计时");
+          } else {
+            window.localStorage.removeItem(focusStorageKey);
+          }
+        }
+      } catch {
+        window.localStorage.removeItem(focusStorageKey);
+      } finally {
+        setFocusHydrated(true);
+      }
+    }, 0);
+    return () => {
+      window.clearTimeout(hydrationTimer);
+    };
+  }, [focusStorageKey]);
+
+  useEffect(() => {
+    if (!focusHydrated) return;
+    if (!sessionStartedAt) {
+      window.localStorage.removeItem(focusStorageKey);
+      return;
+    }
+    const stored: StoredFocusSession = {
+      startedAt: sessionStartedAt.toISOString(),
+      pauseStartedAt: pauseStartedAt?.toISOString() ?? null,
+      pausedSeconds,
+      taskId: focusTaskId,
+      subject: focusSubject,
+      running,
+    };
+    window.localStorage.setItem(focusStorageKey, JSON.stringify(stored));
+  }, [focusHydrated, focusStorageKey, focusSubject, focusTaskId, pauseStartedAt, pausedSeconds, running, sessionStartedAt]);
+
+  useEffect(() => {
+    if (!sessionStartedAt) return;
+    const updateElapsedSeconds = () => {
+      const now = Date.now();
+      const currentPauseSeconds = pauseStartedAt ? Math.max(0, Math.floor((now - pauseStartedAt.getTime()) / 1000)) : 0;
+      const totalSeconds = Math.max(0, Math.floor((now - sessionStartedAt.getTime()) / 1000) - pausedSeconds - currentPauseSeconds);
+      setSeconds(totalSeconds);
+    };
+    const initialFrame = window.requestAnimationFrame(updateElapsedSeconds);
+    if (!running) return () => window.cancelAnimationFrame(initialFrame);
+    const timer = window.setInterval(updateElapsedSeconds, 1000);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      window.clearInterval(timer);
+    };
+  }, [pauseStartedAt, pausedSeconds, running, sessionStartedAt]);
 
   async function addTask(event: FormEvent) {
     event.preventDefault();
@@ -391,7 +599,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     const title = newTask.trim();
     const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
-    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false }]);
+    setTasks((items) => [...items, { id: temporaryId, title, detail: `计划 30 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}`, subject: newTaskSubject, done: false, plannedMinutes: 30, actualMinutes: 0, planId: newTaskPlanId || null, dueAt: null }]);
     setNewTask("");
     if (isDemo) {
       setRecordStatus("演示任务仅保留在当前页面");
@@ -401,6 +609,7 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30, plan_id: newTaskPlanId || undefined });
       setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved, selectedPlan?.title) : item));
       setRecordStatus(selectedPlan ? `任务已关联日计划“${selectedPlan.title}”` : "任务已写入 Supabase 云端");
+      void refreshDashboardMetrics();
     } catch {
       setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
     }
@@ -414,8 +623,91 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
     } catch {
       setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    }
+  }
+
+  function beginTaskEdit(task: Task) {
+    setEditingTaskId(task.id);
+    setEditTaskTitle(task.title);
+    setEditTaskSubject(task.subject);
+    setEditTaskMinutes(task.plannedMinutes);
+    setEditTaskPlanId(task.planId ?? "");
+    setRecordStatus(`正在编辑任务“${task.title}”`);
+  }
+
+  async function saveTaskEdit(event: FormEvent, task: Task) {
+    event.preventDefault();
+    const title = editTaskTitle.trim();
+    if (!title || editTaskMinutes < 1 || editTaskMinutes > 1440) {
+      setRecordStatus("请填写任务标题，预计时长需在 1–1440 分钟之间");
+      return;
+    }
+    const selectedPlan = dayPlans.find((plan) => plan.id === editTaskPlanId);
+    const nextTask: Task = {
+      ...task,
+      title,
+      subject: editTaskSubject,
+      plannedMinutes: editTaskMinutes,
+      planId: editTaskPlanId || null,
+      detail: `计划 ${editTaskMinutes} 分钟${selectedPlan ? ` · ${selectedPlan.title}` : ""}${task.dueAt ? ` · ${task.dueAt.slice(0, 10)}` : ""}`,
+    };
+    if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
+      setTasks((items) => items.map((item) => item.id === task.id ? nextTask : item));
+      setEditingTaskId(null);
+      setRecordStatus("演示任务修改仅保留在当前页面");
+      return;
+    }
+    setTaskBusyId(task.id);
+    try {
+      const saved = await api.updateTask(task.id, {
+        title,
+        subject: editTaskSubject,
+        planned_minutes: editTaskMinutes,
+        plan_id: editTaskPlanId || null,
+      });
+      setTasks((items) => items.map((item) => item.id === task.id ? taskFromApi(saved, selectedPlan?.title, task.actualMinutes) : item));
+      if (focusTaskId === task.id) setFocusSubject(saved.subject);
+      setEditingTaskId(null);
+      setRecordStatus("任务修改已同步至 Supabase 云端");
+      void refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `任务修改失败：${error.message}` : "任务修改失败");
+    } finally {
+      setTaskBusyId(null);
+    }
+  }
+
+  async function deleteTask(task: Task) {
+    if (focusTaskId === task.id && sessionStartedAt) {
+      setRecordStatus("该任务正在专注计时，请先结束并记录本次专注");
+      return;
+    }
+    if (!window.confirm(`确定删除任务“${task.title}”吗？`)) return;
+    if (isDemo || task.id.startsWith("demo-") || task.id.startsWith("local-")) {
+      setTasks((items) => items.filter((item) => item.id !== task.id));
+      if (focusTaskId === task.id) setFocusTaskId("");
+      if (manualTaskId === task.id) setManualTaskId("");
+      setEditingTaskId(null);
+      setRecordStatus("演示任务已从当前页面删除");
+      return;
+    }
+    setTaskBusyId(task.id);
+    try {
+      await api.deleteTask(task.id);
+      setTasks((items) => items.filter((item) => item.id !== task.id));
+      if (focusTaskId === task.id) setFocusTaskId("");
+      if (manualTaskId === task.id) setManualTaskId("");
+      setEditingTaskId(null);
+      setRecordStatus("任务已从 Supabase 云端删除");
+      setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `任务删除失败：${error.message}` : "任务删除失败");
+    } finally {
+      setTaskBusyId(null);
     }
   }
 
@@ -477,27 +769,73 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     setRunning(true);
   }
 
+  function beginTaskFocus(task: Task) {
+    if (sessionStartedAt) {
+      setRecordStatus("已有专注正在进行，请先结束当前计时");
+      return;
+    }
+    setFocusTaskId(task.id);
+    setFocusSubject(task.subject);
+    setRecordStatus(`正在专注任务“${task.title}”`);
+    beginFocus();
+  }
+
+  function selectFocusTask(event: ChangeEvent<HTMLSelectElement>) {
+    const taskId = event.target.value;
+    setFocusTaskId(taskId);
+    const task = tasks.find((item) => item.id === taskId);
+    if (task) setFocusSubject(task.subject);
+  }
+
   function pauseFocus() {
     setRunning(false);
     setPauseStartedAt(new Date());
   }
 
+  function cancelFocus() {
+    if (!sessionStartedAt || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
+    setRunning(false);
+    setSessionStartedAt(null);
+    setPauseStartedAt(null);
+    setPausedSeconds(0);
+    setSeconds(0);
+    setFocusTaskId("");
+    setRecordStatus("本次专注已放弃，未写入学习记录");
+  }
+
   async function finishFocus() {
     if (!sessionStartedAt) return;
     const endedAt = new Date();
+    const linkedTask = tasks.find((task) => task.id === focusTaskId);
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
     setRunning(false);
     if (isDemo) {
+      const demoSession: ApiStudySession = {
+        id: `demo-session-${Date.now()}`,
+        task_id: linkedTask?.id ?? null,
+        subject: focusSubject,
+        started_at: sessionStartedAt.toISOString(),
+        ended_at: endedAt.toISOString(),
+        paused_seconds: finalPausedSeconds,
+        source: "timer",
+        note: "由今日工作台计时器记录",
+      };
+      setTodaySessions((items) => [demoSession, ...items]);
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
+      if (linkedTask) setTasks((items) => items.map((task) => task.id === linkedTask.id
+        ? { ...task, actualMinutes: task.actualMinutes + studySessionMinutes(demoSession) }
+        : task));
       setRecordStatus(`演示专注已记录在本页 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
       setSeconds(0);
+      setFocusTaskId("");
       return;
     }
     try {
-      await api.createSession({
+      const saved = await api.createSession({
+        task_id: linkedTask?.id,
         subject: focusSubject,
         started_at: sessionStartedAt.toISOString(),
         ended_at: endedAt.toISOString(),
@@ -505,13 +843,18 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         source: "timer",
         note: "由今日工作台计时器记录",
       });
+      if (sessionTouchesShanghaiDay(saved, shanghaiDateKey(new Date()))) {
+        setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      }
       setTodayMinutes((value) => (value ?? 0) + Math.floor(seconds / 60));
-      setRecordStatus(`${subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
+      setRecordStatus(`${linkedTask ? `任务“${linkedTask.title}”` : subjectMeta[focusSubject].label}专注已记录 · ${formatMinutes(Math.floor(seconds / 60))}`);
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
       setSessionStartedAt(null);
       setPauseStartedAt(null);
       setPausedSeconds(0);
       setSeconds(0);
+      setFocusTaskId("");
     } catch {
       setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
       setPausedSeconds(finalPausedSeconds);
@@ -539,19 +882,37 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       return;
     }
 
+    const linkedTask = tasks.find((task) => task.id === manualTaskId);
+
     if (isDemo) {
+      const demoSession: ApiStudySession = {
+        id: `demo-session-${Date.now()}`,
+        task_id: linkedTask?.id ?? null,
+        subject: manualSubject,
+        started_at: interval.startedAt.toISOString(),
+        ended_at: interval.endedAt.toISOString(),
+        paused_seconds: 0,
+        source: "manual",
+        note: manualNote.trim() || "由今日工作台手动补录",
+      };
       if (manualDate === shanghaiDateKey(new Date())) {
+        setTodaySessions((items) => [demoSession, ...items]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
+        if (linkedTask) setTasks((items) => items.map((task) => task.id === linkedTask.id
+          ? { ...task, actualMinutes: task.actualMinutes + interval.effectiveMinutes }
+          : task));
       }
-      setRecordStatus(`演示补录仅保留在本页 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setRecordStatus(`演示补录仅保留在本页${linkedTask ? ` · 已关联“${linkedTask.title}”` : ""} · ${formatMinutes(interval.effectiveMinutes)}`);
       setManualOpen(false);
+      setManualTaskId("");
       setManualNote("");
       return;
     }
 
     setManualBusy(true);
     try {
-      await api.createSession({
+      const saved = await api.createSession({
+        task_id: linkedTask?.id,
         subject: manualSubject,
         started_at: interval.startedAt.toISOString(),
         ended_at: interval.endedAt.toISOString(),
@@ -560,11 +921,14 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
         note: manualNote.trim() || "由今日工作台手动补录",
       });
       if (manualDate === shanghaiDateKey(new Date())) {
+        setTodaySessions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
         setTodayMinutes((value) => (value ?? 0) + interval.effectiveMinutes);
       }
-      setRecordStatus(`${manualDate} ${subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
+      setRecordStatus(`${manualDate} ${linkedTask ? `任务“${linkedTask.title}”` : subjectMeta[manualSubject].label}已补录 · ${formatMinutes(interval.effectiveMinutes)}`);
       setContributionRevision((value) => value + 1);
+      void refreshDashboardMetrics();
       setManualOpen(false);
+      setManualTaskId("");
       setManualNote("");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "云端写入失败";
@@ -574,13 +938,48 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
     }
   }
 
+  async function deleteStudySession(session: ApiStudySession) {
+    if (!window.confirm(`确定删除这条${subjectMeta[session.subject].label}学习记录吗？`)) return;
+    if (isDemo || session.id.startsWith("demo-session-")) {
+      setTodaySessions((items) => items.filter((item) => item.id !== session.id));
+      setTodayMinutes((value) => Math.max(0, (value ?? 0) - studySessionMinutes(session)));
+      if (session.task_id) setTasks((items) => items.map((task) => task.id === session.task_id
+        ? { ...task, actualMinutes: Math.max(0, task.actualMinutes - studySessionMinutes(session)) }
+        : task));
+      setRecordStatus("演示学习记录已从当前页面删除");
+      return;
+    }
+    setSessionBusyId(session.id);
+    try {
+      await api.deleteSession(session.id);
+      setTodaySessions((items) => items.filter((item) => item.id !== session.id));
+      setRecordStatus("误录的学习记录已从 Supabase 云端删除");
+      setContributionRevision((value) => value + 1);
+      await refreshDashboardMetrics();
+    } catch (error) {
+      setRecordStatus(error instanceof Error ? `学习记录删除失败：${error.message}` : "学习记录删除失败");
+    } finally {
+      setSessionBusyId(null);
+    }
+  }
+
   const completed = tasks.filter((task) => task.done).length;
+  const focusTask = tasks.find((task) => task.id === focusTaskId);
+  const focusTargetLabel = focusTask?.title ?? subjectMeta[focusSubject].label;
+  const focusSessionMinutes = Math.floor(seconds / 60);
+  const focusTaskMinutes = focusTask ? focusTask.actualMinutes + focusSessionMinutes : 0;
+  const focusTaskProgress = focusTask
+    ? Math.min(100, Math.round((focusTaskMinutes / Math.max(1, focusTask.plannedMinutes)) * 100))
+    : 0;
+  const focusTaskRemainingMinutes = focusTask
+    ? Math.max(0, focusTask.plannedMinutes - focusTaskMinutes)
+    : 0;
 
   return (
     <>
       <div className="hero-row">
         <div>
-          <div className="eyebrow">{shanghaiDisplayDate(new Date())} · 基础阶段</div>
+          <div className="eyebrow">{shanghaiDisplayDate(new Date())}{dashboardMetrics?.active_stage_title ? ` · ${dashboardMetrics.active_stage_title}` : ""}</div>
           <h1>早上好，{displayName}</h1>
           <p>今天把注意力留给最重要的事。完成基础任务，就是向目标院校靠近一步。</p>
         </div>
@@ -588,9 +987,9 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
       </div>
 
       <div className="metric-grid">
-        <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>目标 6 小时 · {Math.min(100, Math.round((todayMinutes ?? 0) / 360 * 100))}%</em></>}</article>
-        <article className="metric-card"><span>本周完成率</span><strong>68<small>%</small></strong><em>已完成 17 / 25 项</em></article>
-        <article className="metric-card"><span>连续学习</span><strong>12<small>天</small></strong><em>最长记录 28 天</em></article>
+        <article className="metric-card accent"><span>今日有效学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取云端学习会话</em></> : cloudState === "error" ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{Math.floor((todayMinutes ?? 0) / 60)}<small>h</small> {(todayMinutes ?? 0) % 60}<small>m</small></strong><em>{dashboardMetrics?.today_planned_minutes ? `任务目标 ${formatMinutes(dashboardMetrics.today_planned_minutes)} · ${Math.min(100, Math.round((todayMinutes ?? 0) / dashboardMetrics.today_planned_minutes * 100))}%` : "今天还没有安排任务目标"}</em></>}</article>
+        <article className="metric-card"><span>本周完成率</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计本周任务</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.weekly_completion_rate}<small>%</small></strong><em>已完成 {dashboardMetrics.weekly_completed_tasks} / {dashboardMetrics.weekly_task_count} 项</em></>}</article>
+        <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
 
@@ -603,14 +1002,28 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
           <div className="task-list">
             {cloudState === "loading" && <div className="task-loading cloud-loading-text">正在同步你的今日任务…</div>}
             {cloudState === "ready" && tasks.length === 0 && <div className="task-loading">今天还没有任务，可以从下方添加第一项。</div>}
-            {tasks.map((task) => (
-              <label className={`task-item ${task.done ? "done" : ""}`} key={task.id}>
-                <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
-                <span className="fake-check">✓</span>
+            {tasks.map((task) => <div className={`task-item-shell ${task.done ? "done" : ""}`} key={task.id}>
+              <div className="task-item">
+                <label className="task-check" aria-label={`${task.done ? "恢复" : "完成"}任务 ${task.title}`}>
+                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
+                  <span className="fake-check">✓</span>
+                </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
-                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small></span>
-              </label>
-            ))}
+                <span className="task-copy"><strong>{task.title}</strong><small>{task.detail}</small><TaskStudyProgress task={task} /></span>
+                <span className="task-actions">
+                  {!task.done && <button type="button" onClick={() => beginTaskFocus(task)} disabled={Boolean(sessionStartedAt) || task.id.startsWith("local-")}>专注</button>}
+                  <button type="button" onClick={() => beginTaskEdit(task)} disabled={taskBusyId === task.id}>编辑</button>
+                  <button type="button" className="danger" onClick={() => void deleteTask(task)} disabled={taskBusyId === task.id}>{taskBusyId === task.id ? "处理中" : "删除"}</button>
+                </span>
+              </div>
+              {editingTaskId === task.id && <form className="task-edit-form" onSubmit={(event) => void saveTaskEdit(event, task)}>
+                <label>任务标题<input value={editTaskTitle} onChange={(event) => setEditTaskTitle(event.target.value)} maxLength={160} required /></label>
+                <label>科目<select value={editTaskSubject} onChange={(event) => setEditTaskSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+                <label>预计分钟<input type="number" min="1" max="1440" value={editTaskMinutes} onChange={(event) => setEditTaskMinutes(Number(event.target.value))} required /></label>
+                <label>所属日计划<select value={editTaskPlanId} onChange={(event) => setEditTaskPlanId(event.target.value)}><option value="">不关联日计划</option>{task.planId && !dayPlans.some((plan) => plan.id === task.planId) && <option value={task.planId}>当前关联的历史日计划</option>}{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select></label>
+                <div className="task-edit-actions"><button type="button" onClick={() => setEditingTaskId(null)} disabled={taskBusyId === task.id}>取消</button><button type="submit" disabled={taskBusyId === task.id}>{taskBusyId === task.id ? "正在保存…" : "保存修改"}</button></div>
+              </form>}
+            </div>)}
           </div>
           <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划"><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
           <p className="record-status">● {recordStatus}</p>
@@ -618,22 +1031,41 @@ function TodayView({ isDemo, displayName }: { isDemo: boolean; displayName: stri
 
         <aside className="right-stack">
           <section className="panel focus-card">
-            <div className="focus-top"><span className="focus-dot" /><span>{running ? `正在专注 · ${subjectMeta[focusSubject].label}` : "专注计时器"}</span></div>
+            <div className={`focus-top ${sessionStartedAt && !running ? "paused" : ""}`}><span className="focus-dot" /><span>{running ? `正在专注 · ${focusTargetLabel}` : sessionStartedAt ? `已暂停 · ${focusTargetLabel}` : "专注计时器"}</span></div>
             <strong className="timer">{formatTimer(seconds)}</strong>
-            <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
-            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button></div>
+            <select className="focus-select" value={focusTaskId} onChange={selectFocusTask} disabled={Boolean(sessionStartedAt)} aria-label="关联今日任务"><option value="">自由专注（不关联任务）</option>{tasks.filter((task) => !task.done && (isDemo || !task.id.startsWith("local-"))).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select>
+            <select className="focus-select" value={focusSubject} onChange={(event) => setFocusSubject(event.target.value as Subject)} disabled={Boolean(sessionStartedAt) || Boolean(focusTaskId)} aria-label="专注科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select>
+            {sessionStartedAt && <div className="focus-session-summary" aria-live="polite">
+              {focusTask ? <>
+                <span className="focus-session-copy"><span>任务累计 {formatMinutes(focusTaskMinutes)} / {formatMinutes(focusTask.plannedMinutes)}</span><strong>{focusTaskRemainingMinutes ? `还差 ${formatMinutes(focusTaskRemainingMinutes)}` : "任务时长已达标"}</strong></span>
+                <span className="focus-session-track" role="progressbar" aria-label={`${focusTask.title}专注进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={focusTaskProgress}><span style={{ width: `${focusTaskProgress}%` }} /></span>
+              </> : <span className="focus-session-copy"><span>自由专注 · {subjectMeta[focusSubject].label}</span><strong>本次已计入 {formatMinutes(focusSessionMinutes)}</strong></span>}
+              {!running && <small>计时已暂停，暂停期间不计入有效学习时长</small>}
+            </div>}
+            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt}>放弃</button></div>
           </section>
           <section className="panel manual-card">
             <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
             {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
               <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
-              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务"><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
               <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
               <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
               <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
               {manualError && <p className="manual-error" role="alert">{manualError}</p>}
               <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
             </form>}
+            <TodaySubjectBreakdown sessions={todaySessions} />
+            <div className="recent-session-heading"><strong>今日最近记录</strong><span>{todaySessions.length} 次</span></div>
+            <div className="recent-session-list">
+              {todaySessions.length === 0 && <p className="recent-session-empty">今天还没有学习记录，完成一次专注或补录后会显示在这里。</p>}
+              {todaySessions.slice(0, 5).map((session) => <article className="recent-session-item" key={session.id}>
+                <span className={`subject-badge ${session.subject}`}>{subjectMeta[session.subject].short}</span>
+                <span className="recent-session-copy"><strong>{tasks.find((task) => task.id === session.task_id)?.title ?? subjectMeta[session.subject].label} · {formatMinutes(studySessionMinutes(session))}</strong><small>{formatSessionTime(session.started_at)}–{formatSessionTime(session.ended_at)} · {session.source === "timer" ? "专注计时" : "手动补录"}</small>{session.task_id && <small>关联任务 · {tasks.find((task) => task.id === session.task_id)?.title ?? "已删除任务"}</small>}{session.note && <small>{session.note}</small>}</span>
+                <button type="button" onClick={() => void deleteStudySession(session)} disabled={sessionBusyId === session.id}>{sessionBusyId === session.id ? "删除中" : "删除"}</button>
+              </article>)}
+            </div>
           </section>
           <section className="panel review-card">
             <div className="review-heading"><div><div className="eyebrow">错题复习</div><strong>{mistakes.length} 道待复习</strong></div><button type="button" onClick={() => { setMistakeFormOpen((value) => !value); setMistakeStatus(""); }}>{mistakeFormOpen ? "收起" : "＋ 速记"}</button></div>
@@ -1090,14 +1522,85 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
-function SubjectsView() {
-  const cards = [
-    ["数学一", "极限与连续", "18 / 84 节", 21, "本周 8h 20m"],
-    ["英语一", "核心词汇与长难句", "1,260 / 5,500 词", 23, "本周 5h 10m"],
-    ["计算机 408", "数据结构 · 线性表", "12 / 96 节", 13, "本周 6h 45m"],
-    ["政治", "计划 2027 暑期启动", "暂未开始", 0, "保持资料关注"],
-  ];
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用章节、题目和错题复习衡量真实进度。</p></div><button className="primary-button">＋ 添加学习资源</button></div><div className="subject-card-grid">{cards.map(([title, chapter, count, progress, time], index) => <article className="panel subject-card" key={String(title)}><div className={`subject-icon s${index}`}>{index === 2 ? "408" : String(title).slice(0,1)}</div><span>{time}</span><h2>{title}</h2><p>{chapter}</p><div className="progress-track"><span style={{ width: `${progress}%` }} /></div><div className="subject-bottom"><strong>{count}</strong><small>{progress}%</small></div></article>)}</div><section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button">进入错题本</button></div><div className="knowledge-table"><div><strong>函数极限的等价无穷小替换</strong><span>数学一 · 错误 3 次</span><em>明天复习</em></div><div><strong>二叉树的非递归遍历</strong><span>数据结构 · 错误 2 次</span><em>今天复习</em></div><div><strong>长难句中的同位语从句</strong><span>英语一 · 掌握度 45%</span><em>后天复习</em></div></div></section></section>;
+const demoSubjectSummaries: SubjectSummary[] = [
+  { subject: "math", weekly_minutes: 500, total_minutes: 2520, task_count: 12, completed_tasks: 8, task_completion_rate: 67, mistake_count: 5, due_mistake_count: 2, review_count: 9, weak_points: initialMistakes.filter((item) => item.subject === "math").map((item) => ({ id: item.id, title: item.title, mastery: item.mastery, review_count: item.review_count, next_review_at: item.next_review_at })) },
+  { subject: "english", weekly_minutes: 310, total_minutes: 1740, task_count: 9, completed_tasks: 6, task_completion_rate: 67, mistake_count: 0, due_mistake_count: 0, review_count: 0, weak_points: [] },
+  { subject: "cs408", weekly_minutes: 405, total_minutes: 2160, task_count: 10, completed_tasks: 5, task_completion_rate: 50, mistake_count: 4, due_mistake_count: 1, review_count: 6, weak_points: initialMistakes.filter((item) => item.subject === "cs408").map((item) => ({ id: item.id, title: item.title, mastery: item.mastery, review_count: item.review_count, next_review_at: item.next_review_at })) },
+  { subject: "politics", weekly_minutes: 0, total_minutes: 0, task_count: 0, completed_tasks: 0, task_completion_rate: 0, mistake_count: 0, due_mistake_count: 0, review_count: 0, weak_points: [] },
+];
+
+function reviewDateLabel(value: string) {
+  const date = new Date(value);
+  const today = shanghaiDateKey(new Date());
+  const reviewDate = shanghaiDateKey(date);
+  const difference = Math.round((Date.parse(`${reviewDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  if (difference < 0) return `逾期 ${Math.abs(difference)} 天`;
+  if (difference === 0) return "今天复习";
+  if (difference === 1) return "明天复习";
+  return `${reviewDate} 复习`;
+}
+
+function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolean; onOpenMaterials: () => void; onOpenToday: () => void }) {
+  const [summaries, setSummaries] = useState<SubjectSummary[]>(isDemo ? demoSubjectSummaries : []);
+  const [loading, setLoading] = useState(!isDemo);
+  const [status, setStatus] = useState(isDemo ? "当前显示演示学科统计" : "正在读取云端学科统计…");
+
+  async function loadSummaries() {
+    if (isDemo) return;
+    setLoading(true);
+    setStatus("正在读取云端学科统计…");
+    try {
+      const items = await api.subjectSummaries();
+      setSummaries(items);
+      setStatus("已根据任务、学习时长和错题记录生成真实统计");
+    } catch (error) {
+      setSummaries([]);
+      setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (isDemo) return;
+    let active = true;
+    void api.subjectSummaries()
+      .then((items) => {
+        if (!active) return;
+        setSummaries(items);
+        setStatus("已根据任务、学习时长和错题记录生成真实统计");
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setSummaries([]);
+        setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [isDemo]);
+
+  const weakPoints = summaries.flatMap((summary) => summary.weak_points.map((item) => ({ ...item, subject: summary.subject }))).sort((left, right) => left.mastery - right.mastery || left.next_review_at.localeCompare(right.next_review_at)).slice(0, 8);
+
+  return <section className="content-view">
+    <div className="view-title"><div><div className="eyebrow">知识结构与掌握程度</div><h1>学科学习</h1><p>用真实任务、学习时长和错题复习衡量四门科目的进度。</p></div><button className="primary-button" type="button" onClick={onOpenMaterials}>＋ 添加学习资源</button></div>
+    <p className={`plan-status-line ${loading ? "cloud-loading-text" : ""}`}>● {status}</p>
+    <div className="subject-card-grid">{summaries.map((summary, index) => {
+      const meta = subjectMeta[summary.subject];
+      return <article className="panel subject-card" key={summary.subject}>
+        <div className={`subject-icon s${index}`}>{meta.short}</div><span>本周 {formatMinutes(summary.weekly_minutes)}</span>
+        <h2>{meta.label}</h2><p>{summary.task_count ? `${summary.completed_tasks} / ${summary.task_count} 项任务已完成` : "还没有学习任务"}</p>
+        <div className="progress-track"><span style={{ width: `${summary.task_completion_rate}%` }} /></div>
+        <div className="subject-bottom"><strong>近一年 {formatMinutes(summary.total_minutes)}</strong><small>完成率 {summary.task_completion_rate}%</small></div>
+        <div className="subject-bottom"><strong>{summary.mistake_count} 道错题</strong><small>{summary.due_mistake_count} 道待复习</small></div>
+      </article>;
+    })}</div>
+    {!loading && summaries.length === 0 && <div className="panel plan-empty"><strong>暂时无法显示学科统计</strong><span>{status}</span><button className="outline-button" type="button" onClick={() => void loadSummaries()}>重新读取</button></div>}
+    <section className="panel knowledge-panel"><div className="panel-heading"><div><div className="eyebrow">最近薄弱点</div><h2>需要再次理解的知识</h2></div><button className="outline-button" type="button" onClick={onOpenToday}>进入今日错题复习</button></div>
+      {weakPoints.length ? <div className="knowledge-table">{weakPoints.map((item) => <div key={item.id}><strong>{item.title}</strong><span>{subjectMeta[item.subject].label} · 掌握度 {item.mastery}/5 · 已复习 {item.review_count} 次</span><em>{reviewDateLabel(item.next_review_at)}</em></div>)}</div> : <div className="plan-empty compact"><span>{loading ? "正在读取薄弱点…" : "当前没有错题薄弱点，完成错题记录后会自动显示。"}</span></div>}
+    </section>
+  </section>;
 }
 
 const demoSchools: ApiSchoolOption[] = [
@@ -2388,7 +2891,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={user?.id ?? "demo"} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;

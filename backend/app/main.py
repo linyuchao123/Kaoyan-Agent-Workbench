@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from io import BytesIO
 from time import perf_counter
@@ -21,6 +21,13 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
+from app.domain.dashboard import (
+    active_stage_title,
+    attach_task_actual_minutes,
+    build_dashboard_metrics,
+    select_today_tasks,
+)
+from app.domain.subjects import build_subject_summaries
 from app.schemas import (
     ActionProposal,
     AgentCitation,
@@ -34,6 +41,7 @@ from app.schemas import (
     CareerItemUpdate,
     CareerStatus,
     ContributionDay,
+    DashboardMetrics,
     ImportPreviewRequest,
     ImportProposal,
     MistakeCardCreate,
@@ -47,6 +55,7 @@ from app.schemas import (
     SchoolOptionUpdate,
     SearchSource,
     StudySessionCreate,
+    SubjectSummary,
     TaskCreate,
     TaskUpdate,
     WebSearchRecord,
@@ -163,12 +172,44 @@ async def queue_document_ocr(user: AuthUser, document_id: UUID):
         return None
 
 
+def shanghai_now() -> datetime:
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
+
+
+def shanghai_today() -> date:
+    return shanghai_now().date()
+
+
 @app.get("/api/v1/today")
 async def today(user: Annotated[AuthUser, Depends(get_current_user)]) -> dict:
+    current_date = shanghai_today()
+    contribution_start = current_date - timedelta(days=364)
+    tasks, sessions, plans, contribution_days = await asyncio.gather(
+        repository.list_tasks(user),
+        repository.list_sessions(user),
+        repository.list_plans(user),
+        repository.contributions(user, contribution_start, current_date, "all"),
+    )
+    day_plans = [plan for plan in plans if plan.get("level") == "day"]
+    today_tasks = select_today_tasks(
+        today=current_date,
+        tasks=tasks,
+        day_plans=day_plans,
+    )
+    today_tasks = attach_task_actual_minutes(tasks=today_tasks, sessions=sessions)
+    metrics: DashboardMetrics = build_dashboard_metrics(
+        today=current_date,
+        tasks=tasks,
+        day_plans=day_plans,
+        contributions=contribution_days,
+        today_tasks=today_tasks,
+        stage_title=active_stage_title(today=current_date, plans=plans),
+    )
     return {
-        "date": datetime.now(ZoneInfo("Asia/Shanghai")).date(),
-        "tasks": await repository.list_tasks(user),
-        "sessions": await repository.list_sessions(user),
+        "date": current_date,
+        "tasks": today_tasks,
+        "sessions": sessions,
+        "metrics": metrics,
     }
 
 
@@ -245,6 +286,16 @@ async def update_task(
     return task
 
 
+@app.delete("/api/v1/tasks/{task_id}", status_code=204)
+async def delete_task(
+    task_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_task(user, task_id):
+        raise HTTPException(404, "task not found")
+    return Response(status_code=204)
+
+
 @app.get("/api/v1/sessions")
 async def list_sessions(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
     return await repository.list_sessions(user)
@@ -261,6 +312,16 @@ async def create_session(
         return await repository.create_session(user, payload)
     except SessionOverlapError as error:
         raise HTTPException(409, str(error)) from error
+
+
+@app.delete("/api/v1/sessions/{session_id}", status_code=204)
+async def delete_session(
+    session_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_session(user, session_id):
+        raise HTTPException(404, "study session not found")
+    return Response(status_code=204)
 
 
 @app.get("/api/v1/mistakes")
@@ -430,6 +491,31 @@ async def contributions(
     if scope not in {"all", "math", "english", "politics", "cs408", "career"}:
         raise HTTPException(422, "unknown contribution scope")
     return await repository.contributions(user, from_date, to_date, scope)
+
+
+@app.get("/api/v1/analytics/subjects", response_model=list[SubjectSummary])
+async def subject_summaries(
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> list[SubjectSummary]:
+    current_time = shanghai_now()
+    current_date = current_time.date()
+    tasks, mistakes, contribution_days = await asyncio.gather(
+        repository.list_tasks(user),
+        repository.list_mistakes(user),
+        repository.contributions(
+            user,
+            current_date - timedelta(days=364),
+            current_date,
+            "all",
+        ),
+    )
+    return build_subject_summaries(
+        today=current_date,
+        now=current_time,
+        tasks=tasks,
+        mistakes=mistakes,
+        contributions=contribution_days,
+    )
 
 
 @app.get("/api/v1/analytics/model-usage", response_model=AgentModelUsageSummary)

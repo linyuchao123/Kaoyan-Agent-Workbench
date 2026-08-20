@@ -20,6 +20,21 @@ class DemoStoreTests(TestCase):
         contribution = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "all")[0]
         self.assertEqual(contribution.completed_tasks, 1)
 
+    def test_task_can_be_edited_and_deleted(self):
+        task = self.store.create_task(TaskCreate(title="线性表复习", subject="cs408"))
+        updated = self.store.update_task(
+            task["id"],
+            TaskUpdate(title="线性表错题复盘", subject="math", planned_minutes=60),
+        )
+
+        self.assertIsNotNone(updated)
+        self.assertEqual(updated["title"], "线性表错题复盘")
+        self.assertEqual(updated["subject"], "math")
+        self.assertEqual(updated["planned_minutes"], 60)
+        self.assertTrue(self.store.delete_task(task["id"]))
+        self.assertFalse(self.store.delete_task(task["id"]))
+        self.assertEqual(self.store.list_tasks(), [])
+
     def test_task_plan_must_be_a_day_plan(self):
         stage = self.store.create_plan(
             PlanCreate(
@@ -71,6 +86,30 @@ class DemoStoreTests(TestCase):
         self.assertEqual(math.effective_minutes, 80)
         self.assertEqual(overall.subject_minutes["math"], 80)
 
+    def test_session_can_link_only_to_task_with_same_subject(self):
+        task = self.store.create_task(
+            TaskCreate(title="极限基础题", subject="math", planned_minutes=45)
+        )
+        linked = self.store.create_session(
+            StudySessionCreate(
+                task_id=task["id"],
+                subject="math",
+                started_at=self.start,
+                ended_at=self.start + timedelta(minutes=45),
+            )
+        )
+        self.assertEqual(linked["task_id"], task["id"])
+
+        with self.assertRaisesRegex(ValueError, "same subject"):
+            self.store.create_session(
+                StudySessionCreate(
+                    task_id=task["id"],
+                    subject="english",
+                    started_at=self.start + timedelta(hours=1),
+                    ended_at=self.start + timedelta(hours=2),
+                )
+            )
+
     def test_overlapping_sessions_are_rejected(self):
         self.store.create_session(
             StudySessionCreate(
@@ -98,3 +137,16 @@ class DemoStoreTests(TestCase):
         )
         next_day = self.store.contributions(date(2026, 8, 11), date(2026, 8, 11), "all")[0]
         self.assertEqual(next_day.session_count, 0)
+
+    def test_session_can_be_deleted(self):
+        session = self.store.create_session(
+            StudySessionCreate(
+                subject="math",
+                started_at=self.start,
+                ended_at=self.start + timedelta(hours=1),
+            )
+        )
+
+        self.assertTrue(self.store.delete_session(session["id"]))
+        self.assertFalse(self.store.delete_session(session["id"]))
+        self.assertEqual(self.store.list_sessions(), [])

@@ -154,6 +154,12 @@ class DemoStore:
         item["updated_at"] = self.now()
         return item
 
+    def delete_task(self, task_id: UUID) -> bool:
+        if task_id not in self.tasks:
+            return False
+        self.tasks.pop(task_id)
+        return True
+
     def _validate_task_plan(self, plan_id: UUID | None) -> None:
         if plan_id is None:
             return
@@ -165,6 +171,12 @@ class DemoStore:
         return sorted(self.sessions.values(), key=lambda item: item["started_at"])
 
     def create_session(self, payload: StudySessionCreate) -> dict:
+        if payload.task_id is not None:
+            task = self.tasks.get(payload.task_id)
+            if not task or task["subject"] != payload.subject:
+                raise ValueError(
+                    "study session task must be an owned task with the same subject"
+                )
         for current in self.sessions.values():
             if (
                 payload.started_at < current["ended_at"]
@@ -175,6 +187,12 @@ class DemoStore:
         item = {"id": uuid4(), **payload.model_dump(), "created_at": now, "updated_at": now}
         self.sessions[item["id"]] = item
         return item
+
+    def delete_session(self, session_id: UUID) -> bool:
+        if session_id not in self.sessions:
+            return False
+        self.sessions.pop(session_id)
+        return True
 
     def list_mistakes(self, due_only: bool = False) -> list[dict]:
         now = self.now()

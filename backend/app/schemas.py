@@ -38,6 +38,41 @@ class ContributionDay(BaseModel):
     subject_minutes: dict[str, int] = Field(default_factory=dict)
 
 
+class DashboardMetrics(BaseModel):
+    week_start: date
+    week_end: date
+    weekly_task_count: int = 0
+    weekly_completed_tasks: int = 0
+    weekly_completion_rate: int = Field(default=0, ge=0, le=100)
+    today_effective_minutes: int = 0
+    today_task_count: int = 0
+    today_planned_minutes: int = 0
+    active_stage_title: str | None = None
+    current_streak_days: int = 0
+    longest_streak_days: int = 0
+
+
+class SubjectWeakPoint(BaseModel):
+    id: UUID
+    title: str
+    mastery: int = Field(default=0, ge=0, le=5)
+    review_count: int = 0
+    next_review_at: datetime
+
+
+class SubjectSummary(BaseModel):
+    subject: AcademicSubject
+    weekly_minutes: int = 0
+    total_minutes: int = 0
+    task_count: int = 0
+    completed_tasks: int = 0
+    task_completion_rate: int = Field(default=0, ge=0, le=100)
+    mistake_count: int = 0
+    due_mistake_count: int = 0
+    review_count: int = 0
+    weak_points: list[SubjectWeakPoint] = Field(default_factory=list)
+
+
 class AgentModelUsageBreakdown(BaseModel):
     provider: str
     model: str
@@ -69,6 +104,7 @@ class AgentModelUsageSummary(BaseModel):
 
 
 class StudySessionCreate(StrictRequestModel):
+    task_id: UUID | None = None
     subject: Subject
     started_at: datetime
     ended_at: datetime
@@ -94,6 +130,7 @@ class TaskCreate(StrictRequestModel):
 
 class TaskUpdate(StrictRequestModel):
     title: str | None = Field(default=None, min_length=1, max_length=160)
+    subject: Subject | None = None
     completed: bool | None = None
     planned_minutes: int | None = Field(default=None, ge=1, le=1440)
     due_at: datetime | None = None

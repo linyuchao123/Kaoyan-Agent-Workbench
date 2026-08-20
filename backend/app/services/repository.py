@@ -39,7 +39,7 @@ from app.schemas import (
 from app.services.embeddings import EmbeddingDescriptor
 from app.services.ingestion import CHUNKING_VERSION, TextChunk
 from app.services.rag import enrich_private_source
-from app.services.store import DemoStore
+from app.services.store import DemoStore, SessionOverlapError
 
 
 class RepositoryError(RuntimeError):
@@ -175,9 +175,13 @@ class StudyRepository(Protocol):
         self, user: AuthUser, task_id: UUID, payload: TaskUpdate
     ) -> dict | None: ...
 
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool: ...
+
     async def list_sessions(self, user: AuthUser) -> list[dict]: ...
 
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict: ...
+
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool: ...
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
@@ -450,11 +454,22 @@ class DemoRepository:
         except ValueError as error:
             raise RepositoryValidationError(str(error)) from error
 
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool:
+        return self._store(user).delete_task(task_id)
+
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return self._store(user).list_sessions()
 
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict:
-        return self._store(user).create_session(payload)
+        try:
+            return self._store(user).create_session(payload)
+        except SessionOverlapError:
+            raise
+        except ValueError as error:
+            raise RepositoryValidationError(str(error)) from error
+
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool:
+        return self._store(user).delete_session(session_id)
 
     async def contributions(
         self, user: AuthUser, from_date: date, to_date: date, scope: str
@@ -1364,6 +1379,16 @@ class SupabaseRepository:
         )
         return self._task(rows[0]) if rows else None
 
+    async def delete_task(self, user: AuthUser, task_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "tasks",
+            params={"id": f"eq.{task_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
+
     async def list_sessions(self, user: AuthUser) -> list[dict]:
         return await self._request(
             user,
@@ -1376,7 +1401,32 @@ class SupabaseRepository:
             },
         )
 
+    async def _validate_session_task(
+        self,
+        user: AuthUser,
+        task_id: UUID | None,
+        subject: str,
+    ) -> None:
+        if task_id is None:
+            return
+        tasks = await self._request(
+            user,
+            "GET",
+            "tasks",
+            params={
+                "select": "id",
+                "id": f"eq.{task_id}",
+                "user_id": f"eq.{user.id}",
+                "subject": f"eq.{subject}",
+            },
+        )
+        if not tasks:
+            raise RepositoryValidationError(
+                "study session task must be an owned task with the same subject"
+            )
+
     async def create_session(self, user: AuthUser, payload: StudySessionCreate) -> dict:
+        await self._validate_session_task(user, payload.task_id, payload.subject)
         body = payload.model_dump(mode="json")
         body["user_id"] = str(user.id)
         rows = await self._request(
@@ -1387,6 +1437,16 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def delete_session(self, user: AuthUser, session_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "study_sessions",
+            params={"id": f"eq.{session_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]:
         params = {

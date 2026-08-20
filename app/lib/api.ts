@@ -30,6 +30,20 @@ export type ApiTask = {
   due_at: string | null;
   completed: boolean;
   completed_at?: string | null;
+  actual_minutes?: number;
+};
+
+export type ApiStudySession = {
+  id: string;
+  task_id: string | null;
+  subject: Subject;
+  started_at: string;
+  ended_at: string;
+  paused_seconds: number;
+  source: "timer" | "manual";
+  note: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type ApiPlan = {
@@ -161,6 +175,48 @@ export type ContributionDay = {
   completed_tasks: number;
   mistake_count: number;
   subject_minutes: Record<string, number>;
+};
+
+export type DashboardMetrics = {
+  week_start: string;
+  week_end: string;
+  weekly_task_count: number;
+  weekly_completed_tasks: number;
+  weekly_completion_rate: number;
+  today_effective_minutes: number;
+  today_task_count: number;
+  today_planned_minutes: number;
+  active_stage_title: string | null;
+  current_streak_days: number;
+  longest_streak_days: number;
+};
+
+export type ApiTodaySnapshot = {
+  date: string;
+  tasks: ApiTask[];
+  sessions: ApiStudySession[];
+  metrics: DashboardMetrics;
+};
+
+export type SubjectWeakPoint = {
+  id: string;
+  title: string;
+  mastery: number;
+  review_count: number;
+  next_review_at: string;
+};
+
+export type SubjectSummary = {
+  subject: MistakeSubject;
+  weekly_minutes: number;
+  total_minutes: number;
+  task_count: number;
+  completed_tasks: number;
+  task_completion_rate: number;
+  mistake_count: number;
+  due_mistake_count: number;
+  review_count: number;
+  weak_points: SubjectWeakPoint[];
 };
 
 export type ActionProposal = {
@@ -400,7 +456,7 @@ async function streamAgentRequest(
 
 export const api = {
   health: () => request<ApiHealth>("/health"),
-  today: () => request<{ date: string; tasks: ApiTask[]; sessions: unknown[] }>("/api/v1/today"),
+  today: () => request<ApiTodaySnapshot>("/api/v1/today"),
   listPlans: (level?: PlanLevel) => request<ApiPlan[]>(`/api/v1/plans${level ? `?level=${level}` : ""}`),
   createPlan: (payload: {
     parent_id?: string;
@@ -422,10 +478,18 @@ export const api = {
   deletePlan: (id: string) => request<void>(`/api/v1/plans/${id}`, { method: "DELETE" }),
   contributions: (from: string, to: string, scope: ContributionScope) =>
     request<ContributionDay[]>(`/api/v1/analytics/contributions?from=${from}&to=${to}&scope=${scope}`),
+  subjectSummaries: () => request<SubjectSummary[]>("/api/v1/analytics/subjects"),
   createTask: (payload: { title: string; subject: Subject; planned_minutes: number; plan_id?: string }) =>
     request<ApiTask>("/api/v1/tasks", { method: "POST", body: JSON.stringify(payload) }),
-  updateTask: (id: string, payload: { completed?: boolean; plan_id?: string | null }) =>
+  updateTask: (id: string, payload: Partial<{
+    title: string;
+    subject: Subject;
+    planned_minutes: number;
+    completed: boolean;
+    plan_id: string | null;
+  }>) =>
     request<ApiTask>(`/api/v1/tasks/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteTask: (id: string) => request<void>(`/api/v1/tasks/${id}`, { method: "DELETE" }),
   listMistakes: (dueOnly = false) =>
     request<ApiMistakeCard[]>(`/api/v1/mistakes?due_only=${dueOnly}`),
   createMistake: (payload: {
@@ -497,13 +561,15 @@ export const api = {
   deleteCareerItem: (id: string) => request<void>(`/api/v1/career-items/${id}`, { method: "DELETE" }),
   exportData: (format: ExportFormat) => download(`/api/v1/export?format=${format}`),
   createSession: (payload: {
+    task_id?: string;
     subject: Subject;
     started_at: string;
     ended_at: string;
     paused_seconds: number;
     source: "timer" | "manual";
     note: string;
-  }) => request("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
+  }) => request<ApiStudySession>("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
+  deleteSession: (id: string) => request<void>(`/api/v1/sessions/${id}`, { method: "DELETE" }),
   listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
   searchPrivateKnowledge: (query: string, documentId?: string) => {
     const params = new URLSearchParams({ query, limit: "8" });

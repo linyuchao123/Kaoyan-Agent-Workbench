@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from io import BytesIO
 from unittest import TestCase
 from unittest.mock import AsyncMock, patch
@@ -60,6 +60,26 @@ class ApiFlowTests(TestCase):
 
     def task_count(self) -> int:
         return len(self.client.get("/api/v1/tasks").json())
+
+    def test_task_can_be_edited_and_deleted(self):
+        created = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 30},
+        ).json()
+
+        updated = self.client.patch(
+            f"/api/v1/tasks/{created['id']}",
+            json={"title": "极限与连续复盘", "subject": "english", "planned_minutes": 50},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["title"], "极限与连续复盘")
+        self.assertEqual(updated.json()["subject"], "english")
+        self.assertEqual(updated.json()["planned_minutes"], 50)
+
+        deleted = self.client.delete(f"/api/v1/tasks/{created['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertEqual(self.task_count(), 0)
+        self.assertEqual(self.client.delete(f"/api/v1/tasks/{created['id']}").status_code, 404)
 
     def test_health_exposes_agent_capabilities_without_secrets(self):
         response = self.client.get("/health")
@@ -177,6 +197,7 @@ class ApiFlowTests(TestCase):
         session = self.client.post(
             "/api/v1/sessions",
             json={
+                "task_id": task_id,
                 "subject": "math",
                 "started_at": "2026-08-10T01:00:00Z",
                 "ended_at": "2026-08-10T02:30:00Z",
@@ -186,11 +207,64 @@ class ApiFlowTests(TestCase):
             },
         )
         self.assertEqual(session.status_code, 201)
+        self.assertEqual(session.json()["task_id"], task_id)
         contribution = self.client.get(
             "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
         ).json()[0]
         self.assertEqual(contribution["effective_minutes"], 80)
         self.assertEqual(contribution["completed_tasks"], 1)
+        with patch.object(main, "shanghai_today", return_value=date(2026, 8, 10)):
+            today_snapshot = self.client.get("/api/v1/today").json()
+        dashboard = today_snapshot["metrics"]
+        self.assertEqual(today_snapshot["tasks"][0]["actual_minutes"], 80)
+        self.assertEqual(dashboard["today_effective_minutes"], 80)
+        self.assertEqual(dashboard["weekly_task_count"], 1)
+        self.assertEqual(dashboard["weekly_completed_tasks"], 1)
+        self.assertEqual(dashboard["weekly_completion_rate"], 100)
+        self.assertEqual(dashboard["current_streak_days"], 1)
+
+        deleted = self.client.delete(f"/api/v1/sessions/{session.json()['id']}")
+        self.assertEqual(deleted.status_code, 204)
+        contribution = self.client.get(
+            "/api/v1/analytics/contributions?from=2026-08-10&to=2026-08-10&scope=all"
+        ).json()[0]
+        self.assertEqual(contribution["effective_minutes"], 0)
+        with patch.object(main, "shanghai_today", return_value=date(2026, 8, 10)):
+            self.assertEqual(
+                self.client.get("/api/v1/today").json()["tasks"][0]["actual_minutes"],
+                0,
+            )
+        self.assertEqual(
+            self.client.delete(f"/api/v1/sessions/{session.json()['id']}").status_code,
+            404,
+        )
+
+    def test_subject_analytics_returns_only_the_four_academic_subjects(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 60},
+        )
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "完善作品集", "subject": "career", "planned_minutes": 60},
+        )
+
+        with patch.object(
+            main,
+            "shanghai_now",
+            return_value=datetime(2026, 8, 10, 16, tzinfo=UTC),
+        ):
+            response = self.client.get("/api/v1/analytics/subjects")
+
+        self.assertEqual(response.status_code, 200)
+        summaries = response.json()
+        self.assertEqual(
+            [item["subject"] for item in summaries],
+            ["math", "english", "politics", "cs408"],
+        )
+        self.assertEqual(summaries[0]["task_count"], 1)
+        self.assertEqual(summaries[0]["completed_tasks"], 0)
+        self.assertNotIn("career", [item["subject"] for item in summaries])
 
     def test_web_search_history_is_persisted_and_user_isolated(self):
         searched = self.client.post(
@@ -422,8 +496,63 @@ class ApiFlowTests(TestCase):
             self.client.patch(f"/api/v1/tasks/{first['id']}", json={"completed": True}).status_code,
             404,
         )
+        self.assertEqual(self.client.delete(f"/api/v1/tasks/{first['id']}").status_code, 404)
         self.current_user = self.user
         self.assertEqual(self.task_count(), 1)
+
+    def test_users_cannot_read_or_delete_each_others_sessions(self):
+        first = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "subject": "cs408",
+                "started_at": "2026-08-10T03:00:00Z",
+                "ended_at": "2026-08-10T04:00:00Z",
+                "paused_seconds": 0,
+                "source": "manual",
+                "note": "用户一学习记录",
+            },
+        ).json()
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(self.client.get("/api/v1/sessions").json(), [])
+        self.assertEqual(self.client.delete(f"/api/v1/sessions/{first['id']}").status_code, 404)
+        self.current_user = self.user
+        self.assertEqual(len(self.client.get("/api/v1/sessions").json()), 1)
+
+    def test_session_rejects_foreign_or_mismatched_task(self):
+        task = self.client.post(
+            "/api/v1/tasks",
+            json={"title": "极限基础题", "subject": "math", "planned_minutes": 30},
+        ).json()
+        mismatched = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "task_id": task["id"],
+                "subject": "english",
+                "started_at": "2026-08-10T05:00:00Z",
+                "ended_at": "2026-08-10T06:00:00Z",
+            },
+        )
+        self.assertEqual(mismatched.status_code, 422)
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        foreign = self.client.post(
+            "/api/v1/sessions",
+            json={
+                "task_id": task["id"],
+                "subject": "math",
+                "started_at": "2026-08-10T05:00:00Z",
+                "ended_at": "2026-08-10T06:00:00Z",
+            },
+        )
+        self.assertEqual(foreign.status_code, 422)
 
     def test_three_level_plans_are_created_and_isolated_by_user(self):
         stage = self.client.post(
