@@ -2,7 +2,7 @@
 
 import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
+import { ApiError, api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 
@@ -37,6 +37,30 @@ type StoredFocusSession = {
   subject: Subject;
   running: boolean;
 };
+
+function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
+  const safetyNotice = "本次请求没有写入学习数据。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return `登录状态已失效，请重新登录后重试。${safetyNotice}`;
+    }
+    if (error.status === 400 || error.status === 403 || error.status === 422) {
+      return `Agent 请求被云端拒绝，请检查模型档位、API Key 与账户权限。${safetyNotice}`;
+    }
+    if (error.status === 429) {
+      return `模型服务请求过于频繁或额度不足，请稍后重试或检查服务余额。${safetyNotice}`;
+    }
+    if (error.status >= 500) {
+      const evidenceNotice = mode === "tutor" ? "为避免无依据回答，我不会自行补全资料事实。" : "";
+      return `云端模型或检索服务暂时不可用，请稍后重试。${evidenceNotice}${safetyNotice}`;
+    }
+  }
+  if (error instanceof TypeError) {
+    return `无法连接后端服务，请确认本地后端已在 8000 端口启动。${safetyNotice}`;
+  }
+  const modeNotice = mode === "tutor" ? "为避免无依据回答，我不会自行补全资料事实。" : "";
+  return `Agent 请求失败，请稍后重试。${modeNotice}${safetyNotice}`;
+}
 
 const scopes: { key: Scope; label: string }[] = [
   { key: "all", label: "全部" },
@@ -2370,12 +2394,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
         updateStreamingMessage(`${streamedAnswer}${streamedAnswer ? "\n\n" : ""}已停止生成。本次未完整回答不会写入对话历史；没有经过确认的提案不会写入学习数据。`);
         return;
       }
-      const fallback = mode === "coach"
-        ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"
-        : mode === "tutor"
-          ? "资料导师当前无法连接检索服务。为避免无依据回答，我暂不补全事实。"
-          : "双 Agent API 尚未连接；当前消息没有写入任何学习数据。";
-      updateStreamingMessage(fallback);
+      updateStreamingMessage(agentRequestErrorMessage(error, mode));
     } finally {
       if (agentRequest.current === controller) {
         agentRequest.current = null;
