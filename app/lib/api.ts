@@ -17,7 +17,27 @@ export type ApiHealth = {
   agent: {
     mode: "live" | "partial" | "fallback";
     model_configured: boolean;
+    primary_model_configured: boolean;
+    fallback_model_configured: boolean;
+    primary_provider: string;
+    fallback_provider: string;
+    default_profile: AgentModelProfile;
     web_search_configured: boolean;
+  };
+  rag: {
+    mode: "hybrid" | "keyword";
+    embedding_configured: boolean;
+    embedding_provider: string;
+    embedding_model: string;
+    embedding_dimensions: number;
+    embedding_version: string;
+  };
+  ocr: {
+    configured: boolean;
+    provider: string;
+    model: string;
+    fallback_model: string;
+    renderer_configured: boolean;
   };
 };
 

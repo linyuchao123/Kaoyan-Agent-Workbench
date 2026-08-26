@@ -44,6 +44,16 @@ test("Agent 页面允许手动选择双模型档位并展示实际来源", () =>
   assert.match(pageSource, /Qwen 备用/);
 });
 
+test("Agent 页面展示可刷新的云端能力状态", () => {
+  assert.match(pageSource, /aria-label="云端能力状态"/);
+  assert.match(pageSource, /重新检查配置/);
+  assert.match(pageSource, /primary_model_configured/);
+  assert.match(pageSource, /fallback_model_configured/);
+  assert.match(pageSource, /embedding_configured/);
+  assert.match(pageSource, /ocr\.configured/);
+  assert.match(pageSource, /未配置 Tavily Key，不会生成虚假网络来源/);
+});
+
 test("Agent 恢复历史会话时保留模型档位和消息模型元数据", () => {
   assert.match(pageSource, /setModelProfile\(thread\.model_profile\)/);
   assert.match(pageSource, /restoredAgentModel\(message\.metadata\)/);

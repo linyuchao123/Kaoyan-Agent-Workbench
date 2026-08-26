@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
@@ -2228,7 +2228,9 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [editingProposal, setEditingProposal] = useState(false);
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [capabilities, setCapabilities] = useState<ApiHealth["agent"] | null>(null);
+  const [capabilities, setCapabilities] = useState<ApiHealth | null>(null);
+  const [capabilityState, setCapabilityState] = useState<"loading" | "ready" | "error">("loading");
+  const [capabilityCheckedAt, setCapabilityCheckedAt] = useState<Date | null>(null);
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
   const [copyFeedback, setCopyFeedback] = useState<{ index: number; label: string } | null>(null);
   const agentRequest = useRef<AbortController | null>(null);
@@ -2241,12 +2243,29 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources, model: restoredAgentModel(message.metadata) })) : [{ role: "agent", text: agentWelcomeMessage }]);
   }
 
+  const refreshCapabilities = useCallback(async () => {
+    setCapabilityState("loading");
+    try {
+      setCapabilities(await api.health());
+      setCapabilityCheckedAt(new Date());
+      setCapabilityState("ready");
+    } catch {
+      setCapabilities(null);
+      setCapabilityState("error");
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void api.health().then((health) => {
-      if (!cancelled) setCapabilities(health.agent);
+      if (cancelled) return;
+      setCapabilities(health);
+      setCapabilityCheckedAt(new Date());
+      setCapabilityState("ready");
     }).catch(() => {
-      if (!cancelled) setCapabilities(null);
+      if (cancelled) return;
+      setCapabilities(null);
+      setCapabilityState("error");
     });
     return () => { cancelled = true; };
   }, []);
@@ -2441,8 +2460,11 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  const modelReady = !isDemo && capabilities?.model_configured;
-  const searchReady = !isDemo && capabilities?.web_search_configured;
+  const primaryModelReady = !isDemo && capabilities?.agent.primary_model_configured;
+  const fallbackModelReady = !isDemo && capabilities?.agent.fallback_model_configured;
+  const embeddingReady = !isDemo && capabilities?.rag.embedding_configured;
+  const ocrReady = !isDemo && capabilities?.ocr.configured;
+  const searchReady = !isDemo && capabilities?.agent.web_search_configured;
   return (
     <section className="content-view agent-view">
       <div className="view-title">
@@ -2456,16 +2478,48 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           <button className="outline-button" type="button" onClick={startNewConversation} disabled={busy}>＋ 新建对话</button>
         </div>
       </div>
-      <div className="agent-capabilities panel" aria-label="Agent 运行能力">
-        <div>
-          <span className={modelReady ? "ready" : "fallback"}>模型</span>
-          <strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong>
-          <small>{modelReady ? "可手动选择 DeepSeek Flash 或 Pro，故障时切换 Qwen" : "未配置模型 Key，不会伪装成模型回答"}</small>
+      <div className="agent-capability-panel panel" aria-label="云端能力状态">
+        <div className="agent-capability-toolbar">
+          <div>
+            <strong>云端能力状态</strong>
+            <small>
+              {capabilityState === "loading"
+                ? "正在读取后端配置…"
+                : capabilityState === "error"
+                  ? "后端暂时无法连接，请检查服务后重试"
+                  : `配置状态更新于 ${capabilityCheckedAt?.toLocaleTimeString("zh-CN", { hour12: false }) ?? "刚刚"}；实际调用异常会在对话中明确提示`}
+            </small>
+          </div>
+          <button type="button" className="outline-button" onClick={() => void refreshCapabilities()} disabled={capabilityState === "loading"}>
+            {capabilityState === "loading" ? "检查中…" : "重新检查配置"}
+          </button>
         </div>
-        <div>
-          <span className={searchReady ? "ready" : "fallback"}>联网</span>
-          <strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong>
-          <small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small>
+        <div className="agent-capabilities">
+          <div>
+            <span className={primaryModelReady ? "ready" : "fallback"}>主模型</span>
+            <strong>{primaryModelReady ? "DeepSeek 配置就绪" : "DeepSeek 未配置"}</strong>
+            <small>{primaryModelReady ? "支持 Flash 与 Pro，默认由用户手动选择" : "未配置 CHAT_API_KEY，无法生成真实回答"}</small>
+          </div>
+          <div>
+            <span className={fallbackModelReady ? "ready" : "fallback"}>备用</span>
+            <strong>{fallbackModelReady ? "Qwen 备用就绪" : "Qwen 备用未配置"}</strong>
+            <small>{fallbackModelReady ? "DeepSeek 超时、限流或服务异常时按档位接管" : "主模型异常时不会伪装成备用回答"}</small>
+          </div>
+          <div>
+            <span className={embeddingReady ? "ready" : "fallback"}>检索</span>
+            <strong>{embeddingReady ? "混合检索已配置" : "关键词检索模式"}</strong>
+            <small>{embeddingReady ? `${capabilities?.rag.embedding_model} · ${capabilities?.rag.embedding_dimensions} 维` : "Embedding 不可用时保留 PostgreSQL 全文检索"}</small>
+          </div>
+          <div>
+            <span className={ocrReady ? "ready" : "fallback"}>OCR</span>
+            <strong>{ocrReady ? "Qwen OCR 已配置" : "OCR 尚未就绪"}</strong>
+            <small>{ocrReady ? `${capabilities?.ocr.model} · PDF 渲染器已就绪` : capabilities?.ocr.renderer_configured ? "请检查 OCR Key 与模型配置" : "需要配置模型并安装 pdftoppm"}</small>
+          </div>
+          <div>
+            <span className={searchReady ? "ready" : "fallback"}>联网</span>
+            <strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong>
+            <small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small>
+          </div>
         </div>
       </div>
       <div className="agent-shell panel">
