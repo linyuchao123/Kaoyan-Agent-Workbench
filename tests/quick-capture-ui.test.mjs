@@ -21,3 +21,9 @@ test("快速记录保存后刷新今日工作台", () => {
   assert.match(pageSource, /setStudyRevision\(\(value\) => value \+ 1\)/);
   assert.match(pageSource, /setView\("today"\)/);
 });
+
+test("快速记录失败时显示中文云端提示且不暴露底层错误", () => {
+  const component = pageSource.slice(pageSource.indexOf("function QuickCapture"), pageSource.indexOf("function Workbench"));
+  assert.match(component, /studyWriteErrorMessage\(error, kind === "task" \? "快速创建任务" : "快速记录错题"\)/);
+  assert.doesNotMatch(component, /error\.message/);
+});

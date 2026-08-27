@@ -863,7 +863,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setMistakeStatus(isDemo ? "演示错题已加入当前复习列表" : "错题已写入云端并加入复习列表");
       setContributionRevision((value) => value + 1);
     } catch (error) {
-      setMistakeStatus(error instanceof Error ? `错题保存失败：${error.message}` : "错题保存失败");
+      setMistakeStatus(studyWriteErrorMessage(error, "保存错题"));
     } finally {
       setMistakeBusy(false);
     }
@@ -878,7 +878,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setMistakes((items) => items.filter((item) => item.id !== card.id));
       setMistakeStatus(`“${card.title}”复习完成，第 ${reviewed.review_count} 次记录已保存`);
     } catch (error) {
-      setMistakeStatus(error instanceof Error ? `复习记录失败：${error.message}` : "复习记录失败");
+      setMistakeStatus(studyWriteErrorMessage(error, "保存复习记录"));
     } finally {
       setReviewBusyId(null);
     }
@@ -3042,7 +3042,7 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
       onSaved();
       onClose();
     } catch (error) {
-      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+      setStatus(studyWriteErrorMessage(error, kind === "task" ? "快速创建任务" : "快速记录错题"));
     } finally {
       setBusy(false);
     }
