@@ -19,3 +19,11 @@ test("认证页面不再直接展示 Supabase 英文错误原文", () => {
   assert.match(pageSource, /setStatus\(authRequestErrorMessage\(result\.error, mode\)\)/);
   assert.match(pageSource, /setStatus\(authRequestErrorMessage\(error, mode\)\)/);
 });
+
+test("登录注册页可以显示或隐藏密码并同步无障碍状态", () => {
+  assert.match(pageSource, /const \[passwordVisible, setPasswordVisible\] = useState\(false\)/);
+  assert.match(pageSource, /type=\{passwordVisible \? "text" : "password"\}/);
+  assert.match(pageSource, /aria-label=\{passwordVisible \? "隐藏密码" : "显示密码"\}/);
+  assert.match(pageSource, /aria-pressed=\{passwordVisible\}/);
+  assert.match(pageSource, /setPasswordVisible\(false\)/);
+});

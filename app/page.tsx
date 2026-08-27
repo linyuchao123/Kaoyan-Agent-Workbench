@@ -2745,6 +2745,7 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
 
@@ -2788,11 +2789,11 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
           <p>{mode === "login" ? "登录后继续今天的学习闭环。" : "第一版使用邮箱和密码注册。"}</p>
           <form onSubmit={submit}>
             <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>
-            <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /></label>
+            <label>密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
             <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : "注册账户"}</button>
           </form>
           {status && <div className="auth-status" role="status">{status}</div>}
-          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "已有账户？返回登录"}</button>
+          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "已有账户？返回登录"}</button>
         </div>
       </section>
     </main>
