@@ -88,6 +88,17 @@ function studyWriteErrorMessage(error: unknown, action: string) {
   return `${action}失败，请稍后重试。${safetyNotice}`;
 }
 
+function exportRequestErrorMessage(error: unknown) {
+  const safetyNotice = "本次导出没有修改任何云端学习数据。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `导出失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `导出失败：云端拒绝了本次请求，请检查导出格式和账户权限。${safetyNotice}`;
+    if (error.status >= 500) return `导出失败：云端备份服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `导出失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `导出失败，请稍后重试。${safetyNotice}`;
+}
+
 function documentIngestionCopy(document: ApiDocument) {
   const copies: Record<ApiDocument["ingestion_status"], { label: string; description: string }> = {
     queued: { label: "等待处理", description: "文件已安全保存，正在等待解析任务" },
@@ -2055,6 +2066,7 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
   const [status, setStatus] = useState(isDemo ? "离线演示模式不会生成真实账户备份" : "选择格式后即可下载当前账户数据");
 
   async function exportData() {
+    if (busy) return;
     if (isDemo) {
       setStatus("请登录 Supabase 账户后导出你的真实数据");
       return;
@@ -2073,7 +2085,7 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
       URL.revokeObjectURL(url);
       setStatus(`下载完成：${result.filename}`);
     } catch (error) {
-      setStatus(error instanceof Error ? `导出失败：${error.message}` : "导出失败，请稍后重试");
+      setStatus(exportRequestErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -2081,8 +2093,8 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
 
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">数据可携带与长期归档</div><h1>数据备份</h1><p>随时导出自己的核心记录，服务器仍是在线使用时的最终事实来源。</p></div></div>
-    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
-    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <button type="button" className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></button>)}</div>
+    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} disabled={busy} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
+    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <button type="button" disabled={busy} className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></button>)}</div>
     <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>当前导出包含已结构化的核心数据；资料库原始文件与检索索引的完整备份将在后续版本补齐。</p></section>
   </section>;
 }
