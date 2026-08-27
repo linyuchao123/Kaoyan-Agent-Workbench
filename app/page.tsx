@@ -940,6 +940,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
 
   async function addManualSession(event: FormEvent) {
     event.preventDefault();
+    if (manualBusy) return;
     setManualError("");
     if (manualDate > shanghaiDateKey(new Date())) {
       setManualError("不能补录未来的学习记录");
@@ -1008,7 +1009,9 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setManualNote("");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "云端写入失败";
-      setManualError(detail.includes("overlap") ? "该时间段与已有学习记录重叠，请调整后重试" : detail);
+      setManualError(detail.includes("overlap")
+        ? "该时间段与已有学习记录重叠，请调整后重试"
+        : studyWriteErrorMessage(error, "保存手动补录"));
     } finally {
       setManualBusy(false);
     }
@@ -1121,14 +1124,14 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
             <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus} disabled={focusSaving}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt || focusSaving}>{focusSaving ? "正在保存…" : "结束并记录"}</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt || focusSaving}>放弃</button></div>
           </section>
           <section className="panel manual-card">
-            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
+            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" disabled={manualBusy} onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
             {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
-              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
-              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务"><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
-              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
-              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
-              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
-              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
+              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} disabled={manualBusy} required /></label>
+              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务" disabled={manualBusy}><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={manualBusy || Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} disabled={manualBusy} required /></label>
+              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} disabled={manualBusy} required /></label>
+              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} disabled={manualBusy} /></label>
               {manualError && <p className="manual-error" role="alert">{manualError}</p>}
               <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
             </form>}
