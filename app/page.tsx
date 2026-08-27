@@ -76,6 +76,18 @@ function materialRequestErrorMessage(error: unknown, action: "load" | "upload" |
   return `${actionLabel}失败，请稍后重试。`;
 }
 
+function studyWriteErrorMessage(error: unknown, action: string) {
+  const safetyNotice = "本次变更未写入云端，页面已恢复到提交前状态。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${action}失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `${action}失败：云端拒绝了本次数据，请检查填写内容后重试。${safetyNotice}`;
+    if (error.status === 409) return `${action}失败：数据状态已发生变化，请刷新页面后重试。${safetyNotice}`;
+    if (error.status >= 500) return `${action}失败：云端数据服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `${action}失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `${action}失败，请稍后重试。${safetyNotice}`;
+}
+
 function documentIngestionCopy(document: ApiDocument) {
   const copies: Record<ApiDocument["ingestion_status"], { label: string; description: string }> = {
     queued: { label: "等待处理", description: "文件已安全保存，正在等待解析任务" },
@@ -509,6 +521,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
   const [contributionRevision, setContributionRevision] = useState(0);
+  const [newTaskBusy, setNewTaskBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSubject, setManualSubject] = useState<Subject>("math");
@@ -644,7 +657,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
 
   async function addTask(event: FormEvent) {
     event.preventDefault();
-    if (!newTask.trim()) return;
+    if (!newTask.trim() || newTaskBusy) return;
     const title = newTask.trim();
     const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
@@ -654,13 +667,18 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setRecordStatus("演示任务仅保留在当前页面");
       return;
     }
+    setNewTaskBusy(true);
     try {
       const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30, plan_id: newTaskPlanId || undefined });
       setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved, selectedPlan?.title) : item));
       setRecordStatus(selectedPlan ? `任务已关联日计划“${selectedPlan.title}”` : "任务已写入 Supabase 云端");
       void refreshDashboardMetrics();
-    } catch {
-      setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
+    } catch (error) {
+      setTasks((items) => items.filter((item) => item.id !== temporaryId));
+      setNewTask((current) => current || title);
+      setRecordStatus(studyWriteErrorMessage(error, "创建任务"));
+    } finally {
+      setNewTaskBusy(false);
     }
   }
 
@@ -1074,7 +1092,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </form>}
             </div>)}
           </div>
-          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划"><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
+          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目" disabled={newTaskBusy}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划" disabled={newTaskBusy}><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" disabled={newTaskBusy} /><button type="submit" disabled={newTaskBusy}>{newTaskBusy ? "正在保存…" : "添加"}</button></form>
           <p className="record-status">● {recordStatus}</p>
         </section>
 
