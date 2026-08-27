@@ -1262,6 +1262,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [editEndsOn, setEditEndsOn] = useState("");
   const [editStatus, setEditStatus] = useState<PlanStatus>("draft");
   const [editBusy, setEditBusy] = useState(false);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
   const [progressBusyId, setProgressBusyId] = useState<string | null>(null);
   const [selectedProgress, setSelectedProgress] = useState<{ plan: ApiPlan; progress: PlanProgress } | null>(null);
@@ -1287,6 +1288,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createStage(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     if (!title.trim() || !endsOn || endsOn < startsOn) {
       setStatus(endsOn && endsOn < startsOn ? "阶段结束日期不能早于开始日期" : "请完整填写阶段名称和日期");
       return;
@@ -1311,7 +1313,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setEndsOn("");
       setFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `阶段计划保存失败：${error.message}` : "阶段计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存阶段计划"));
     } finally {
       setBusy(false);
     }
@@ -1354,6 +1356,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createWeek(event: FormEvent) {
     event.preventDefault();
+    if (weekBusy) return;
     if (!weekParent || !weekTitle.trim() || !weekStartsOn || !weekEndsOn) {
       setStatus("请完整填写周计划的所属阶段、名称和日期");
       return;
@@ -1386,7 +1389,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setWeekDescription("");
       setWeekFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `周计划保存失败：${error.message}` : "周计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存周计划"));
     } finally {
       setWeekBusy(false);
     }
@@ -1414,6 +1417,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createDay(event: FormEvent) {
     event.preventDefault();
+    if (dayBusy) return;
     if (!dayParent || !dayTitle.trim() || !dayDate) {
       setStatus("请完整填写日计划的所属周、名称和日期");
       return;
@@ -1442,7 +1446,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setDayDescription("");
       setDayFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `日计划保存失败：${error.message}` : "日计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存日计划"));
     } finally {
       setDayBusy(false);
     }
@@ -1460,6 +1464,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function savePlanEdit(event: FormEvent) {
     event.preventDefault();
+    if (editBusy) return;
     if (!editingPlan || !editTitle.trim() || !editStartsOn || !editEndsOn) {
       setStatus("请完整填写计划名称和日期");
       return;
@@ -1494,28 +1499,33 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setStatus(isDemo ? "演示计划修改仅保留在当前页面" : "计划修改已同步到 Supabase 云端");
       setEditingPlan(null);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划修改失败：${error.message}` : "计划修改失败");
+      setStatus(studyWriteErrorMessage(error, "修改计划"));
     } finally {
       setEditBusy(false);
     }
   }
 
   async function removePlan(plan: ApiPlan) {
+    if (deleteBusyId) return;
     const ids = planCascadeIds(plans, plan.id);
     const childCount = ids.size - 1;
     const suffix = childCount ? `，并同时删除 ${childCount} 条子计划` : "";
     if (!window.confirm(`确定删除“${plan.title}”${suffix}吗？此操作无法撤销。`)) return;
+    setDeleteBusyId(plan.id);
     try {
       if (!isDemo) await api.deletePlan(plan.id);
       setPlans((items) => items.filter((item) => !ids.has(item.id)));
       if (editingPlan?.id && ids.has(editingPlan.id)) setEditingPlan(null);
       setStatus(isDemo ? "演示计划已从当前页面移除" : "计划已从 Supabase 云端删除");
     } catch (error) {
-      setStatus(error instanceof Error ? `计划删除失败：${error.message}` : "计划删除失败");
+      setStatus(studyWriteErrorMessage(error, "删除计划"));
+    } finally {
+      setDeleteBusyId(null);
     }
   }
 
   async function changePlanStatus(plan: ApiPlan) {
+    if (statusBusyId) return;
     const next = nextPlanStatus(plan);
     setStatusBusyId(plan.id);
     try {
@@ -1531,7 +1541,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? `演示计划已标记为${planStatusLabel[saved.status]}`
         : `计划已同步为${planStatusLabel[saved.status]}`);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划状态修改失败：${error.message}` : "计划状态修改失败");
+      setStatus(studyWriteErrorMessage(error, "修改计划状态"));
     } finally {
       setStatusBusyId(null);
     }
@@ -1579,7 +1589,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       <label className="plan-description">计划目标<textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={2000} /></label>
       <div className="plan-form-actions"><button type="button" onClick={() => setEditingPlan(null)} disabled={editBusy}>取消</button><button className="primary-button" type="submit" disabled={editBusy}>{editBusy ? "正在保存…" : "保存修改"}</button></div>
     </form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button type="button" disabled={progressBusyId === stage.id} onClick={() => void showPlanProgress(stage)}>{progressBusyId === stage.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === stage.id} onClick={() => void changePlanStatus(stage)}>{statusBusyId === stage.id ? "同步中…" : nextPlanStatus(stage).label}</button><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(stage)}>删除</button></div></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button type="button" disabled={progressBusyId === stage.id} onClick={() => void showPlanProgress(stage)}>{progressBusyId === stage.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === stage.id} onClick={() => void changePlanStatus(stage)}>{statusBusyId === stage.id ? "同步中…" : nextPlanStatus(stage).label}</button><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(stage)}>{deleteBusyId === stage.id ? "删除中…" : "删除"}</button></div></div></article>)}</div>}
     <section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">周计划</div><h2>{weeks.length ? `${weeks.length} 个周计划` : "尚未建立周计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleWeekForm}>{weekFormOpen ? "收起" : "＋ 新建周计划"}</button></div></div>
       {weekFormOpen && <form className="plan-form week-plan-form" onSubmit={createWeek}>
         <label className="plan-title">所属阶段<select value={weekParentId} onChange={(event) => selectWeekParent(event.target.value)} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.title}（{stage.starts_on} 至 {stage.ends_on}）</option>)}</select></label>
@@ -1589,7 +1599,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">本周重点<textarea value={weekDescription} onChange={(event) => setWeekDescription(event.target.value)} placeholder="这一周最重要的学习结果是什么？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setWeekFormOpen(false)} disabled={weekBusy}>取消</button><button className="primary-button" type="submit" disabled={weekBusy}>{weekBusy ? "正在保存…" : "保存周计划"}</button></div>
       </form>}
-      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === week.id} onClick={() => void showPlanProgress(week)}>{progressBusyId === week.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === week.id} onClick={() => void changePlanStatus(week)}>{statusBusyId === week.id ? "同步中…" : nextPlanStatus(week).label}</button><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(week)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
+      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === week.id} onClick={() => void showPlanProgress(week)}>{progressBusyId === week.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === week.id} onClick={() => void changePlanStatus(week)}>{statusBusyId === week.id ? "同步中…" : nextPlanStatus(week).label}</button><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(week)}>{deleteBusyId === week.id ? "删除中…" : "删除"}</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
     </section>
     <section className="panel daily-plan"><div className="panel-heading"><div><div className="eyebrow">日计划</div><h2>{days.length ? `${days.length} 个日计划` : "尚未安排日计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleDayForm}>{dayFormOpen ? "收起" : "＋ 新建日计划"}</button></div></div>
       {dayFormOpen && <form className="plan-form week-plan-form" onSubmit={createDay}>
@@ -1599,7 +1609,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">当天成果<textarea value={dayDescription} onChange={(event) => setDayDescription(event.target.value)} placeholder="完成哪些章节、题目或复盘？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setDayFormOpen(false)} disabled={dayBusy}>取消</button><button className="primary-button" type="submit" disabled={dayBusy}>{dayBusy ? "正在保存…" : "保存日计划"}</button></div>
       </form>}
-      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === day.id} onClick={() => void showPlanProgress(day)}>{progressBusyId === day.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === day.id} onClick={() => void changePlanStatus(day)}>{statusBusyId === day.id ? "同步中…" : nextPlanStatus(day).label}</button><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(day)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
+      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === day.id} onClick={() => void showPlanProgress(day)}>{progressBusyId === day.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === day.id} onClick={() => void changePlanStatus(day)}>{statusBusyId === day.id ? "同步中…" : nextPlanStatus(day).label}</button><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(day)}>{deleteBusyId === day.id ? "删除中…" : "删除"}</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
     </section>
   </section>;
 }
