@@ -27,3 +27,11 @@ test("资料列表支持重新解析并自动轮询 OCR 状态", () => {
   assert.match(pageSource, /window\.setInterval/);
   assert.match(pageSource, /页面会自动刷新处理状态/);
 });
+
+test("资料列表解释每个处理阶段并提供可操作失败提示", () => {
+  assert.match(pageSource, /function documentIngestionCopy/);
+  assert.match(pageSource, /正在提取原文、切分片段并生成检索索引/);
+  assert.match(pageSource, /已识别为扫描 PDF，正在等待逐页文字识别/);
+  assert.match(pageSource, /处理建议：确认文件可正常打开、云端模型额度充足后重新处理/);
+  assert.match(pageSource, /function materialRequestErrorMessage/);
+});

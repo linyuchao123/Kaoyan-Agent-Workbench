@@ -62,6 +62,31 @@ function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "com
   return `Agent 请求失败，请稍后重试。${modeNotice}${safetyNotice}`;
 }
 
+function materialRequestErrorMessage(error: unknown, action: "load" | "upload" | "preview" | "import" | "search" | "reindex") {
+  const actionLabel = { load: "加载资料", upload: "导入资料", preview: "生成链接预览", import: "保存网页资料", search: "检索资料", reindex: "重新解析资料" }[action];
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${actionLabel}失败：登录状态已失效，请重新登录。`;
+    if (error.status === 409) return `${actionLabel}失败：云端已有相同内容，请刷新资料列表后重试。`;
+    if (error.status === 413) return `${actionLabel}失败：文件超过 25 MB 上限。`;
+    if (error.status === 415) return `${actionLabel}失败：目前只支持 PDF 与 Markdown。`;
+    if (error.status === 422) return `${actionLabel}失败：文件或链接内容无法解析，请检查后重试。`;
+    if (error.status >= 500) return `${actionLabel}失败：云端存储、解析或模型服务暂时不可用，请稍后重试。`;
+  }
+  if (error instanceof TypeError) return `${actionLabel}失败：无法连接本地后端，请确认 8000 端口服务已启动。`;
+  return `${actionLabel}失败，请稍后重试。`;
+}
+
+function documentIngestionCopy(document: ApiDocument) {
+  const copies: Record<ApiDocument["ingestion_status"], { label: string; description: string }> = {
+    queued: { label: "等待处理", description: "文件已安全保存，正在等待解析任务" },
+    processing: { label: "正在建立索引", description: "正在提取原文、切分片段并生成检索索引" },
+    ocr_required: { label: "等待 OCR", description: "已识别为扫描 PDF，正在等待逐页文字识别" },
+    ready: { label: "可以检索", description: "解析与索引已完成，可用于资料检索和 Agent 回答" },
+    failed: { label: "处理失败", description: "本次处理未完成，可点击“重新处理”再次尝试" },
+  };
+  return copies[document.ingestion_status];
+}
+
 const scopes: { key: Scope; label: string }[] = [
   { key: "all", label: "全部" },
   { key: "math", label: "数学" },
@@ -2063,7 +2088,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setDocs([]);
-        setImportStatus(error instanceof Error ? `资料加载失败：${error.message}` : "资料加载失败");
+        setImportStatus(materialRequestErrorMessage(error, "load"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -2093,7 +2118,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setDocs((items) => [result, ...items.filter((item) => item.id !== result.id)]);
       setImportStatus(result.duplicate ? "检测到相同文件，已复用云端资料与索引" : `导入完成 · ${status} · ${result.flagged_chunk_count} 个片段需要安全复核`);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `导入失败：${error.message}` : "导入失败");
+      setImportStatus(materialRequestErrorMessage(error, "upload"));
     } finally {
       setBusy(false);
       event.target.value = "";
@@ -2113,7 +2138,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setImportStatus(`已生成待确认提案：${preview.summary}`);
       setImportProposal(preview);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `链接预览失败：${error.message}` : "链接预览失败");
+      setImportStatus(materialRequestErrorMessage(error, "preview"));
     } finally {
       setBusy(false);
     }
@@ -2130,7 +2155,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setSourceUrl("");
       setImportStatus(result.duplicate ? "该内容已存在，已复用原资料" : "网页资料已确认并完成入库");
     } catch (error) {
-      setImportStatus(error instanceof Error ? `网页入库失败：${error.message}` : "网页入库失败");
+      setImportStatus(materialRequestErrorMessage(error, "import"));
     } finally {
       setBusy(false);
     }
@@ -2154,7 +2179,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setSearchStatus(results.length ? `在${scopeLabel}中找到 ${results.length} 个相关原文片段` : `在${scopeLabel}中没有找到匹配内容，请更换关键词`);
     } catch (error) {
       setSearchResults([]);
-      setSearchStatus(error instanceof Error ? `检索失败：${error.message}` : "检索失败，请稍后重试");
+      setSearchStatus(materialRequestErrorMessage(error, "search"));
     } finally {
       setSearchBusy(false);
     }
@@ -2173,13 +2198,12 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
         ? "已进入 OCR 重建队列，页面会自动刷新处理状态"
         : `重新解析完成 · 分块 v${result.chunking_version ?? 2} · ${result.chunk_count ?? 0} 个片段`);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `重新解析失败：${error.message}` : "重新解析失败");
+      setImportStatus(materialRequestErrorMessage(error, "reindex"));
     } finally {
       setReindexingId(null);
     }
   }
 
-  const ingestionLabels: Record<ApiDocument["ingestion_status"], string> = { queued: "等待处理", processing: "正在处理", ocr_required: "等待 OCR", ready: "索引就绪", failed: "处理失败" };
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div>
@@ -2194,13 +2218,14 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       </section>
       <section className="panel material-list">
         <div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>
-        {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}>
+        {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => { const ingestionCopy = documentIngestionCopy(doc); return <div className="document-row" key={doc.id}>
           <span className="document-icon">▤</span>
           <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>
           <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
-          <span className={`document-status status-${doc.ingestion_status}`} title={doc.ingestion_error || undefined}>● {ingestionLabels[doc.ingestion_status]}</span>
+          <span className={`document-status status-${doc.ingestion_status}`}><strong>● {ingestionCopy.label}</strong><small>{ingestionCopy.description}</small></span>
           <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
-        </div>)}
+          {doc.ingestion_status === "failed" && <p className="document-error" role="alert">处理建议：确认文件可正常打开、云端模型额度充足后重新处理。{doc.ingestion_error ? "后台已记录详细错误，便于继续排查。" : ""}</p>}
+        </div>; })}
       </section>
     </div>
     <section className="panel private-search-panel">
