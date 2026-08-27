@@ -683,16 +683,21 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   async function toggleTask(task: Task) {
+    if (taskBusyId === task.id) return;
     const completed = !task.done;
     setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: completed } : item));
     if (task.id.startsWith("demo-") || task.id.startsWith("local-")) return;
+    setTaskBusyId(task.id);
     try {
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
-    } catch {
-      setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    } catch (error) {
+      setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: task.done } : item));
+      setRecordStatus(studyWriteErrorMessage(error, completed ? "完成任务" : "恢复任务"));
+    } finally {
+      setTaskBusyId(null);
     }
   }
 
@@ -1072,7 +1077,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
             {tasks.map((task) => <div className={`task-item-shell ${task.done ? "done" : ""}`} key={task.id}>
               <div className="task-item">
                 <label className="task-check" aria-label={`${task.done ? "恢复" : "完成"}任务 ${task.title}`}>
-                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
+                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} disabled={taskBusyId === task.id} />
                   <span className="fake-check">✓</span>
                 </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>

@@ -34,3 +34,10 @@ test("任务创建期间禁用表单以避免重复提交", () => {
   assert.match(pageSource, /setNewTaskBusy\(false\)/);
   assert.match(pageSource, /newTaskBusy \? "正在保存…" : "添加"/);
 });
+
+test("任务完成状态同步失败时恢复云端确认前的状态", () => {
+  assert.match(pageSource, /if \(taskBusyId === task\.id\) return/);
+  assert.match(pageSource, /item\.id === task\.id \? \{ \.\.\.item, done: task\.done \} : item/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, completed \? "完成任务" : "恢复任务"\)/);
+  assert.match(pageSource, /checked=\{task\.done\}.*disabled=\{taskBusyId === task\.id\}/);
+});
