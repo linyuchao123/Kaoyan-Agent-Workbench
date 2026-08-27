@@ -1901,6 +1901,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ApiCareerItem | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [itemType, setItemType] = useState<CareerItemType>("milestone");
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
@@ -1973,6 +1974,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
 
   async function saveItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (isDemo) {
       setMessage("离线演示模式不会写入真实求职记录，请登录后使用");
       return;
@@ -1999,27 +2001,28 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       resetForm();
       setFormOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+      setMessage(studyWriteErrorMessage(error, editingItem ? "修改求职记录" : "保存求职记录"));
     } finally {
       setBusy(false);
     }
   }
 
   async function removeItem(item: ApiCareerItem) {
+    if (deleteBusyId) return;
     if (isDemo) {
       setMessage("演示求职记录不会被删除");
       return;
     }
     if (!window.confirm(`确认删除“${item.title}”吗？`)) return;
-    setBusy(true);
+    setDeleteBusyId(item.id);
     try {
       await api.deleteCareerItem(item.id);
       setItems((records) => records.filter((record) => record.id !== item.id));
       setMessage(`已删除：${item.title}`);
     } catch (error) {
-      setMessage(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+      setMessage(studyWriteErrorMessage(error, "删除求职记录"));
     } finally {
-      setBusy(false);
+      setDeleteBusyId(null);
     }
   }
 
@@ -2036,7 +2039,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
     <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
     {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
   </section>;
 }
 
