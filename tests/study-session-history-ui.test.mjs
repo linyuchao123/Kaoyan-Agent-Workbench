@@ -18,3 +18,10 @@ test("学习记录使用上海时区筛选并展示有效分钟", () => {
   assert.match(pageSource, /function studySessionMinutes/);
   assert.match(pageSource, /timeZone: "Asia\/Shanghai"/);
 });
+
+test("学习记录删除期间防止重复请求并转换错误", () => {
+  assert.match(pageSource, /if \(sessionBusyId\) return/);
+  assert.match(pageSource, /setSessionBusyId\(session\.id\)/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "删除学习记录"\)/);
+  assert.match(pageSource, /sessionBusyId === session\.id \? "删除中" : "删除"/);
+});

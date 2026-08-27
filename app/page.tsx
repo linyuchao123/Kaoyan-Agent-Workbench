@@ -1018,6 +1018,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   async function deleteStudySession(session: ApiStudySession) {
+    if (sessionBusyId) return;
     if (!window.confirm(`确定删除这条${subjectMeta[session.subject].label}学习记录吗？`)) return;
     if (isDemo || session.id.startsWith("demo-session-")) {
       setTodaySessions((items) => items.filter((item) => item.id !== session.id));
@@ -1036,7 +1037,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setContributionRevision((value) => value + 1);
       await refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `学习记录删除失败：${error.message}` : "学习记录删除失败");
+      setRecordStatus(studyWriteErrorMessage(error, "删除学习记录"));
     } finally {
       setSessionBusyId(null);
     }
