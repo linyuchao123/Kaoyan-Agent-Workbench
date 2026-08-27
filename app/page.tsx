@@ -99,6 +99,17 @@ function exportRequestErrorMessage(error: unknown) {
   return `导出失败，请稍后重试。${safetyNotice}`;
 }
 
+function cloudReadErrorMessage(error: unknown, resource: string) {
+  const safetyNotice = "已有云端数据不会受到影响。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${resource}加载失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `${resource}加载失败：请求被云端拒绝，请刷新页面并检查账户权限。${safetyNotice}`;
+    if (error.status >= 500) return `${resource}加载失败：云端数据服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `${resource}加载失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `${resource}加载失败，请稍后重试。${safetyNotice}`;
+}
+
 function documentIngestionCopy(document: ApiDocument) {
   const copies: Record<ApiDocument["ingestion_status"], { label: string; description: string }> = {
     queued: { label: "等待处理", description: "文件已安全保存，正在等待解析任务" },
@@ -1289,7 +1300,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         setStatus(items.length ? `已从云端同步 ${items.length} 条计划` : "云端还没有计划，可以创建第一个阶段计划");
       })
       .catch((error) => {
-        if (active) setStatus(error instanceof Error ? `计划加载失败：${error.message}` : "计划加载失败");
+        if (active) setStatus(cloudReadErrorMessage(error, "计划"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1573,7 +1584,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setSelectedProgress({ plan, progress });
       setStatus(isDemo ? "当前显示演示统计" : `已读取“${plan.title}”的云端统计`);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划统计加载失败：${error.message}` : "计划统计加载失败");
+      setStatus(cloudReadErrorMessage(error, "计划统计"));
     } finally {
       setProgressBusyId(null);
     }
@@ -1658,7 +1669,7 @@ function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolea
       setStatus("已根据任务、学习时长和错题记录生成真实统计");
     } catch (error) {
       setSummaries([]);
-      setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+      setStatus(cloudReadErrorMessage(error, "学科统计"));
     } finally {
       setLoading(false);
     }
@@ -1676,7 +1687,7 @@ function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolea
       .catch((error: unknown) => {
         if (!active) return;
         setSummaries([]);
-        setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+        setStatus(cloudReadErrorMessage(error, "学科统计"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1752,7 +1763,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setSchools([]);
-        setStatus(error instanceof Error ? `院校情报加载失败：${error.message}` : "院校情报加载失败");
+        setStatus(cloudReadErrorMessage(error, "院校情报"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1932,7 +1943,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setItems([]);
-        setMessage(error instanceof Error ? `求职记录加载失败：${error.message}` : "求职记录加载失败");
+        setMessage(cloudReadErrorMessage(error, "求职记录"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -2810,7 +2821,7 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
       ]);
       setStatus("搜索范围仅包含当前账户的云端数据");
     }).catch((error) => {
-      if (active) setStatus(error instanceof Error ? `搜索数据加载失败：${error.message}` : "搜索数据加载失败");
+      if (active) setStatus(cloudReadErrorMessage(error, "搜索数据"));
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -2916,7 +2927,7 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
     }).catch((error) => {
       if (!active) return;
       loadedOnce.current = true;
-      setStatus(error instanceof Error ? `待处理事项加载失败：${error.message}` : "待处理事项加载失败");
+      setStatus(cloudReadErrorMessage(error, "待处理事项"));
       setLoading(false);
     });
     return () => { active = false; };
