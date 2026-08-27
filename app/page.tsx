@@ -500,6 +500,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   const [focusTaskId, setFocusTaskId] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
+  const [focusSaving, setFocusSaving] = useState(false);
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
@@ -865,7 +866,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   function cancelFocus() {
-    if (!sessionStartedAt || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
+    if (!sessionStartedAt || focusSaving || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
     setRunning(false);
     setSessionStartedAt(null);
     setPauseStartedAt(null);
@@ -876,7 +877,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   async function finishFocus() {
-    if (!sessionStartedAt) return;
+    if (!sessionStartedAt || focusSaving) return;
     const endedAt = new Date();
     const linkedTask = tasks.find((task) => task.id === focusTaskId);
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
@@ -905,6 +906,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setFocusTaskId("");
       return;
     }
+    setFocusSaving(true);
     try {
       const saved = await api.createSession({
         task_id: linkedTask?.id,
@@ -927,10 +929,12 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setPausedSeconds(0);
       setSeconds(0);
       setFocusTaskId("");
-    } catch {
-      setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
+    } catch (error) {
+      setRecordStatus(studyWriteErrorMessage(error, "保存专注记录"));
       setPausedSeconds(finalPausedSeconds);
       setPauseStartedAt(endedAt);
+    } finally {
+      setFocusSaving(false);
     }
   }
 
@@ -1114,7 +1118,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </> : <span className="focus-session-copy"><span>自由专注 · {subjectMeta[focusSubject].label}</span><strong>本次已计入 {formatMinutes(focusSessionMinutes)}</strong></span>}
               {!running && <small>计时已暂停，暂停期间不计入有效学习时长</small>}
             </div>}
-            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt}>放弃</button></div>
+            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus} disabled={focusSaving}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt || focusSaving}>{focusSaving ? "正在保存…" : "结束并记录"}</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt || focusSaving}>放弃</button></div>
           </section>
           <section className="panel manual-card">
             <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
