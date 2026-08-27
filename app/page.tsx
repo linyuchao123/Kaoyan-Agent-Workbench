@@ -38,6 +38,36 @@ type StoredFocusSession = {
   running: boolean;
 };
 
+function authRequestErrorMessage(error: unknown, mode: "login" | "register") {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+  const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+
+  if (details.includes("email_not_confirmed") || details.includes("email not confirmed")) {
+    return "邮箱尚未验证，请先打开验证邮件完成确认后再登录。";
+  }
+  if (details.includes("invalid_credentials") || details.includes("invalid login credentials")) {
+    return "邮箱或密码错误，请检查后重新登录。";
+  }
+  if (details.includes("user_already_exists") || details.includes("already registered")) {
+    return "该邮箱已经注册，请直接返回登录。";
+  }
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("signup_disabled") || details.includes("signups not allowed")) {
+    return "当前云端项目暂未开放邮箱注册，请联系管理员检查 Supabase Auth 设置。";
+  }
+  if (status === 429 || details.includes("over_email_send_rate_limit") || details.includes("rate limit")) {
+    return "操作过于频繁，请稍后再试；如果正在注册，请避免重复发送验证邮件。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return `${mode === "login" ? "登录" : "注册"}失败，请检查填写内容后重试；若问题持续，请检查 Supabase Auth 配置。`;
+}
+
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
   const safetyNotice = "本次请求没有写入学习数据。";
   if (error instanceof ApiError) {
@@ -2729,15 +2759,15 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
         ? await client.auth.signInWithPassword({ email: email.trim(), password })
         : await client.auth.signUp({ email: email.trim(), password });
       if (result.error) {
-        setStatus(result.error.message);
+        setStatus(authRequestErrorMessage(result.error, mode));
       } else if (mode === "register" && !result.data.session) {
         setStatus("注册成功，请前往邮箱完成验证后登录。");
         setMode("login");
       } else {
         setStatus("登录成功，正在加载你的学习数据…");
       }
-    } catch {
-      setStatus("暂时无法连接登录服务，请检查网络后重试。");
+    } catch (error) {
+      setStatus(authRequestErrorMessage(error, mode));
     } finally {
       setBusy(false);
     }
