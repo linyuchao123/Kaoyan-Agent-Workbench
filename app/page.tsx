@@ -713,6 +713,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
 
   async function saveTaskEdit(event: FormEvent, task: Task) {
     event.preventDefault();
+    if (taskBusyId) return;
     const title = editTaskTitle.trim();
     if (!title || editTaskMinutes < 1 || editTaskMinutes > 1440) {
       setRecordStatus("请填写任务标题，预计时长需在 1–1440 分钟之间");
@@ -747,13 +748,14 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setRecordStatus("任务修改已同步至 Supabase 云端");
       void refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `任务修改失败：${error.message}` : "任务修改失败");
+      setRecordStatus(studyWriteErrorMessage(error, "修改任务"));
     } finally {
       setTaskBusyId(null);
     }
   }
 
   async function deleteTask(task: Task) {
+    if (taskBusyId) return;
     if (focusTaskId === task.id && sessionStartedAt) {
       setRecordStatus("该任务正在专注计时，请先结束并记录本次专注");
       return;
@@ -778,7 +780,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `任务删除失败：${error.message}` : "任务删除失败");
+      setRecordStatus(studyWriteErrorMessage(error, "删除任务"));
     } finally {
       setTaskBusyId(null);
     }

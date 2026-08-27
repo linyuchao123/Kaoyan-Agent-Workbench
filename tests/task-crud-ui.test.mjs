@@ -41,3 +41,12 @@ test("任务完成状态同步失败时恢复云端确认前的状态", () => {
   assert.match(pageSource, /studyWriteErrorMessage\(error, completed \? "完成任务" : "恢复任务"\)/);
   assert.match(pageSource, /checked=\{task\.done\}.*disabled=\{taskBusyId === task\.id\}/);
 });
+
+test("任务修改与删除期间防止重复请求并转换云端错误", () => {
+  assert.match(pageSource, /async function saveTaskEdit[\s\S]*?if \(taskBusyId\) return;/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "修改任务"\)/);
+  assert.match(pageSource, /async function deleteTask[\s\S]*?if \(taskBusyId\) return;/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "删除任务"\)/);
+  assert.match(pageSource, /taskBusyId === task\.id \? "正在保存…" : "保存修改"/);
+  assert.match(pageSource, /taskBusyId === task\.id \? "处理中" : "删除"/);
+});
