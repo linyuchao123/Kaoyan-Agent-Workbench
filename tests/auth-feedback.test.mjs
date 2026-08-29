@@ -29,11 +29,22 @@ test("登录注册页可以显示或隐藏密码并同步无障碍状态", () =>
 });
 
 test("登录页支持发送密码重置邮件并提供中文反馈", () => {
-  assert.match(pageSource, /useState<"login" \| "register" \| "forgot">\("login"\)/);
+  assert.match(pageSource, /useState<"login" \| "register" \| "forgot" \| "reset">\(recoveryMode \? "reset" : "login"\)/);
   assert.match(pageSource, /client\.auth\.resetPasswordForEmail\(email\.trim\(\),/);
   assert.match(pageSource, /redirectTo: window\.location\.origin/);
   assert.match(pageSource, /如果该邮箱已注册，密码重置邮件会在几分钟内送达/);
   assert.match(pageSource, /function passwordResetRequestErrorMessage\(error: unknown\)/);
   assert.match(pageSource, /忘记密码？/);
   assert.match(pageSource, /发送重置邮件/);
+});
+
+test("重置邮件回跳后可以校验并保存新密码", () => {
+  assert.match(pageSource, /event === "PASSWORD_RECOVERY"/);
+  assert.match(pageSource, /if \(passwordRecovery\) return <AuthScreen recoveryMode/);
+  assert.match(pageSource, /client\.auth\.updateUser\(\{ password \}\)/);
+  assert.match(pageSource, /password !== passwordConfirmation/);
+  assert.match(pageSource, /两次输入的新密码不一致/);
+  assert.match(pageSource, /client\.auth\.signOut\(\{ scope: "local" \}\)/);
+  assert.match(pageSource, /密码已更新，请使用新密码登录工作台/);
+  assert.match(pageSource, /function passwordUpdateErrorMessage\(error: unknown\)/);
 });

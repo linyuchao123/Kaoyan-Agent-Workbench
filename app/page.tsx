@@ -83,6 +83,26 @@ function passwordResetRequestErrorMessage(error: unknown) {
   return "暂时无法发送密码重置邮件，请稍后重试或检查 Supabase Auth 配置。";
 }
 
+function passwordUpdateErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "新密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("same_password") || details.includes("different from the old password")) {
+    return "新密码不能与原密码相同，请更换后再试。";
+  }
+  if (details.includes("session") || details.includes("expired") || details.includes("invalid token")) {
+    return "密码重置链接已失效，请返回登录页重新发送邮件。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "新密码保存失败，请重新打开最新的重置邮件后再试。";
+}
+
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
   const safetyNotice = "本次请求没有写入学习数据。";
   if (error instanceof ApiError) {
@@ -2756,16 +2776,18 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   );
 }
 
-function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
-  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
+function AuthScreen({ initialStatus = "", recoveryMode = false, onRecoveryComplete }: { initialStatus?: string; recoveryMode?: boolean; onRecoveryComplete?: (notice: string) => void }) {
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(recoveryMode ? "reset" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (mode === "forgot" || mode === "reset") return;
     const client = getSupabaseClient();
     if (!client || busy) return;
     setBusy(true);
@@ -2811,6 +2833,31 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
     }
   }
 
+  async function updatePassword(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    if (password !== passwordConfirmation) {
+      setStatus("两次输入的新密码不一致，请重新确认。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      const { error } = await client.auth.updateUser({ password });
+      if (error) {
+        setStatus(passwordUpdateErrorMessage(error));
+        return;
+      }
+      await client.auth.signOut({ scope: "local" });
+      onRecoveryComplete?.("密码已更新，请使用新密码登录工作台。");
+    } catch (error) {
+      setStatus(passwordUpdateErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="auth-shell">
       <section className="auth-brand-panel">
@@ -2822,16 +2869,17 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
       <section className="auth-form-panel">
         <div className="auth-card">
           <span className="auth-kicker">SUPABASE CLOUD</span>
-          <h2>{mode === "login" ? "欢迎回来" : mode === "register" ? "创建学习账户" : "找回密码"}</h2>
-          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : mode === "register" ? "第一版使用邮箱和密码注册。" : "输入注册邮箱，我们会发送安全的密码重置链接。"}</p>
-          <form onSubmit={mode === "forgot" ? requestPasswordReset : submit}>
-            <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>
-            {mode !== "forgot" && <label>密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>}
+          <h2>{mode === "login" ? "欢迎回来" : mode === "register" ? "创建学习账户" : mode === "forgot" ? "找回密码" : "设置新密码"}</h2>
+          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : mode === "register" ? "第一版使用邮箱和密码注册。" : mode === "forgot" ? "输入注册邮箱，我们会发送安全的密码重置链接。" : "重置链接已验证，请为账户设置一个新的登录密码。"}</p>
+          <form onSubmit={mode === "forgot" ? requestPasswordReset : mode === "reset" ? updatePassword : submit}>
+            {mode !== "reset" && <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>}
+            {mode !== "forgot" && <label>{mode === "reset" ? "新密码" : "密码"}<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>}
+            {mode === "reset" && <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} autoComplete="new-password" minLength={6} placeholder="再次输入新密码" required /></label>}
             {mode === "login" && <button className="auth-forgot" type="button" onClick={() => { setMode("forgot"); setPasswordVisible(false); setStatus(""); }}>忘记密码？</button>}
-            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : mode === "register" ? "注册账户" : "发送重置邮件"}</button>
+            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : mode === "register" ? "注册账户" : mode === "forgot" ? "发送重置邮件" : "保存新密码"}</button>
           </form>
           {status && <div className="auth-status" role="status">{status}</div>}
-          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "返回登录"}</button>
+          {mode !== "reset" && <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "返回登录"}</button>}
         </div>
       </section>
     </main>
@@ -3179,6 +3227,7 @@ export default function Home() {
     user: null,
   }));
   const [authNotice, setAuthNotice] = useState("");
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
     const client = getSupabaseClient();
@@ -3198,8 +3247,9 @@ export default function Home() {
         setApiAccessToken(null);
         setAuthState({ status: "signed_out", user: null });
       });
-    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
       if (!active) return;
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
       setApiAccessToken(session?.access_token ?? null);
       setAuthState({ status: session ? "signed_in" : "signed_out", user: session?.user ?? null });
     });
@@ -3222,9 +3272,11 @@ export default function Home() {
     if (client) await client.auth.signOut();
     setApiAccessToken(null);
     setAuthNotice("");
+    setPasswordRecovery(false);
   }
 
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
+  if (passwordRecovery) return <AuthScreen recoveryMode onRecoveryComplete={(notice) => { setPasswordRecovery(false); setAuthNotice(notice); setAuthState({ status: "signed_out", user: null }); }} />;
   if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
   return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
 }
