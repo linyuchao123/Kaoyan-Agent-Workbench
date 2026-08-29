@@ -115,12 +115,12 @@ function accountPasswordUpdateErrorMessage(error: unknown) {
     return "新密码不能与原密码相同，请更换后再试。";
   }
   if (details.includes("session") || details.includes("expired") || details.includes("invalid token")) {
-    return "登录状态已失效，请退出后重新登录再修改密码。";
+    return "登录状态已失效，请退出后重新登录再修改账户设置。";
   }
   if (details.includes("failed to fetch") || details.includes("network")) {
     return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
   }
-  return "密码修改失败，请稍后重试。";
+  return "账户设置保存失败，请稍后重试。";
 }
 
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
@@ -2798,6 +2798,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
 
 function AuthScreen({ initialStatus = "", recoveryMode = false, onRecoveryComplete }: { initialStatus?: string; recoveryMode?: boolean; onRecoveryComplete?: (notice: string) => void }) {
   const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(recoveryMode ? "reset" : "login");
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
@@ -2810,12 +2811,17 @@ function AuthScreen({ initialStatus = "", recoveryMode = false, onRecoveryComple
     if (mode === "forgot" || mode === "reset") return;
     const client = getSupabaseClient();
     if (!client || busy) return;
+    const normalizedDisplayName = displayName.trim();
+    if (mode === "register" && (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 32)) {
+      setStatus("昵称需要填写 2 至 32 个字符。");
+      return;
+    }
     setBusy(true);
     setStatus("");
     try {
       const result = mode === "login"
         ? await client.auth.signInWithPassword({ email: email.trim(), password })
-        : await client.auth.signUp({ email: email.trim(), password });
+        : await client.auth.signUp({ email: email.trim(), password, options: { data: { display_name: normalizedDisplayName } } });
       if (result.error) {
         setStatus(authRequestErrorMessage(result.error, mode));
       } else if (mode === "register" && !result.data.session) {
@@ -2892,6 +2898,7 @@ function AuthScreen({ initialStatus = "", recoveryMode = false, onRecoveryComple
           <h2>{mode === "login" ? "欢迎回来" : mode === "register" ? "创建学习账户" : mode === "forgot" ? "找回密码" : "设置新密码"}</h2>
           <p>{mode === "login" ? "登录后继续今天的学习闭环。" : mode === "register" ? "第一版使用邮箱和密码注册。" : mode === "forgot" ? "输入注册邮箱，我们会发送安全的密码重置链接。" : "重置链接已验证，请为账户设置一个新的登录密码。"}</p>
           <form onSubmit={mode === "forgot" ? requestPasswordReset : mode === "reset" ? updatePassword : submit}>
+            {mode === "register" && <label>学习昵称<input type="text" value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="nickname" minLength={2} maxLength={32} placeholder="例如：小林" required /></label>}
             {mode !== "reset" && <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>}
             {mode !== "forgot" && <label>{mode === "reset" ? "新密码" : "密码"}<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>}
             {mode === "reset" && <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} autoComplete="new-password" minLength={6} placeholder="再次输入新密码" required /></label>}
@@ -3188,7 +3195,8 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
   );
 }
 
-function AccountSecurity({ open, email, onClose, onSignOut }: { open: boolean; email: string; onClose: () => void; onSignOut: () => Promise<void> }) {
+function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUserUpdated }: { email: string; initialDisplayName: string; onClose: () => void; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
+  const [displayName, setDisplayName] = useState(initialDisplayName);
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -3204,35 +3212,41 @@ function AccountSecurity({ open, email, onClose, onSignOut }: { open: boolean; e
   }, [onClose]);
 
   useEffect(() => {
-    if (!open) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) resetAndClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [busy, open, resetAndClose]);
+  }, [busy, resetAndClose]);
 
-  if (!open) return null;
-
-  async function updateAccountPassword(event: FormEvent) {
+  async function updateAccount(event: FormEvent) {
     event.preventDefault();
     const client = getSupabaseClient();
     if (!client || busy) return;
-    if (password !== passwordConfirmation) {
+    const normalizedDisplayName = displayName.trim();
+    if (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 32) {
+      setStatus("昵称需要填写 2 至 32 个字符。");
+      return;
+    }
+    if (password && password !== passwordConfirmation) {
       setStatus("两次输入的新密码不一致，请重新确认。");
       return;
     }
     setBusy(true);
     setStatus("");
     try {
-      const result = await client.auth.updateUser({ password });
+      const attributes = password
+        ? { password, data: { display_name: normalizedDisplayName } }
+        : { data: { display_name: normalizedDisplayName } };
+      const result = await client.auth.updateUser(attributes);
       if (result.error) {
         setStatus(accountPasswordUpdateErrorMessage(result.error));
         return;
       }
+      onUserUpdated(result.data.user);
       setPassword("");
       setPasswordConfirmation("");
-      setStatus("密码已安全更新，下次登录请使用新密码。");
+      setStatus(password ? "昵称与密码已安全更新。" : "学习昵称已更新。侧边栏已同步显示新昵称。");
     } catch (error) {
       setStatus(accountPasswordUpdateErrorMessage(error));
     } finally {
@@ -3248,18 +3262,20 @@ function AccountSecurity({ open, email, onClose, onSignOut }: { open: boolean; e
           <button type="button" aria-label="关闭账户安全" onClick={resetAndClose} disabled={busy}>×</button>
         </div>
         <div className="account-security-email"><span>当前登录邮箱</span><strong>{email}</strong></div>
-        <form onSubmit={updateAccountPassword}>
-          <label>新密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} autoComplete="new-password" required /><button type="button" aria-label={passwordVisible ? "隐藏新密码" : "显示新密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
-          <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={6} autoComplete="new-password" required /></label>
+        <form onSubmit={updateAccount}>
+          <label>学习昵称<input type="text" value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="nickname" minLength={2} maxLength={32} required /></label>
+          <div className="account-security-section"><strong>修改密码（可选）</strong><small>不需要修改密码时请保持以下两项为空。</small></div>
+          <label>新密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={password ? 6 : undefined} autoComplete="new-password" /><button type="button" aria-label={passwordVisible ? "隐藏新密码" : "显示新密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
+          <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={passwordConfirmation ? 6 : undefined} autoComplete="new-password" /></label>
           {status && <div className="account-security-status" role="status">{status}</div>}
-          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut()} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存新密码"}</button></div>
+          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut()} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存账户设置"}</button></div>
         </form>
       </section>
     </div>
   );
 }
 
-function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
+function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -3268,7 +3284,8 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
-  const displayName = user?.email?.split("@")[0] || "林宇超";
+  const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
+  const displayName = metadataDisplayName || user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
   const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={user?.id ?? "demo"} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
@@ -3309,7 +3326,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
       <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
-      {!isDemo && <AccountSecurity open={accountSecurityOpen} email={user?.email ?? ""} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} />}
+      {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
     </main>
   );
 }
@@ -3371,5 +3388,5 @@ export default function Home() {
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
   if (passwordRecovery) return <AuthScreen recoveryMode onRecoveryComplete={(notice) => { setPasswordRecovery(false); setAuthNotice(notice); setAuthState({ status: "signed_out", user: null }); }} />;
   if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
-  return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
+  return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} onUserUpdated={(user) => setAuthState({ status: "signed_in", user })} />;
 }

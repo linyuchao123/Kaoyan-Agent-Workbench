@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const profileMigrationSource = await readFile(new URL("../supabase/migrations/202608290001_sync_profile_display_name.sql", import.meta.url), "utf8");
 
 test("登录注册错误统一转换为中文安全提示", () => {
   assert.match(pageSource, /function authRequestErrorMessage\(error: unknown, mode: "login" \| "register"\)/);
@@ -49,12 +50,30 @@ test("重置邮件回跳后可以校验并保存新密码", () => {
   assert.match(pageSource, /function passwordUpdateErrorMessage\(error: unknown\)/);
 });
 
-test("登录后可以在账户安全中修改密码和退出", () => {
-  assert.match(pageSource, /function AccountSecurity\(\{ open, email, onClose, onSignOut \}/);
+test("注册时保存学习昵称并限制昵称长度", () => {
+  assert.match(pageSource, /const \[displayName, setDisplayName\] = useState\(""\)/);
+  assert.match(pageSource, /options: \{ data: \{ display_name: normalizedDisplayName \} \}/);
+  assert.match(pageSource, /autoComplete="nickname" minLength=\{2\} maxLength=\{32\}/);
+  assert.match(pageSource, /昵称需要填写 2 至 32 个字符/);
+});
+
+test("登录后可以修改昵称、可选密码并退出", () => {
+  assert.match(pageSource, /function AccountSecurity\(\{ email, initialDisplayName, onClose, onSignOut, onUserUpdated \}/);
   assert.match(pageSource, /function accountPasswordUpdateErrorMessage\(error: unknown\)/);
   assert.match(pageSource, /const \[accountSecurityOpen, setAccountSecurityOpen\] = useState\(false\)/);
   assert.match(pageSource, /aria-label="打开账户安全"/);
-  assert.match(pageSource, /client\.auth\.updateUser\(\{ password \}\)/);
-  assert.match(pageSource, /密码已安全更新，下次登录请使用新密码/);
+  assert.match(pageSource, /\{ password, data: \{ display_name: normalizedDisplayName \} \}/);
+  assert.match(pageSource, /\{ data: \{ display_name: normalizedDisplayName \} \}/);
+  assert.match(pageSource, /onUserUpdated\(result\.data\.user\)/);
+  assert.match(pageSource, /metadataDisplayName \|\| user\?\.email\?\.split\("@"\)\[0\]/);
+  assert.match(pageSource, /学习昵称已更新。侧边栏已同步显示新昵称/);
   assert.match(pageSource, /退出当前账户/);
+});
+
+test("Auth 昵称变更由数据库触发器同步到个人资料", () => {
+  assert.match(profileMigrationSource, /create or replace function public\.sync_profile_display_name\(\)/);
+  assert.match(profileMigrationSource, /security definer/);
+  assert.match(profileMigrationSource, /after update of raw_user_meta_data on auth\.users/);
+  assert.match(profileMigrationSource, /where id = new\.id/);
+  assert.match(profileMigrationSource, /revoke all on function public\.sync_profile_display_name\(\) from public/);
 });

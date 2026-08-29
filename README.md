@@ -143,6 +143,7 @@ PYTHONPATH=backend backend/.venv/bin/python -m app.workers.ocr
 7. v0.8 先执行 `202608140001_private_hybrid_search.sql` 和 `202608140002_ocr_job_queue.sql`，再依次执行 `202608150001_agent_model_profiles.sql`、`202608150002_document_embedding_metadata.sql`、`202608150003_ocr_page_recovery.sql`、`202608150004_agent_model_usage.sql`。后四个迁移分别保存会话模型档位、文档向量来源、OCR 逐页失败信息和模型用量指标。
 8. v0.9 执行 `202608190001_document_reindex.sql`，为资料增加分块版本和索引时间，并启用原子替换分块与扫描 PDF 重新入队。
 9. v1.0 依次执行 `202608190002_grant_study_session_delete.sql` 和 `202608190003_validate_study_session_task.sql`，开放当前用户删除误录学习会话的权限，并保证学习会话关联同一用户、同一科目的任务。
+10. v1.1 执行 `202608290001_sync_profile_display_name.sql`，让注册和账户设置中的学习昵称自动同步到受 RLS 保护的个人资料。
 
 迁移包含学习任务、会话、错题、院校、资料分块、导入提案、Agent 提案、审计日志、RLS 和学习贡献聚合视图。
 
