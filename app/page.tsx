@@ -103,6 +103,26 @@ function passwordUpdateErrorMessage(error: unknown) {
   return "新密码保存失败，请重新打开最新的重置邮件后再试。";
 }
 
+function accountPasswordUpdateErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "新密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("same_password") || details.includes("different from the old password")) {
+    return "新密码不能与原密码相同，请更换后再试。";
+  }
+  if (details.includes("session") || details.includes("expired") || details.includes("invalid token")) {
+    return "登录状态已失效，请退出后重新登录再修改密码。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "密码修改失败，请稍后重试。";
+}
+
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
   const safetyNotice = "本次请求没有写入学习数据。";
   if (error instanceof ApiError) {
@@ -3168,6 +3188,77 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
   );
 }
 
+function AccountSecurity({ open, email, onClose, onSignOut }: { open: boolean; email: string; onClose: () => void; onSignOut: () => Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const resetAndClose = useCallback(() => {
+    setPassword("");
+    setPasswordConfirmation("");
+    setPasswordVisible(false);
+    setStatus("");
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) resetAndClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, open, resetAndClose]);
+
+  if (!open) return null;
+
+  async function updateAccountPassword(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    if (password !== passwordConfirmation) {
+      setStatus("两次输入的新密码不一致，请重新确认。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      const result = await client.auth.updateUser({ password });
+      if (result.error) {
+        setStatus(accountPasswordUpdateErrorMessage(result.error));
+        return;
+      }
+      setPassword("");
+      setPasswordConfirmation("");
+      setStatus("密码已安全更新，下次登录请使用新密码。");
+    } catch (error) {
+      setStatus(accountPasswordUpdateErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="account-security-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) resetAndClose(); }}>
+      <section className="account-security-dialog panel" role="dialog" aria-modal="true" aria-labelledby="account-security-title">
+        <div className="quick-capture-heading">
+          <div><div className="eyebrow">账户与隐私</div><h2 id="account-security-title">账户安全</h2></div>
+          <button type="button" aria-label="关闭账户安全" onClick={resetAndClose} disabled={busy}>×</button>
+        </div>
+        <div className="account-security-email"><span>当前登录邮箱</span><strong>{email}</strong></div>
+        <form onSubmit={updateAccountPassword}>
+          <label>新密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} autoComplete="new-password" required /><button type="button" aria-label={passwordVisible ? "隐藏新密码" : "显示新密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
+          <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={6} autoComplete="new-password" required /></label>
+          {status && <div className="account-security-status" role="status">{status}</div>}
+          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut()} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存新密码"}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
 function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
@@ -3175,6 +3266,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [attentionCount, setAttentionCount] = useState(0);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
   const displayName = user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
@@ -3207,7 +3299,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
         <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
         <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
         <div className="sidebar-goal"><span>2028 考研目标</span><strong>长三角 · 软件工程专硕</strong><div className="progress-track"><span style={{ width: "18%" }} /></div><small>基础阶段 · 第 3 周</small></div>
-        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
+        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
       </aside>
       <section className="main-content">
         <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
@@ -3217,6 +3309,7 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
       <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
+      {!isDemo && <AccountSecurity open={accountSecurityOpen} email={user?.email ?? ""} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} />}
     </main>
   );
 }

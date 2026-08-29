@@ -48,3 +48,13 @@ test("重置邮件回跳后可以校验并保存新密码", () => {
   assert.match(pageSource, /密码已更新，请使用新密码登录工作台/);
   assert.match(pageSource, /function passwordUpdateErrorMessage\(error: unknown\)/);
 });
+
+test("登录后可以在账户安全中修改密码和退出", () => {
+  assert.match(pageSource, /function AccountSecurity\(\{ open, email, onClose, onSignOut \}/);
+  assert.match(pageSource, /function accountPasswordUpdateErrorMessage\(error: unknown\)/);
+  assert.match(pageSource, /const \[accountSecurityOpen, setAccountSecurityOpen\] = useState\(false\)/);
+  assert.match(pageSource, /aria-label="打开账户安全"/);
+  assert.match(pageSource, /client\.auth\.updateUser\(\{ password \}\)/);
+  assert.match(pageSource, /密码已安全更新，下次登录请使用新密码/);
+  assert.match(pageSource, /退出当前账户/);
+});

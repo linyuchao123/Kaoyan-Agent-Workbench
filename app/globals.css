@@ -121,6 +121,16 @@ button { color: inherit; }
 .quick-capture-actions { display:flex;justify-content:flex-end;gap:8px;margin-top:3px }
 .quick-capture-actions button { border:1px solid var(--line);border-radius:8px;padding:9px 13px;background:#fff;color:#607067;font-size:9px;cursor:pointer }
 .quick-capture-actions .primary-button { border-color:var(--green);background:var(--green);color:#fff }
+.account-security-backdrop { position:fixed;inset:0;z-index:84;display:grid;place-items:center;padding:20px;background:rgba(14,38,27,.42);backdrop-filter:blur(5px) }
+.account-security-dialog { width:min(460px,100%);padding:24px;box-shadow:0 24px 70px rgba(13,45,29,.2) }
+.account-security-email { display:grid;gap:5px;margin:18px 0;padding:13px 14px;border-radius:10px;background:#f3f7f4 }
+.account-security-email span { color:var(--muted);font-size:9px }.account-security-email strong { overflow-wrap:anywhere;font-size:11px }
+.account-security-dialog form { display:grid;gap:13px }.account-security-dialog label { display:grid;gap:6px;color:#56655c;font-size:9px;font-weight:700 }
+.account-security-dialog input { width:100%;border:1px solid #d7dfd9;border-radius:8px;background:#f9fbf9;padding:10px;color:var(--ink);font:inherit;outline:none }
+.account-security-dialog input:focus { border-color:#88b99a;box-shadow:0 0 0 3px #e6f1e9 }
+.account-security-status { padding:10px 12px;border-radius:8px;background:#edf3ef;color:#456451;font-size:9px;line-height:1.5 }
+.account-security-actions { display:flex;justify-content:space-between;gap:8px;margin-top:4px }.account-security-actions button { border:1px solid var(--line);border-radius:8px;padding:10px 13px;background:#fff;color:#607067;font-size:9px;font-weight:700;cursor:pointer }
+.account-security-actions .primary-button { border-color:var(--green);background:var(--green);color:#fff }.account-security-actions .danger-button { border-color:#e8d6d1;color:#9a4d3c;background:#fff9f7 }.account-security-actions button:disabled { opacity:.55;cursor:wait }
 .quick-add select { width:66px;flex:none;border:1px solid #dce3dd;background:#f7f9f7;border-radius:9px;padding:10px 8px;outline:none;font-size:10px }
 .quick-add .task-plan-select { width:170px }
 .quick-add select:focus { border-color:#88b99a;box-shadow:0 0 0 3px #e6f1e9 }
@@ -164,3 +174,4 @@ button { color: inherit; }
 @media (max-width: 760px) { .quick-capture-backdrop{align-items:end;padding:0}.quick-capture-dialog{width:100%;border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom))}.quick-capture-dialog form{grid-template-columns:1fr}.quick-capture-dialog label,.quick-capture-wide,.quick-capture-status,.quick-capture-actions{grid-column:1}.quick-capture-actions{flex-direction:column-reverse}.quick-capture-actions button{width:100%} }
 @media (max-width: 760px) { .top-actions .global-search-trigger{display:block!important}.global-search-backdrop{padding:58px 0 0}.global-search-dialog{width:100%;height:calc(100vh - 58px);border-radius:0}.global-search-results{max-height:calc(100vh - 150px)} }
 @media (max-width: 760px) { .top-actions .attention-trigger{display:block!important}.attention-backdrop{align-items:end;padding:0}.attention-dialog{width:100%;border-radius:18px 18px 0 0}.attention-list{max-height:55vh} }
+@media (max-width: 760px) { .account-security-backdrop{align-items:end;padding:0}.account-security-dialog{width:100%;border-radius:18px 18px 0 0;padding:20px 18px calc(20px + env(safe-area-inset-bottom))}.account-security-actions{flex-direction:column-reverse}.account-security-actions button{width:100%} }
