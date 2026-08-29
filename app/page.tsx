@@ -68,6 +68,21 @@ function authRequestErrorMessage(error: unknown, mode: "login" | "register") {
   return `${mode === "login" ? "登录" : "注册"}失败，请检查填写内容后重试；若问题持续，请检查 Supabase Auth 配置。`;
 }
 
+function passwordResetRequestErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+  const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+
+  if (status === 429 || details.includes("rate limit") || details.includes("over_email_send_rate_limit")) {
+    return "重置邮件发送过于频繁，请稍后再试。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "暂时无法发送密码重置邮件，请稍后重试或检查 Supabase Auth 配置。";
+}
+
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
   const safetyNotice = "本次请求没有写入学习数据。";
   if (error instanceof ApiError) {
@@ -2742,7 +2757,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
 }
 
 function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
@@ -2774,6 +2789,28 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
     }
   }
 
+  async function requestPasswordReset(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        setStatus(passwordResetRequestErrorMessage(error));
+      } else {
+        setStatus("如果该邮箱已注册，密码重置邮件会在几分钟内送达，请检查收件箱和垃圾邮件。重置链接仅供本人使用。");
+      }
+    } catch (error) {
+      setStatus(passwordResetRequestErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="auth-shell">
       <section className="auth-brand-panel">
@@ -2785,15 +2822,16 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
       <section className="auth-form-panel">
         <div className="auth-card">
           <span className="auth-kicker">SUPABASE CLOUD</span>
-          <h2>{mode === "login" ? "欢迎回来" : "创建学习账户"}</h2>
-          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : "第一版使用邮箱和密码注册。"}</p>
-          <form onSubmit={submit}>
+          <h2>{mode === "login" ? "欢迎回来" : mode === "register" ? "创建学习账户" : "找回密码"}</h2>
+          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : mode === "register" ? "第一版使用邮箱和密码注册。" : "输入注册邮箱，我们会发送安全的密码重置链接。"}</p>
+          <form onSubmit={mode === "forgot" ? requestPasswordReset : submit}>
             <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>
-            <label>密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
-            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : "注册账户"}</button>
+            {mode !== "forgot" && <label>密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>}
+            {mode === "login" && <button className="auth-forgot" type="button" onClick={() => { setMode("forgot"); setPasswordVisible(false); setStatus(""); }}>忘记密码？</button>}
+            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : mode === "register" ? "注册账户" : "发送重置邮件"}</button>
           </form>
           {status && <div className="auth-status" role="status">{status}</div>}
-          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "已有账户？返回登录"}</button>
+          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "返回登录"}</button>
         </div>
       </section>
     </main>

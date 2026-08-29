@@ -27,3 +27,13 @@ test("登录注册页可以显示或隐藏密码并同步无障碍状态", () =>
   assert.match(pageSource, /aria-pressed=\{passwordVisible\}/);
   assert.match(pageSource, /setPasswordVisible\(false\)/);
 });
+
+test("登录页支持发送密码重置邮件并提供中文反馈", () => {
+  assert.match(pageSource, /useState<"login" \| "register" \| "forgot">\("login"\)/);
+  assert.match(pageSource, /client\.auth\.resetPasswordForEmail\(email\.trim\(\),/);
+  assert.match(pageSource, /redirectTo: window\.location\.origin/);
+  assert.match(pageSource, /如果该邮箱已注册，密码重置邮件会在几分钟内送达/);
+  assert.match(pageSource, /function passwordResetRequestErrorMessage\(error: unknown\)/);
+  assert.match(pageSource, /忘记密码？/);
+  assert.match(pageSource, /发送重置邮件/);
+});
