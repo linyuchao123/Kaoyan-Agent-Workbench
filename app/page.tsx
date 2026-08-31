@@ -5,6 +5,7 @@ import type { User } from "@supabase/supabase-js";
 import { ApiError, api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
+import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
 
 type Scope = ContributionScope;
@@ -1341,7 +1342,7 @@ function planCascadeIds(plans: ApiPlan[], rootId: string) {
   return ids;
 }
 
-function PlanView({ isDemo }: { isDemo: boolean }) {
+function PlanView({ isDemo, onPlansChanged }: { isDemo: boolean; onPlansChanged?: () => void }) {
   const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
   const [loading, setLoading] = useState(!isDemo);
   const [formOpen, setFormOpen] = useState(false);
@@ -1415,6 +1416,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-stage-${Date.now()}`, parent_id: null }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示阶段计划仅保留在当前页面" : "阶段计划已写入 Supabase 云端");
       setTitle("");
       setDescription("");
@@ -1492,6 +1494,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-week-${weekParent.id}-${weekStartsOn}-${weekTitle.trim()}` }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示周计划仅保留在当前页面" : "周计划已写入 Supabase 云端");
       setWeekTitle("");
       setWeekDescription("");
@@ -1549,6 +1552,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-day-${dayParent.id}-${dayDate}-${dayTitle.trim()}` }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示日计划仅保留在当前页面" : "日计划已写入 Supabase 云端");
       setDayTitle("");
       setDayDescription("");
@@ -1604,6 +1608,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setPlans((items) => items
         .map((plan) => plan.id === saved.id ? saved : plan)
         .sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示计划修改仅保留在当前页面" : "计划修改已同步到 Supabase 云端");
       setEditingPlan(null);
     } catch (error) {
@@ -1623,6 +1628,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
     try {
       if (!isDemo) await api.deletePlan(plan.id);
       setPlans((items) => items.filter((item) => !ids.has(item.id)));
+      onPlansChanged?.();
       if (editingPlan?.id && ids.has(editingPlan.id)) setEditingPlan(null);
       setStatus(isDemo ? "演示计划已从当前页面移除" : "计划已从 Supabase 云端删除");
     } catch (error) {
@@ -1641,6 +1647,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...plan, status: next.value }
         : await api.updatePlan(plan.id, { status: next.value });
       setPlans((items) => items.map((item) => item.id === saved.id ? saved : item));
+      onPlansChanged?.();
       if (editingPlan?.id === saved.id) {
         setEditingPlan(saved);
         setEditStatus(saved.status);
@@ -3286,6 +3293,9 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
+  const [planRevision, setPlanRevision] = useState(0);
+  const [sidebarStage, setSidebarStage] = useState<ApiPlan | null>(() => isDemo ? selectSidebarStage(demoPlans, shanghaiDateKey(new Date())) : null);
+  const [sidebarStageState, setSidebarStageState] = useState<"loading" | "ready" | "empty" | "error">(() => isDemo ? "ready" : "loading");
   const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
   const displayName = metadataDisplayName || user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
@@ -3293,7 +3303,8 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setView(nextView);
     storeWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey, nextView);
   }, [accountKey]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {
     let active = true;
@@ -3304,6 +3315,25 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     const timer = window.setInterval(check, 15_000);
     return () => { active = false; window.clearInterval(timer); };
   }, []);
+
+  useEffect(() => {
+    if (isDemo) return;
+
+    let active = true;
+    void api.listPlans("stage")
+      .then((plans) => {
+        if (!active) return;
+        const selected = selectSidebarStage(plans, shanghaiDateKey(new Date()));
+        setSidebarStage(selected);
+        setSidebarStageState(selected ? "ready" : "empty");
+      })
+      .catch(() => {
+        if (!active) return;
+        setSidebarStage(null);
+        setSidebarStageState("error");
+      });
+    return () => { active = false; };
+  }, [isDemo, planRevision, view]);
 
   useEffect(() => {
     const openSearchWithShortcut = (event: KeyboardEvent) => {
@@ -3321,7 +3351,13 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
         <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-        <div className="sidebar-goal"><span>2028 考研目标</span><strong>长三角 · 软件工程专硕</strong><div className="progress-track"><span style={{ width: "18%" }} /></div><small>基础阶段 · 第 3 周</small></div>
+        <div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
+          <span>2028 考研阶段</span>
+          <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
+          <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
+          <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
+          <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
+        </div>
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
       </aside>
       <section className="main-content">
