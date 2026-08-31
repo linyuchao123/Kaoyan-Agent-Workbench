@@ -75,6 +75,7 @@ from app.services.search import get_search_provider
 from app.services.security import UnsafeUrlError, validate_public_url
 from app.services.store import SessionOverlapError
 from app.services.web_import import download_public_document
+from app.workers.ocr import OpenAIVisionOcrProvider
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -90,6 +91,7 @@ app.add_middleware(
 repository = build_repository(settings)
 agent_model = OpenAICompatibleAgentModel(settings)
 embedding_provider = OpenAICompatibleEmbeddingProvider(settings)
+ocr_provider = OpenAIVisionOcrProvider(settings)
 agent_graph = build_graph(agent_model)
 search_provider = get_search_provider(settings)
 
@@ -135,6 +137,11 @@ async def health() -> dict[str, object]:
         "agent": {
             "mode": agent_mode,
             "model_configured": model_configured,
+            "primary_model_configured": agent_model.primary_configured,
+            "fallback_model_configured": agent_model.fallback_configured,
+            "primary_provider": settings.chat_provider,
+            "fallback_provider": settings.chat_fallback_provider,
+            "default_profile": settings.chat_default_profile,
             "web_search_configured": web_search_configured,
         },
         "rag": {
@@ -143,6 +150,14 @@ async def health() -> dict[str, object]:
             "embedding_provider": embedding_provider.provider,
             "embedding_model": embedding_provider.model,
             "embedding_dimensions": embedding_provider.dimensions,
+            "embedding_version": embedding_provider.version,
+        },
+        "ocr": {
+            "configured": ocr_provider.configured,
+            "provider": settings.ocr_provider,
+            "model": settings.ocr_model,
+            "fallback_model": settings.ocr_fallback_model,
+            "renderer_configured": bool(ocr_provider.pdftoppm_path),
         },
     }
 

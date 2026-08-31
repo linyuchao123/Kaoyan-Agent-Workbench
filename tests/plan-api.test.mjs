@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { api, setApiAccessToken } from "../app/lib/api.ts";
+
+const pageSource = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
 
 test("阶段计划通过登录身份写入且前端不能指定用户", async () => {
   const originalFetch = globalThis.fetch;
@@ -188,4 +191,16 @@ test("按需读取单条计划的完成率与实际学习时长", async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("三级计划写入期间防止重复请求并提供中文云端反馈", () => {
+  assert.match(pageSource, /async function createStage[\s\S]*?if \(busy\) return;/);
+  assert.match(pageSource, /async function createWeek[\s\S]*?if \(weekBusy\) return;/);
+  assert.match(pageSource, /async function createDay[\s\S]*?if \(dayBusy\) return;/);
+  assert.match(pageSource, /async function savePlanEdit[\s\S]*?if \(editBusy\) return;/);
+  assert.match(pageSource, /async function removePlan[\s\S]*?if \(deleteBusyId\) return;/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "保存阶段计划"\)/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "修改计划"\)/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "删除计划"\)/);
+  assert.match(pageSource, /deleteBusyId === stage\.id \? "删除中…" : "删除"/);
 });

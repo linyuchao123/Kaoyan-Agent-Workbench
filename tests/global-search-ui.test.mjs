@@ -23,7 +23,7 @@ test("全局搜索读取当前账户的核心业务数据", () => {
 
 test("点击搜索结果会跳转到对应工作台模块", () => {
   assert.match(component, /onNavigate\(entry\.view\)/);
-  assert.match(pageSource, /onNavigate=\{setView\}/);
+  assert.match(pageSource, /onNavigate=\{navigateToView\}/);
 });
 
 test("全局搜索支持 Ctrl 或 Command K 快捷键", () => {

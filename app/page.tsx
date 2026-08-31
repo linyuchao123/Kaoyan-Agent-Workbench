@@ -1,13 +1,15 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
+import { ApiError, api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
+import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
+import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
 
 type Scope = ContributionScope;
-type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "backup" | "agents";
+type View = WorkbenchView;
 
 type StudyDay = {
   date: string;
@@ -37,6 +39,174 @@ type StoredFocusSession = {
   subject: Subject;
   running: boolean;
 };
+
+function authRequestErrorMessage(error: unknown, mode: "login" | "register") {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+  const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+
+  if (details.includes("email_not_confirmed") || details.includes("email not confirmed")) {
+    return "邮箱尚未验证，请先打开验证邮件完成确认后再登录。";
+  }
+  if (details.includes("invalid_credentials") || details.includes("invalid login credentials")) {
+    return "邮箱或密码错误，请检查后重新登录。";
+  }
+  if (details.includes("user_already_exists") || details.includes("already registered")) {
+    return "该邮箱已经注册，请直接返回登录。";
+  }
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("signup_disabled") || details.includes("signups not allowed")) {
+    return "当前云端项目暂未开放邮箱注册，请联系管理员检查 Supabase Auth 设置。";
+  }
+  if (status === 429 || details.includes("over_email_send_rate_limit") || details.includes("rate limit")) {
+    return "操作过于频繁，请稍后再试；如果正在注册，请避免重复发送验证邮件。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return `${mode === "login" ? "登录" : "注册"}失败，请检查填写内容后重试；若问题持续，请检查 Supabase Auth 配置。`;
+}
+
+function passwordResetRequestErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+  const status = typeof error === "object" && error !== null && "status" in error ? Number(error.status) : 0;
+
+  if (status === 429 || details.includes("rate limit") || details.includes("over_email_send_rate_limit")) {
+    return "重置邮件发送过于频繁，请稍后再试。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "暂时无法发送密码重置邮件，请稍后重试或检查 Supabase Auth 配置。";
+}
+
+function passwordUpdateErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "新密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("same_password") || details.includes("different from the old password")) {
+    return "新密码不能与原密码相同，请更换后再试。";
+  }
+  if (details.includes("session") || details.includes("expired") || details.includes("invalid token")) {
+    return "密码重置链接已失效，请返回登录页重新发送邮件。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "新密码保存失败，请重新打开最新的重置邮件后再试。";
+}
+
+function accountPasswordUpdateErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+
+  if (details.includes("weak_password") || details.includes("password should be") || details.includes("password is too short")) {
+    return "新密码强度不足，请设置至少 6 位且不易猜测的密码。";
+  }
+  if (details.includes("same_password") || details.includes("different from the old password")) {
+    return "新密码不能与原密码相同，请更换后再试。";
+  }
+  if (details.includes("session") || details.includes("expired") || details.includes("invalid token")) {
+    return "登录状态已失效，请退出后重新登录再修改账户设置。";
+  }
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法连接 Supabase 登录服务，请检查网络后重试。";
+  }
+  return "账户设置保存失败，请稍后重试。";
+}
+
+function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
+  const safetyNotice = "本次请求没有写入学习数据。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return `登录状态已失效，请重新登录后重试。${safetyNotice}`;
+    }
+    if (error.status === 400 || error.status === 403 || error.status === 422) {
+      return `Agent 请求被云端拒绝，请检查模型档位、API Key 与账户权限。${safetyNotice}`;
+    }
+    if (error.status === 429) {
+      return `模型服务请求过于频繁或额度不足，请稍后重试或检查服务余额。${safetyNotice}`;
+    }
+    if (error.status >= 500) {
+      const evidenceNotice = mode === "tutor" ? "为避免无依据回答，我不会自行补全资料事实。" : "";
+      return `云端模型或检索服务暂时不可用，请稍后重试。${evidenceNotice}${safetyNotice}`;
+    }
+  }
+  if (error instanceof TypeError) {
+    return `无法连接后端服务，请确认本地后端已在 8000 端口启动。${safetyNotice}`;
+  }
+  const modeNotice = mode === "tutor" ? "为避免无依据回答，我不会自行补全资料事实。" : "";
+  return `Agent 请求失败，请稍后重试。${modeNotice}${safetyNotice}`;
+}
+
+function materialRequestErrorMessage(error: unknown, action: "load" | "upload" | "preview" | "import" | "search" | "reindex") {
+  const actionLabel = { load: "加载资料", upload: "导入资料", preview: "生成链接预览", import: "保存网页资料", search: "检索资料", reindex: "重新解析资料" }[action];
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${actionLabel}失败：登录状态已失效，请重新登录。`;
+    if (error.status === 409) return `${actionLabel}失败：云端已有相同内容，请刷新资料列表后重试。`;
+    if (error.status === 413) return `${actionLabel}失败：文件超过 25 MB 上限。`;
+    if (error.status === 415) return `${actionLabel}失败：目前只支持 PDF 与 Markdown。`;
+    if (error.status === 422) return `${actionLabel}失败：文件或链接内容无法解析，请检查后重试。`;
+    if (error.status >= 500) return `${actionLabel}失败：云端存储、解析或模型服务暂时不可用，请稍后重试。`;
+  }
+  if (error instanceof TypeError) return `${actionLabel}失败：无法连接本地后端，请确认 8000 端口服务已启动。`;
+  return `${actionLabel}失败，请稍后重试。`;
+}
+
+function studyWriteErrorMessage(error: unknown, action: string) {
+  const safetyNotice = "本次变更未写入云端，页面已恢复到提交前状态。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${action}失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `${action}失败：云端拒绝了本次数据，请检查填写内容后重试。${safetyNotice}`;
+    if (error.status === 409) return `${action}失败：数据状态已发生变化，请刷新页面后重试。${safetyNotice}`;
+    if (error.status >= 500) return `${action}失败：云端数据服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `${action}失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `${action}失败，请稍后重试。${safetyNotice}`;
+}
+
+function exportRequestErrorMessage(error: unknown) {
+  const safetyNotice = "本次导出没有修改任何云端学习数据。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `导出失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `导出失败：云端拒绝了本次请求，请检查导出格式和账户权限。${safetyNotice}`;
+    if (error.status >= 500) return `导出失败：云端备份服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `导出失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `导出失败，请稍后重试。${safetyNotice}`;
+}
+
+function cloudReadErrorMessage(error: unknown, resource: string) {
+  const safetyNotice = "已有云端数据不会受到影响。";
+  if (error instanceof ApiError) {
+    if (error.status === 401) return `${resource}加载失败：登录状态已失效，请重新登录。${safetyNotice}`;
+    if (error.status === 400 || error.status === 403 || error.status === 422) return `${resource}加载失败：请求被云端拒绝，请刷新页面并检查账户权限。${safetyNotice}`;
+    if (error.status >= 500) return `${resource}加载失败：云端数据服务暂时不可用，请稍后重试。${safetyNotice}`;
+  }
+  if (error instanceof TypeError) return `${resource}加载失败：无法连接本地后端，请确认 8000 端口服务已启动。${safetyNotice}`;
+  return `${resource}加载失败，请稍后重试。${safetyNotice}`;
+}
+
+function documentIngestionCopy(document: ApiDocument) {
+  const copies: Record<ApiDocument["ingestion_status"], { label: string; description: string }> = {
+    queued: { label: "等待处理", description: "文件已安全保存，正在等待解析任务" },
+    processing: { label: "正在建立索引", description: "正在提取原文、切分片段并生成检索索引" },
+    ocr_required: { label: "等待 OCR", description: "已识别为扫描 PDF，正在等待逐页文字识别" },
+    ready: { label: "可以检索", description: "解析与索引已完成，可用于资料检索和 Agent 回答" },
+    failed: { label: "处理失败", description: "本次处理未完成，可点击“重新处理”再次尝试" },
+  };
+  return copies[document.ingestion_status];
+}
 
 const scopes: { key: Scope; label: string }[] = [
   { key: "all", label: "全部" },
@@ -439,6 +609,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   const [focusTaskId, setFocusTaskId] = useState("");
   const [seconds, setSeconds] = useState(0);
   const [running, setRunning] = useState(false);
+  const [focusSaving, setFocusSaving] = useState(false);
   const [sessionStartedAt, setSessionStartedAt] = useState<Date | null>(null);
   const [pauseStartedAt, setPauseStartedAt] = useState<Date | null>(null);
   const [pausedSeconds, setPausedSeconds] = useState(0);
@@ -460,6 +631,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   const [cloudState, setCloudState] = useState<"loading" | "ready" | "demo" | "error">(() => isDemo ? "demo" : "loading");
   const [recordStatus, setRecordStatus] = useState(isDemo ? "离线演示数据 · 登录并连接 Supabase 后自动同步" : "正在连接云端学习数据…");
   const [contributionRevision, setContributionRevision] = useState(0);
+  const [newTaskBusy, setNewTaskBusy] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
   const [manualSubject, setManualSubject] = useState<Subject>("math");
@@ -595,7 +767,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
 
   async function addTask(event: FormEvent) {
     event.preventDefault();
-    if (!newTask.trim()) return;
+    if (!newTask.trim() || newTaskBusy) return;
     const title = newTask.trim();
     const selectedPlan = dayPlans.find((plan) => plan.id === newTaskPlanId);
     const temporaryId = `local-${Date.now()}`;
@@ -605,27 +777,37 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setRecordStatus("演示任务仅保留在当前页面");
       return;
     }
+    setNewTaskBusy(true);
     try {
       const saved = await api.createTask({ title, subject: newTaskSubject, planned_minutes: 30, plan_id: newTaskPlanId || undefined });
       setTasks((items) => items.map((item) => item.id === temporaryId ? taskFromApi(saved, selectedPlan?.title) : item));
       setRecordStatus(selectedPlan ? `任务已关联日计划“${selectedPlan.title}”` : "任务已写入 Supabase 云端");
       void refreshDashboardMetrics();
-    } catch {
-      setRecordStatus("API 暂不可用 · 新任务仅保留在本页");
+    } catch (error) {
+      setTasks((items) => items.filter((item) => item.id !== temporaryId));
+      setNewTask((current) => current || title);
+      setRecordStatus(studyWriteErrorMessage(error, "创建任务"));
+    } finally {
+      setNewTaskBusy(false);
     }
   }
 
   async function toggleTask(task: Task) {
+    if (taskBusyId === task.id) return;
     const completed = !task.done;
     setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: completed } : item));
     if (task.id.startsWith("demo-") || task.id.startsWith("local-")) return;
+    setTaskBusyId(task.id);
     try {
       await api.updateTask(task.id, { completed });
       setRecordStatus(completed ? "任务完成状态已同步" : "任务已恢复为待完成");
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
-    } catch {
-      setRecordStatus("同步失败 · 下次连接后请再次确认任务状态");
+    } catch (error) {
+      setTasks((items) => items.map((item) => item.id === task.id ? { ...item, done: task.done } : item));
+      setRecordStatus(studyWriteErrorMessage(error, completed ? "完成任务" : "恢复任务"));
+    } finally {
+      setTaskBusyId(null);
     }
   }
 
@@ -640,6 +822,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
 
   async function saveTaskEdit(event: FormEvent, task: Task) {
     event.preventDefault();
+    if (taskBusyId) return;
     const title = editTaskTitle.trim();
     if (!title || editTaskMinutes < 1 || editTaskMinutes > 1440) {
       setRecordStatus("请填写任务标题，预计时长需在 1–1440 分钟之间");
@@ -674,13 +857,14 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setRecordStatus("任务修改已同步至 Supabase 云端");
       void refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `任务修改失败：${error.message}` : "任务修改失败");
+      setRecordStatus(studyWriteErrorMessage(error, "修改任务"));
     } finally {
       setTaskBusyId(null);
     }
   }
 
   async function deleteTask(task: Task) {
+    if (taskBusyId) return;
     if (focusTaskId === task.id && sessionStartedAt) {
       setRecordStatus("该任务正在专注计时，请先结束并记录本次专注");
       return;
@@ -705,7 +889,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setContributionRevision((value) => value + 1);
       void refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `任务删除失败：${error.message}` : "任务删除失败");
+      setRecordStatus(studyWriteErrorMessage(error, "删除任务"));
     } finally {
       setTaskBusyId(null);
     }
@@ -736,7 +920,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setMistakeStatus(isDemo ? "演示错题已加入当前复习列表" : "错题已写入云端并加入复习列表");
       setContributionRevision((value) => value + 1);
     } catch (error) {
-      setMistakeStatus(error instanceof Error ? `错题保存失败：${error.message}` : "错题保存失败");
+      setMistakeStatus(studyWriteErrorMessage(error, "保存错题"));
     } finally {
       setMistakeBusy(false);
     }
@@ -751,7 +935,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setMistakes((items) => items.filter((item) => item.id !== card.id));
       setMistakeStatus(`“${card.title}”复习完成，第 ${reviewed.review_count} 次记录已保存`);
     } catch (error) {
-      setMistakeStatus(error instanceof Error ? `复习记录失败：${error.message}` : "复习记录失败");
+      setMistakeStatus(studyWriteErrorMessage(error, "保存复习记录"));
     } finally {
       setReviewBusyId(null);
     }
@@ -793,7 +977,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   function cancelFocus() {
-    if (!sessionStartedAt || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
+    if (!sessionStartedAt || focusSaving || !window.confirm("确定放弃本次专注吗？当前计时不会写入学习记录。")) return;
     setRunning(false);
     setSessionStartedAt(null);
     setPauseStartedAt(null);
@@ -804,7 +988,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
   }
 
   async function finishFocus() {
-    if (!sessionStartedAt) return;
+    if (!sessionStartedAt || focusSaving) return;
     const endedAt = new Date();
     const linkedTask = tasks.find((task) => task.id === focusTaskId);
     const finalPausedSeconds = pausedSeconds + (pauseStartedAt ? Math.floor((endedAt.getTime() - pauseStartedAt.getTime()) / 1000) : 0);
@@ -833,6 +1017,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setFocusTaskId("");
       return;
     }
+    setFocusSaving(true);
     try {
       const saved = await api.createSession({
         task_id: linkedTask?.id,
@@ -855,15 +1040,18 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setPausedSeconds(0);
       setSeconds(0);
       setFocusTaskId("");
-    } catch {
-      setRecordStatus("本次专注未能同步，请保持页面并启动 API 后重试");
+    } catch (error) {
+      setRecordStatus(studyWriteErrorMessage(error, "保存专注记录"));
       setPausedSeconds(finalPausedSeconds);
       setPauseStartedAt(endedAt);
+    } finally {
+      setFocusSaving(false);
     }
   }
 
   async function addManualSession(event: FormEvent) {
     event.preventDefault();
+    if (manualBusy) return;
     setManualError("");
     if (manualDate > shanghaiDateKey(new Date())) {
       setManualError("不能补录未来的学习记录");
@@ -932,13 +1120,16 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setManualNote("");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "云端写入失败";
-      setManualError(detail.includes("overlap") ? "该时间段与已有学习记录重叠，请调整后重试" : detail);
+      setManualError(detail.includes("overlap")
+        ? "该时间段与已有学习记录重叠，请调整后重试"
+        : studyWriteErrorMessage(error, "保存手动补录"));
     } finally {
       setManualBusy(false);
     }
   }
 
   async function deleteStudySession(session: ApiStudySession) {
+    if (sessionBusyId) return;
     if (!window.confirm(`确定删除这条${subjectMeta[session.subject].label}学习记录吗？`)) return;
     if (isDemo || session.id.startsWith("demo-session-")) {
       setTodaySessions((items) => items.filter((item) => item.id !== session.id));
@@ -957,7 +1148,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
       setContributionRevision((value) => value + 1);
       await refreshDashboardMetrics();
     } catch (error) {
-      setRecordStatus(error instanceof Error ? `学习记录删除失败：${error.message}` : "学习记录删除失败");
+      setRecordStatus(studyWriteErrorMessage(error, "删除学习记录"));
     } finally {
       setSessionBusyId(null);
     }
@@ -1005,7 +1196,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
             {tasks.map((task) => <div className={`task-item-shell ${task.done ? "done" : ""}`} key={task.id}>
               <div className="task-item">
                 <label className="task-check" aria-label={`${task.done ? "恢复" : "完成"}任务 ${task.title}`}>
-                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} />
+                  <input type="checkbox" checked={task.done} onChange={() => void toggleTask(task)} disabled={taskBusyId === task.id} />
                   <span className="fake-check">✓</span>
                 </label>
                 <span className={`subject-badge ${task.subject}`}>{subjectMeta[task.subject].short}</span>
@@ -1025,7 +1216,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </form>}
             </div>)}
           </div>
-          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目">{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划"><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" /><button type="submit">添加</button></form>
+          <form className="quick-add" onSubmit={addTask}><select value={newTaskSubject} onChange={(event) => setNewTaskSubject(event.target.value as Subject)} aria-label="任务科目" disabled={newTaskBusy}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.short}</option>)}</select><select className="task-plan-select" value={newTaskPlanId} onChange={(event) => setNewTaskPlanId(event.target.value)} aria-label="所属日计划" disabled={newTaskBusy}><option value="">{dayPlans.length ? "不关联日计划" : "今天暂无日计划"}</option>{dayPlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><input value={newTask} onChange={(event) => setNewTask(event.target.value)} placeholder="快速添加一个任务…" aria-label="新任务" disabled={newTaskBusy} /><button type="submit" disabled={newTaskBusy}>{newTaskBusy ? "正在保存…" : "添加"}</button></form>
           <p className="record-status">● {recordStatus}</p>
         </section>
 
@@ -1042,17 +1233,17 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </> : <span className="focus-session-copy"><span>自由专注 · {subjectMeta[focusSubject].label}</span><strong>本次已计入 {formatMinutes(focusSessionMinutes)}</strong></span>}
               {!running && <small>计时已暂停，暂停期间不计入有效学习时长</small>}
             </div>}
-            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt}>结束并记录</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt}>放弃</button></div>
+            <div className="timer-actions"><button onClick={running ? pauseFocus : beginFocus} disabled={focusSaving}>{running ? "暂停" : sessionStartedAt ? "继续" : "开始"}</button><button className="secondary" onClick={() => void finishFocus()} disabled={!sessionStartedAt || focusSaving}>{focusSaving ? "正在保存…" : "结束并记录"}</button><button className="cancel" onClick={cancelFocus} disabled={!sessionStartedAt || focusSaving}>放弃</button></div>
           </section>
           <section className="panel manual-card">
-            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
+            <div className="manual-heading"><div><div className="eyebrow">学习记录</div><strong>手动补录</strong></div><button type="button" disabled={manualBusy} onClick={() => { setManualOpen((value) => !value); setManualError(""); }}>{manualOpen ? "收起" : "＋ 补录"}</button></div>
             {manualOpen && <form className="manual-form" onSubmit={addManualSession}>
-              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} required /></label>
-              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务"><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
-              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
-              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} required /></label>
-              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} required /></label>
-              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} /></label>
+              <label className="manual-date">日期<input type="date" value={manualDate} max={shanghaiDateKey(new Date())} onChange={(event) => setManualDate(event.target.value)} disabled={manualBusy} required /></label>
+              <label className="manual-task">关联今日任务<select value={manualTaskId} onChange={(event) => { const taskId = event.target.value; setManualTaskId(taskId); const task = tasks.find((item) => item.id === taskId); if (task) setManualSubject(task.subject); }} aria-label="补录关联今日任务" disabled={manualBusy}><option value="">不关联任务</option>{tasks.filter((task) => isDemo || !task.id.startsWith("local-")).map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>
+              <label>科目<select value={manualSubject} onChange={(event) => setManualSubject(event.target.value as Subject)} disabled={manualBusy || Boolean(manualTaskId)}>{Object.entries(subjectMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
+              <label>开始时间<input type="time" value={manualStartedTime} onChange={(event) => setManualStartedTime(event.target.value)} disabled={manualBusy} required /></label>
+              <label>结束时间<input type="time" value={manualEndedTime} onChange={(event) => setManualEndedTime(event.target.value)} disabled={manualBusy} required /></label>
+              <label className="manual-note">学习内容<input type="text" value={manualNote} onChange={(event) => setManualNote(event.target.value)} placeholder="例如：极限基础题复盘" maxLength={200} disabled={manualBusy} /></label>
               {manualError && <p className="manual-error" role="alert">{manualError}</p>}
               <div className="manual-actions"><button type="button" onClick={() => setManualOpen(false)} disabled={manualBusy}>取消</button><button type="submit" disabled={manualBusy}>{manualBusy ? "正在保存…" : "保存记录"}</button></div>
             </form>}
@@ -1151,7 +1342,7 @@ function planCascadeIds(plans: ApiPlan[], rootId: string) {
   return ids;
 }
 
-function PlanView({ isDemo }: { isDemo: boolean }) {
+function PlanView({ isDemo, onPlansChanged }: { isDemo: boolean; onPlansChanged?: () => void }) {
   const [plans, setPlans] = useState<ApiPlan[]>(() => isDemo ? demoPlans : []);
   const [loading, setLoading] = useState(!isDemo);
   const [formOpen, setFormOpen] = useState(false);
@@ -1180,6 +1371,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
   const [editEndsOn, setEditEndsOn] = useState("");
   const [editStatus, setEditStatus] = useState<PlanStatus>("draft");
   const [editBusy, setEditBusy] = useState(false);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
   const [progressBusyId, setProgressBusyId] = useState<string | null>(null);
   const [selectedProgress, setSelectedProgress] = useState<{ plan: ApiPlan; progress: PlanProgress } | null>(null);
@@ -1195,7 +1387,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         setStatus(items.length ? `已从云端同步 ${items.length} 条计划` : "云端还没有计划，可以创建第一个阶段计划");
       })
       .catch((error) => {
-        if (active) setStatus(error instanceof Error ? `计划加载失败：${error.message}` : "计划加载失败");
+        if (active) setStatus(cloudReadErrorMessage(error, "计划"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1205,6 +1397,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createStage(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     if (!title.trim() || !endsOn || endsOn < startsOn) {
       setStatus(endsOn && endsOn < startsOn ? "阶段结束日期不能早于开始日期" : "请完整填写阶段名称和日期");
       return;
@@ -1223,13 +1416,14 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-stage-${Date.now()}`, parent_id: null }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示阶段计划仅保留在当前页面" : "阶段计划已写入 Supabase 云端");
       setTitle("");
       setDescription("");
       setEndsOn("");
       setFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `阶段计划保存失败：${error.message}` : "阶段计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存阶段计划"));
     } finally {
       setBusy(false);
     }
@@ -1272,6 +1466,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createWeek(event: FormEvent) {
     event.preventDefault();
+    if (weekBusy) return;
     if (!weekParent || !weekTitle.trim() || !weekStartsOn || !weekEndsOn) {
       setStatus("请完整填写周计划的所属阶段、名称和日期");
       return;
@@ -1299,12 +1494,13 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-week-${weekParent.id}-${weekStartsOn}-${weekTitle.trim()}` }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示周计划仅保留在当前页面" : "周计划已写入 Supabase 云端");
       setWeekTitle("");
       setWeekDescription("");
       setWeekFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `周计划保存失败：${error.message}` : "周计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存周计划"));
     } finally {
       setWeekBusy(false);
     }
@@ -1332,6 +1528,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function createDay(event: FormEvent) {
     event.preventDefault();
+    if (dayBusy) return;
     if (!dayParent || !dayTitle.trim() || !dayDate) {
       setStatus("请完整填写日计划的所属周、名称和日期");
       return;
@@ -1355,12 +1552,13 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...payload, id: `demo-day-${dayParent.id}-${dayDate}-${dayTitle.trim()}` }
         : await api.createPlan(payload);
       setPlans((items) => [...items, saved].sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示日计划仅保留在当前页面" : "日计划已写入 Supabase 云端");
       setDayTitle("");
       setDayDescription("");
       setDayFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `日计划保存失败：${error.message}` : "日计划保存失败");
+      setStatus(studyWriteErrorMessage(error, "保存日计划"));
     } finally {
       setDayBusy(false);
     }
@@ -1378,6 +1576,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
 
   async function savePlanEdit(event: FormEvent) {
     event.preventDefault();
+    if (editBusy) return;
     if (!editingPlan || !editTitle.trim() || !editStartsOn || !editEndsOn) {
       setStatus("请完整填写计划名称和日期");
       return;
@@ -1409,31 +1608,38 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setPlans((items) => items
         .map((plan) => plan.id === saved.id ? saved : plan)
         .sort((left, right) => left.starts_on.localeCompare(right.starts_on)));
+      onPlansChanged?.();
       setStatus(isDemo ? "演示计划修改仅保留在当前页面" : "计划修改已同步到 Supabase 云端");
       setEditingPlan(null);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划修改失败：${error.message}` : "计划修改失败");
+      setStatus(studyWriteErrorMessage(error, "修改计划"));
     } finally {
       setEditBusy(false);
     }
   }
 
   async function removePlan(plan: ApiPlan) {
+    if (deleteBusyId) return;
     const ids = planCascadeIds(plans, plan.id);
     const childCount = ids.size - 1;
     const suffix = childCount ? `，并同时删除 ${childCount} 条子计划` : "";
     if (!window.confirm(`确定删除“${plan.title}”${suffix}吗？此操作无法撤销。`)) return;
+    setDeleteBusyId(plan.id);
     try {
       if (!isDemo) await api.deletePlan(plan.id);
       setPlans((items) => items.filter((item) => !ids.has(item.id)));
+      onPlansChanged?.();
       if (editingPlan?.id && ids.has(editingPlan.id)) setEditingPlan(null);
       setStatus(isDemo ? "演示计划已从当前页面移除" : "计划已从 Supabase 云端删除");
     } catch (error) {
-      setStatus(error instanceof Error ? `计划删除失败：${error.message}` : "计划删除失败");
+      setStatus(studyWriteErrorMessage(error, "删除计划"));
+    } finally {
+      setDeleteBusyId(null);
     }
   }
 
   async function changePlanStatus(plan: ApiPlan) {
+    if (statusBusyId) return;
     const next = nextPlanStatus(plan);
     setStatusBusyId(plan.id);
     try {
@@ -1441,6 +1647,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? { ...plan, status: next.value }
         : await api.updatePlan(plan.id, { status: next.value });
       setPlans((items) => items.map((item) => item.id === saved.id ? saved : item));
+      onPlansChanged?.();
       if (editingPlan?.id === saved.id) {
         setEditingPlan(saved);
         setEditStatus(saved.status);
@@ -1449,7 +1656,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         ? `演示计划已标记为${planStatusLabel[saved.status]}`
         : `计划已同步为${planStatusLabel[saved.status]}`);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划状态修改失败：${error.message}` : "计划状态修改失败");
+      setStatus(studyWriteErrorMessage(error, "修改计划状态"));
     } finally {
       setStatusBusyId(null);
     }
@@ -1470,7 +1677,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       setSelectedProgress({ plan, progress });
       setStatus(isDemo ? "当前显示演示统计" : `已读取“${plan.title}”的云端统计`);
     } catch (error) {
-      setStatus(error instanceof Error ? `计划统计加载失败：${error.message}` : "计划统计加载失败");
+      setStatus(cloudReadErrorMessage(error, "计划统计"));
     } finally {
       setProgressBusyId(null);
     }
@@ -1497,7 +1704,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
       <label className="plan-description">计划目标<textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} maxLength={2000} /></label>
       <div className="plan-form-actions"><button type="button" onClick={() => setEditingPlan(null)} disabled={editBusy}>取消</button><button className="primary-button" type="submit" disabled={editBusy}>{editBusy ? "正在保存…" : "保存修改"}</button></div>
     </form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button type="button" disabled={progressBusyId === stage.id} onClick={() => void showPlanProgress(stage)}>{progressBusyId === stage.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === stage.id} onClick={() => void changePlanStatus(stage)}>{statusBusyId === stage.id ? "同步中…" : nextPlanStatus(stage).label}</button><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(stage)}>删除</button></div></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的阶段计划…</div> : stages.length === 0 ? <div className="panel plan-empty"><strong>还没有阶段计划</strong><span>点击“新建阶段计划”，先确定第一轮复习的时间范围与目标。</span></div> : <div className="stage-grid">{stages.map((stage, index) => <article className={`panel stage-card ${stage.status === "active" ? "current" : ""}`} key={stage.id}><div className="stage-index">{String(index + 1).padStart(2, "0")}</div><div><span>{planDateRange(stage)}</span><h2>{stage.title}</h2><p>{stage.description || "暂未填写阶段目标"}</p><small>{planStatusLabel[stage.status]} · {isDemo ? "演示数据" : "云端计划"}</small><div className="plan-item-actions"><button type="button" disabled={progressBusyId === stage.id} onClick={() => void showPlanProgress(stage)}>{progressBusyId === stage.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === stage.id} onClick={() => void changePlanStatus(stage)}>{statusBusyId === stage.id ? "同步中…" : nextPlanStatus(stage).label}</button><button type="button" onClick={() => openPlanEditor(stage)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(stage)}>{deleteBusyId === stage.id ? "删除中…" : "删除"}</button></div></div></article>)}</div>}
     <section className="panel weekly-plan"><div className="panel-heading"><div><div className="eyebrow">周计划</div><h2>{weeks.length ? `${weeks.length} 个周计划` : "尚未建立周计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleWeekForm}>{weekFormOpen ? "收起" : "＋ 新建周计划"}</button></div></div>
       {weekFormOpen && <form className="plan-form week-plan-form" onSubmit={createWeek}>
         <label className="plan-title">所属阶段<select value={weekParentId} onChange={(event) => selectWeekParent(event.target.value)} required>{stages.map((stage) => <option key={stage.id} value={stage.id}>{stage.title}（{stage.starts_on} 至 {stage.ends_on}）</option>)}</select></label>
@@ -1507,7 +1714,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">本周重点<textarea value={weekDescription} onChange={(event) => setWeekDescription(event.target.value)} placeholder="这一周最重要的学习结果是什么？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setWeekFormOpen(false)} disabled={weekBusy}>取消</button><button className="primary-button" type="submit" disabled={weekBusy}>{weekBusy ? "正在保存…" : "保存周计划"}</button></div>
       </form>}
-      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === week.id} onClick={() => void showPlanProgress(week)}>{progressBusyId === week.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === week.id} onClick={() => void changePlanStatus(week)}>{statusBusyId === week.id ? "同步中…" : nextPlanStatus(week).label}</button><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(week)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
+      {weeks.length ? <div className="plan-list">{weeks.map((week) => <div className="plan-row" key={week.id}><div><strong>{week.title}</strong><small>{week.description || "暂未填写本周重点"}</small></div><span>{planDateRange(week)}</span><em>{planStatusLabel[week.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === week.id} onClick={() => void showPlanProgress(week)}>{progressBusyId === week.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === week.id} onClick={() => void changePlanStatus(week)}>{statusBusyId === week.id ? "同步中…" : nextPlanStatus(week).label}</button><button type="button" onClick={() => openPlanEditor(week)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(week)}>{deleteBusyId === week.id ? "删除中…" : "删除"}</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建阶段计划后，下一步可以把它拆成可执行的周计划。</span></div>}
     </section>
     <section className="panel daily-plan"><div className="panel-heading"><div><div className="eyebrow">日计划</div><h2>{days.length ? `${days.length} 个日计划` : "尚未安排日计划"}</h2></div><div className="plan-heading-actions"><span className={`status-chip ${isDemo ? "" : "online"}`}>{isDemo ? "演示" : "云端"}</span><button className="outline-button" type="button" onClick={toggleDayForm}>{dayFormOpen ? "收起" : "＋ 新建日计划"}</button></div></div>
       {dayFormOpen && <form className="plan-form week-plan-form" onSubmit={createDay}>
@@ -1517,7 +1724,7 @@ function PlanView({ isDemo }: { isDemo: boolean }) {
         <label className="plan-description">当天成果<textarea value={dayDescription} onChange={(event) => setDayDescription(event.target.value)} placeholder="完成哪些章节、题目或复盘？" maxLength={2000} /></label>
         <div className="plan-form-actions"><button type="button" onClick={() => setDayFormOpen(false)} disabled={dayBusy}>取消</button><button className="primary-button" type="submit" disabled={dayBusy}>{dayBusy ? "正在保存…" : "保存日计划"}</button></div>
       </form>}
-      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === day.id} onClick={() => void showPlanProgress(day)}>{progressBusyId === day.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === day.id} onClick={() => void changePlanStatus(day)}>{statusBusyId === day.id ? "同步中…" : nextPlanStatus(day).label}</button><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" onClick={() => void removePlan(day)}>删除</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
+      {days.length ? <div className="plan-list">{days.map((day) => <div className="plan-row" key={day.id}><div><strong>{day.title}</strong><small>{day.description || "暂未填写当天成果"}</small></div><span>{day.starts_on.replaceAll("-", ".")}</span><em>{planStatusLabel[day.status]}</em><div className="plan-item-actions"><button type="button" disabled={progressBusyId === day.id} onClick={() => void showPlanProgress(day)}>{progressBusyId === day.id ? "读取中…" : "统计"}</button><button className="status-action" type="button" disabled={statusBusyId === day.id} onClick={() => void changePlanStatus(day)}>{statusBusyId === day.id ? "同步中…" : nextPlanStatus(day).label}</button><button type="button" onClick={() => openPlanEditor(day)}>编辑</button><button className="danger" type="button" disabled={Boolean(deleteBusyId)} onClick={() => void removePlan(day)}>{deleteBusyId === day.id ? "删除中…" : "删除"}</button></div></div>)}</div> : <div className="plan-empty compact"><span>创建周计划后，可以继续把目标拆成每天可完成、可复盘的行动。</span></div>}
     </section>
   </section>;
 }
@@ -1555,7 +1762,7 @@ function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolea
       setStatus("已根据任务、学习时长和错题记录生成真实统计");
     } catch (error) {
       setSummaries([]);
-      setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+      setStatus(cloudReadErrorMessage(error, "学科统计"));
     } finally {
       setLoading(false);
     }
@@ -1573,7 +1780,7 @@ function SubjectsView({ isDemo, onOpenMaterials, onOpenToday }: { isDemo: boolea
       .catch((error: unknown) => {
         if (!active) return;
         setSummaries([]);
-        setStatus(error instanceof Error ? `读取失败：${error.message}` : "读取失败，请稍后重试");
+        setStatus(cloudReadErrorMessage(error, "学科统计"));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -1621,6 +1828,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [editingSchool, setEditingSchool] = useState<ApiSchoolOption | null>(null);
   const [tierFilter, setTierFilter] = useState<SchoolTier | "all">("all");
   const [yearFilter, setYearFilter] = useState("2028");
@@ -1648,7 +1856,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setSchools([]);
-        setStatus(error instanceof Error ? `院校情报加载失败：${error.message}` : "院校情报加载失败");
+        setStatus(cloudReadErrorMessage(error, "院校情报"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1711,6 +1919,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
 
   async function saveSchool(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (isDemo) {
       setStatus("离线演示模式不会写入真实院校数据，请登录后使用");
       return;
@@ -1742,34 +1951,35 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       clearSchoolForm();
       setFormOpen(false);
     } catch (error) {
-      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+      setStatus(studyWriteErrorMessage(error, editingSchool ? "修改院校档案" : "保存院校档案"));
     } finally {
       setBusy(false);
     }
   }
 
   async function removeSchool(school: ApiSchoolOption) {
+    if (deleteBusyId) return;
     if (isDemo) {
       setStatus("演示院校不会被删除");
       return;
     }
     if (!window.confirm(`确认删除 ${school.university} 的 ${school.major_name} 记录吗？`)) return;
-    setBusy(true);
+    setDeleteBusyId(school.id);
     try {
       await api.deleteSchoolOption(school.id);
       setSchools((items) => items.filter((item) => item.id !== school.id));
       setStatus(`已删除 ${school.university} 的院校记录`);
     } catch (error) {
-      setStatus(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+      setStatus(studyWriteErrorMessage(error, "删除院校档案"));
     } finally {
-      setBusy(false);
+      setDeleteBusyId(null);
     }
   }
 
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : visibleSchools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeSchool(school)}>删除</button></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : visibleSchools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeSchool(school)}>{deleteBusyId === school.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
   </section>;
 }
 
@@ -1806,6 +2016,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const [formOpen, setFormOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<ApiCareerItem | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
   const [itemType, setItemType] = useState<CareerItemType>("milestone");
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
@@ -1825,7 +2036,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setItems([]);
-        setMessage(error instanceof Error ? `求职记录加载失败：${error.message}` : "求职记录加载失败");
+        setMessage(cloudReadErrorMessage(error, "求职记录"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1878,6 +2089,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
 
   async function saveItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (isDemo) {
       setMessage("离线演示模式不会写入真实求职记录，请登录后使用");
       return;
@@ -1904,27 +2116,28 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       resetForm();
       setFormOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+      setMessage(studyWriteErrorMessage(error, editingItem ? "修改求职记录" : "保存求职记录"));
     } finally {
       setBusy(false);
     }
   }
 
   async function removeItem(item: ApiCareerItem) {
+    if (deleteBusyId) return;
     if (isDemo) {
       setMessage("演示求职记录不会被删除");
       return;
     }
     if (!window.confirm(`确认删除“${item.title}”吗？`)) return;
-    setBusy(true);
+    setDeleteBusyId(item.id);
     try {
       await api.deleteCareerItem(item.id);
       setItems((records) => records.filter((record) => record.id !== item.id));
       setMessage(`已删除：${item.title}`);
     } catch (error) {
-      setMessage(error instanceof Error ? `删除失败：${error.message}` : "删除失败，请稍后重试");
+      setMessage(studyWriteErrorMessage(error, "删除求职记录"));
     } finally {
-      setBusy(false);
+      setDeleteBusyId(null);
     }
   }
 
@@ -1941,7 +2154,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
     <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
     {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy} onClick={() => void removeItem(item)}>删除</button></div></article>)}</div>}
+    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
   </section>;
 }
 
@@ -1957,6 +2170,7 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
   const [status, setStatus] = useState(isDemo ? "离线演示模式不会生成真实账户备份" : "选择格式后即可下载当前账户数据");
 
   async function exportData() {
+    if (busy) return;
     if (isDemo) {
       setStatus("请登录 Supabase 账户后导出你的真实数据");
       return;
@@ -1975,7 +2189,7 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
       URL.revokeObjectURL(url);
       setStatus(`下载完成：${result.filename}`);
     } catch (error) {
-      setStatus(error instanceof Error ? `导出失败：${error.message}` : "导出失败，请稍后重试");
+      setStatus(exportRequestErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -1983,8 +2197,8 @@ function BackupView({ isDemo }: { isDemo: boolean }) {
 
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">数据可携带与长期归档</div><h1>数据备份</h1><p>随时导出自己的核心记录，服务器仍是在线使用时的最终事实来源。</p></div></div>
-    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
-    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <button type="button" className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></button>)}</div>
+    <section className="panel backup-hero"><div><span className="backup-icon">⇩</span><div><div className="eyebrow">当前账户完整快照</div><h2>把长期学习过程握在自己手里</h2><p>一次导出包含三级计划、学习任务、学习会话、错题卡、院校情报和求职副线。导出文件不包含密码、访问令牌或用户编号。</p></div></div><div className="backup-actions"><label>导出格式<select value={format} disabled={busy} onChange={(event) => setFormat(event.target.value as ExportFormat)}>{Object.entries(exportFormatMeta).map(([key, meta]) => <option value={key} key={key}>{meta.label}（{meta.extension}）</option>)}</select></label><button className="primary-button" type="button" disabled={busy} onClick={() => void exportData()}>{busy ? "正在生成…" : "下载个人数据"}</button><span>● {status}</span></div></section>
+    <div className="backup-format-grid">{Object.entries(exportFormatMeta).map(([key, meta]) => <button type="button" disabled={busy} className={`panel backup-format ${format === key ? "selected" : ""}`} key={key} onClick={() => setFormat(key as ExportFormat)}><strong>{meta.extension}</strong><div><h2>{meta.label}</h2><p>{meta.detail}</p></div><span>{format === key ? "已选择" : "选择"}</span></button>)}</div>
     <section className="panel backup-scope"><div className="panel-heading"><div><div className="eyebrow">备份范围</div><h2>本次导出的六类数据</h2></div><span className="status-chip online">仅当前账户</span></div><div className="backup-datasets"><span>三级计划</span><span>学习任务</span><span>学习会话</span><span>错题卡</span><span>院校情报</span><span>求职副线</span></div><p>当前导出包含已结构化的核心数据；资料库原始文件与检索索引的完整备份将在后续版本补齐。</p></section>
   </section>;
 }
@@ -2039,7 +2253,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       .catch((error) => {
         if (!active) return;
         setDocs([]);
-        setImportStatus(error instanceof Error ? `资料加载失败：${error.message}` : "资料加载失败");
+        setImportStatus(materialRequestErrorMessage(error, "load"));
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -2069,7 +2283,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setDocs((items) => [result, ...items.filter((item) => item.id !== result.id)]);
       setImportStatus(result.duplicate ? "检测到相同文件，已复用云端资料与索引" : `导入完成 · ${status} · ${result.flagged_chunk_count} 个片段需要安全复核`);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `导入失败：${error.message}` : "导入失败");
+      setImportStatus(materialRequestErrorMessage(error, "upload"));
     } finally {
       setBusy(false);
       event.target.value = "";
@@ -2089,7 +2303,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setImportStatus(`已生成待确认提案：${preview.summary}`);
       setImportProposal(preview);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `链接预览失败：${error.message}` : "链接预览失败");
+      setImportStatus(materialRequestErrorMessage(error, "preview"));
     } finally {
       setBusy(false);
     }
@@ -2106,7 +2320,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setSourceUrl("");
       setImportStatus(result.duplicate ? "该内容已存在，已复用原资料" : "网页资料已确认并完成入库");
     } catch (error) {
-      setImportStatus(error instanceof Error ? `网页入库失败：${error.message}` : "网页入库失败");
+      setImportStatus(materialRequestErrorMessage(error, "import"));
     } finally {
       setBusy(false);
     }
@@ -2130,7 +2344,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setSearchStatus(results.length ? `在${scopeLabel}中找到 ${results.length} 个相关原文片段` : `在${scopeLabel}中没有找到匹配内容，请更换关键词`);
     } catch (error) {
       setSearchResults([]);
-      setSearchStatus(error instanceof Error ? `检索失败：${error.message}` : "检索失败，请稍后重试");
+      setSearchStatus(materialRequestErrorMessage(error, "search"));
     } finally {
       setSearchBusy(false);
     }
@@ -2149,13 +2363,12 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
         ? "已进入 OCR 重建队列，页面会自动刷新处理状态"
         : `重新解析完成 · 分块 v${result.chunking_version ?? 2} · ${result.chunk_count ?? 0} 个片段`);
     } catch (error) {
-      setImportStatus(error instanceof Error ? `重新解析失败：${error.message}` : "重新解析失败");
+      setImportStatus(materialRequestErrorMessage(error, "reindex"));
     } finally {
       setReindexingId(null);
     }
   }
 
-  const ingestionLabels: Record<ApiDocument["ingestion_status"], string> = { queued: "等待处理", processing: "正在处理", ocr_required: "等待 OCR", ready: "索引就绪", failed: "处理失败" };
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div>
@@ -2170,13 +2383,14 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       </section>
       <section className="panel material-list">
         <div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>
-        {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => <div className="document-row" key={doc.id}>
+        {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => { const ingestionCopy = documentIngestionCopy(doc); return <div className="document-row" key={doc.id}>
           <span className="document-icon">▤</span>
           <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>
           <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
-          <span className={`document-status status-${doc.ingestion_status}`} title={doc.ingestion_error || undefined}>● {ingestionLabels[doc.ingestion_status]}</span>
+          <span className={`document-status status-${doc.ingestion_status}`}><strong>● {ingestionCopy.label}</strong><small>{ingestionCopy.description}</small></span>
           <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
-        </div>)}
+          {doc.ingestion_status === "failed" && <p className="document-error" role="alert">处理建议：确认文件可正常打开、云端模型额度充足后重新处理。{doc.ingestion_error ? "后台已记录详细错误，便于继续排查。" : ""}</p>}
+        </div>; })}
       </section>
     </div>
     <section className="panel private-search-panel">
@@ -2228,7 +2442,9 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   const [editingProposal, setEditingProposal] = useState(false);
   const [threadId, setThreadId] = useState<string>();
   const [busy, setBusy] = useState(false);
-  const [capabilities, setCapabilities] = useState<ApiHealth["agent"] | null>(null);
+  const [capabilities, setCapabilities] = useState<ApiHealth | null>(null);
+  const [capabilityState, setCapabilityState] = useState<"loading" | "ready" | "error">("loading");
+  const [capabilityCheckedAt, setCapabilityCheckedAt] = useState<Date | null>(null);
   const [threads, setThreads] = useState<AgentThreadSummary[]>([]);
   const [copyFeedback, setCopyFeedback] = useState<{ index: number; label: string } | null>(null);
   const agentRequest = useRef<AbortController | null>(null);
@@ -2241,12 +2457,29 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     setMessages(thread.messages.length ? thread.messages.map((message) => ({ role: message.role, text: message.content, sources: message.sources, model: restoredAgentModel(message.metadata) })) : [{ role: "agent", text: agentWelcomeMessage }]);
   }
 
+  const refreshCapabilities = useCallback(async () => {
+    setCapabilityState("loading");
+    try {
+      setCapabilities(await api.health());
+      setCapabilityCheckedAt(new Date());
+      setCapabilityState("ready");
+    } catch {
+      setCapabilities(null);
+      setCapabilityState("error");
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     void api.health().then((health) => {
-      if (!cancelled) setCapabilities(health.agent);
+      if (cancelled) return;
+      setCapabilities(health);
+      setCapabilityCheckedAt(new Date());
+      setCapabilityState("ready");
     }).catch(() => {
-      if (!cancelled) setCapabilities(null);
+      if (cancelled) return;
+      setCapabilities(null);
+      setCapabilityState("error");
     });
     return () => { cancelled = true; };
   }, []);
@@ -2351,12 +2584,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
         updateStreamingMessage(`${streamedAnswer}${streamedAnswer ? "\n\n" : ""}已停止生成。本次未完整回答不会写入对话历史；没有经过确认的提案不会写入学习数据。`);
         return;
       }
-      const fallback = mode === "coach"
-        ? "计划教练已完成本地分析，但 Agent API 尚未启动。启动后端后，我会把建议转换成可审批提案。"
-        : mode === "tutor"
-          ? "资料导师当前无法连接检索服务。为避免无依据回答，我暂不补全事实。"
-          : "双 Agent API 尚未连接；当前消息没有写入任何学习数据。";
-      updateStreamingMessage(fallback);
+      updateStreamingMessage(agentRequestErrorMessage(error, mode));
     } finally {
       if (agentRequest.current === controller) {
         agentRequest.current = null;
@@ -2441,8 +2669,11 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
-  const modelReady = !isDemo && capabilities?.model_configured;
-  const searchReady = !isDemo && capabilities?.web_search_configured;
+  const primaryModelReady = !isDemo && capabilities?.agent.primary_model_configured;
+  const fallbackModelReady = !isDemo && capabilities?.agent.fallback_model_configured;
+  const embeddingReady = !isDemo && capabilities?.rag.embedding_configured;
+  const ocrReady = !isDemo && capabilities?.ocr.configured;
+  const searchReady = !isDemo && capabilities?.agent.web_search_configured;
   return (
     <section className="content-view agent-view">
       <div className="view-title">
@@ -2456,16 +2687,48 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           <button className="outline-button" type="button" onClick={startNewConversation} disabled={busy}>＋ 新建对话</button>
         </div>
       </div>
-      <div className="agent-capabilities panel" aria-label="Agent 运行能力">
-        <div>
-          <span className={modelReady ? "ready" : "fallback"}>模型</span>
-          <strong>{modelReady ? "生成服务已配置" : "安全降级分析"}</strong>
-          <small>{modelReady ? "可手动选择 DeepSeek Flash 或 Pro，故障时切换 Qwen" : "未配置模型 Key，不会伪装成模型回答"}</small>
+      <div className="agent-capability-panel panel" aria-label="云端能力状态">
+        <div className="agent-capability-toolbar">
+          <div>
+            <strong>云端能力状态</strong>
+            <small>
+              {capabilityState === "loading"
+                ? "正在读取后端配置…"
+                : capabilityState === "error"
+                  ? "后端暂时无法连接，请检查服务后重试"
+                  : `配置状态更新于 ${capabilityCheckedAt?.toLocaleTimeString("zh-CN", { hour12: false }) ?? "刚刚"}；实际调用异常会在对话中明确提示`}
+            </small>
+          </div>
+          <button type="button" className="outline-button" onClick={() => void refreshCapabilities()} disabled={capabilityState === "loading"}>
+            {capabilityState === "loading" ? "检查中…" : "重新检查配置"}
+          </button>
         </div>
-        <div>
-          <span className={searchReady ? "ready" : "fallback"}>联网</span>
-          <strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong>
-          <small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small>
+        <div className="agent-capabilities">
+          <div>
+            <span className={primaryModelReady ? "ready" : "fallback"}>主模型</span>
+            <strong>{primaryModelReady ? "DeepSeek 配置就绪" : "DeepSeek 未配置"}</strong>
+            <small>{primaryModelReady ? "支持 Flash 与 Pro，默认由用户手动选择" : "未配置 CHAT_API_KEY，无法生成真实回答"}</small>
+          </div>
+          <div>
+            <span className={fallbackModelReady ? "ready" : "fallback"}>备用</span>
+            <strong>{fallbackModelReady ? "Qwen 备用就绪" : "Qwen 备用未配置"}</strong>
+            <small>{fallbackModelReady ? "DeepSeek 超时、限流或服务异常时按档位接管" : "主模型异常时不会伪装成备用回答"}</small>
+          </div>
+          <div>
+            <span className={embeddingReady ? "ready" : "fallback"}>检索</span>
+            <strong>{embeddingReady ? "混合检索已配置" : "关键词检索模式"}</strong>
+            <small>{embeddingReady ? `${capabilities?.rag.embedding_model} · ${capabilities?.rag.embedding_dimensions} 维` : "Embedding 不可用时保留 PostgreSQL 全文检索"}</small>
+          </div>
+          <div>
+            <span className={ocrReady ? "ready" : "fallback"}>OCR</span>
+            <strong>{ocrReady ? "Qwen OCR 已配置" : "OCR 尚未就绪"}</strong>
+            <small>{ocrReady ? `${capabilities?.ocr.model} · PDF 渲染器已就绪` : capabilities?.ocr.renderer_configured ? "请检查 OCR Key 与模型配置" : "需要配置模型并安装 pdftoppm"}</small>
+          </div>
+          <div>
+            <span className={searchReady ? "ready" : "fallback"}>联网</span>
+            <strong>{searchReady ? "Tavily 联网检索已配置" : "仅使用个人资料"}</strong>
+            <small>{searchReady ? "最新信息可附网页来源与访问时间" : "未配置 Tavily Key，不会生成虚假网络来源"}</small>
+          </div>
         </div>
       </div>
       <div className="agent-shell panel">
@@ -2541,33 +2804,89 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
   );
 }
 
-function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+function AuthScreen({ initialStatus = "", recoveryMode = false, onRecoveryComplete }: { initialStatus?: string; recoveryMode?: boolean; onRecoveryComplete?: (notice: string) => void }) {
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">(recoveryMode ? "reset" : "login");
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [status, setStatus] = useState(initialStatus);
   const [busy, setBusy] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (mode === "forgot" || mode === "reset") return;
     const client = getSupabaseClient();
     if (!client || busy) return;
+    const normalizedDisplayName = displayName.trim();
+    if (mode === "register" && (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 32)) {
+      setStatus("昵称需要填写 2 至 32 个字符。");
+      return;
+    }
     setBusy(true);
     setStatus("");
     try {
       const result = mode === "login"
         ? await client.auth.signInWithPassword({ email: email.trim(), password })
-        : await client.auth.signUp({ email: email.trim(), password });
+        : await client.auth.signUp({ email: email.trim(), password, options: { data: { display_name: normalizedDisplayName } } });
       if (result.error) {
-        setStatus(result.error.message);
+        setStatus(authRequestErrorMessage(result.error, mode));
       } else if (mode === "register" && !result.data.session) {
         setStatus("注册成功，请前往邮箱完成验证后登录。");
         setMode("login");
       } else {
         setStatus("登录成功，正在加载你的学习数据…");
       }
-    } catch {
-      setStatus("暂时无法连接登录服务，请检查网络后重试。");
+    } catch (error) {
+      setStatus(authRequestErrorMessage(error, mode));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestPasswordReset(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        setStatus(passwordResetRequestErrorMessage(error));
+      } else {
+        setStatus("如果该邮箱已注册，密码重置邮件会在几分钟内送达，请检查收件箱和垃圾邮件。重置链接仅供本人使用。");
+      }
+    } catch (error) {
+      setStatus(passwordResetRequestErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updatePassword(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    if (password !== passwordConfirmation) {
+      setStatus("两次输入的新密码不一致，请重新确认。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      const { error } = await client.auth.updateUser({ password });
+      if (error) {
+        setStatus(passwordUpdateErrorMessage(error));
+        return;
+      }
+      await client.auth.signOut({ scope: "local" });
+      onRecoveryComplete?.("密码已更新，请使用新密码登录工作台。");
+    } catch (error) {
+      setStatus(passwordUpdateErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -2584,15 +2903,18 @@ function AuthScreen({ initialStatus = "" }: { initialStatus?: string }) {
       <section className="auth-form-panel">
         <div className="auth-card">
           <span className="auth-kicker">SUPABASE CLOUD</span>
-          <h2>{mode === "login" ? "欢迎回来" : "创建学习账户"}</h2>
-          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : "第一版使用邮箱和密码注册。"}</p>
-          <form onSubmit={submit}>
-            <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>
-            <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /></label>
-            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : "注册账户"}</button>
+          <h2>{mode === "login" ? "欢迎回来" : mode === "register" ? "创建学习账户" : mode === "forgot" ? "找回密码" : "设置新密码"}</h2>
+          <p>{mode === "login" ? "登录后继续今天的学习闭环。" : mode === "register" ? "第一版使用邮箱和密码注册。" : mode === "forgot" ? "输入注册邮箱，我们会发送安全的密码重置链接。" : "重置链接已验证，请为账户设置一个新的登录密码。"}</p>
+          <form onSubmit={mode === "forgot" ? requestPasswordReset : mode === "reset" ? updatePassword : submit}>
+            {mode === "register" && <label>学习昵称<input type="text" value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="nickname" minLength={2} maxLength={32} placeholder="例如：小林" required /></label>}
+            {mode !== "reset" && <label>邮箱<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" placeholder="name@example.com" required /></label>}
+            {mode !== "forgot" && <label>{mode === "reset" ? "新密码" : "密码"}<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} placeholder="至少 6 位" required /><button type="button" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((visible) => !visible)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>}
+            {mode === "reset" && <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} autoComplete="new-password" minLength={6} placeholder="再次输入新密码" required /></label>}
+            {mode === "login" && <button className="auth-forgot" type="button" onClick={() => { setMode("forgot"); setPasswordVisible(false); setStatus(""); }}>忘记密码？</button>}
+            <button className="primary-button auth-submit" type="submit" disabled={busy}>{busy ? "请稍候…" : mode === "login" ? "登录工作台" : mode === "register" ? "注册账户" : mode === "forgot" ? "发送重置邮件" : "保存新密码"}</button>
           </form>
           {status && <div className="auth-status" role="status">{status}</div>}
-          <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "已有账户？返回登录"}</button>
+          {mode !== "reset" && <button className="auth-switch" onClick={() => { setMode(mode === "login" ? "register" : "login"); setPasswordVisible(false); setStatus(""); }}>{mode === "login" ? "还没有账户？立即注册" : "返回登录"}</button>}
         </div>
       </section>
     </main>
@@ -2651,7 +2973,7 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
       ]);
       setStatus("搜索范围仅包含当前账户的云端数据");
     }).catch((error) => {
-      if (active) setStatus(error instanceof Error ? `搜索数据加载失败：${error.message}` : "搜索数据加载失败");
+      if (active) setStatus(cloudReadErrorMessage(error, "搜索数据"));
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -2757,7 +3079,7 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
     }).catch((error) => {
       if (!active) return;
       loadedOnce.current = true;
-      setStatus(error instanceof Error ? `待处理事项加载失败：${error.message}` : "待处理事项加载失败");
+      setStatus(cloudReadErrorMessage(error, "待处理事项"));
       setLoading(false);
     });
     return () => { active = false; };
@@ -2842,7 +3164,7 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
       onSaved();
       onClose();
     } catch (error) {
-      setStatus(error instanceof Error ? `保存失败：${error.message}` : "保存失败，请稍后重试");
+      setStatus(studyWriteErrorMessage(error, kind === "task" ? "快速创建任务" : "快速记录错题"));
     } finally {
       setBusy(false);
     }
@@ -2881,17 +3203,113 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
   );
 }
 
-function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void> }) {
-  const [view, setView] = useState<View>("today");
+function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUserUpdated }: { email: string; initialDisplayName: string; onClose: () => void; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
+  const [displayName, setDisplayName] = useState(initialDisplayName);
+  const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const resetAndClose = useCallback(() => {
+    setPassword("");
+    setPasswordConfirmation("");
+    setPasswordVisible(false);
+    setStatus("");
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) resetAndClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [busy, resetAndClose]);
+
+  async function updateAccount(event: FormEvent) {
+    event.preventDefault();
+    const client = getSupabaseClient();
+    if (!client || busy) return;
+    const normalizedDisplayName = displayName.trim();
+    if (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 32) {
+      setStatus("昵称需要填写 2 至 32 个字符。");
+      return;
+    }
+    if (password && password !== passwordConfirmation) {
+      setStatus("两次输入的新密码不一致，请重新确认。");
+      return;
+    }
+    setBusy(true);
+    setStatus("");
+    try {
+      const attributes = password
+        ? { password, data: { display_name: normalizedDisplayName } }
+        : { data: { display_name: normalizedDisplayName } };
+      const result = await client.auth.updateUser(attributes);
+      if (result.error) {
+        setStatus(accountPasswordUpdateErrorMessage(result.error));
+        return;
+      }
+      onUserUpdated(result.data.user);
+      setPassword("");
+      setPasswordConfirmation("");
+      setStatus(password ? "昵称与密码已安全更新。" : "学习昵称已更新。侧边栏已同步显示新昵称。");
+    } catch (error) {
+      setStatus(accountPasswordUpdateErrorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="account-security-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) resetAndClose(); }}>
+      <section className="account-security-dialog panel" role="dialog" aria-modal="true" aria-labelledby="account-security-title">
+        <div className="quick-capture-heading">
+          <div><div className="eyebrow">账户与隐私</div><h2 id="account-security-title">账户安全</h2></div>
+          <button type="button" aria-label="关闭账户安全" onClick={resetAndClose} disabled={busy}>×</button>
+        </div>
+        <div className="account-security-email"><span>当前登录邮箱</span><strong>{email}</strong></div>
+        <form onSubmit={updateAccount}>
+          <label>学习昵称<input type="text" value={displayName} onChange={(event) => setDisplayName(event.target.value)} autoComplete="nickname" minLength={2} maxLength={32} required /></label>
+          <div className="account-security-section"><strong>修改密码（可选）</strong><small>不需要修改密码时请保持以下两项为空。</small></div>
+          <label>新密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={password ? 6 : undefined} autoComplete="new-password" /><button type="button" aria-label={passwordVisible ? "隐藏新密码" : "显示新密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
+          <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={passwordConfirmation ? 6 : undefined} autoComplete="new-password" /></label>
+          {status && <div className="account-security-status" role="status">{status}</div>}
+          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut()} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存账户设置"}</button></div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
+  const accountKey = user?.id ?? "demo";
+  const [view, setView] = useState<View>(() => readStoredWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey));
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [healthRevision, setHealthRevision] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
   const [attentionCount, setAttentionCount] = useState(0);
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false);
+  const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
-  const displayName = user?.email?.split("@")[0] || "林宇超";
+  const [planRevision, setPlanRevision] = useState(0);
+  const [sidebarStage, setSidebarStage] = useState<ApiPlan | null>(() => isDemo ? selectSidebarStage(demoPlans, shanghaiDateKey(new Date())) : null);
+  const [sidebarStageState, setSidebarStageState] = useState<"loading" | "ready" | "empty" | "error">(() => isDemo ? "ready" : "loading");
+  const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
+  const displayName = metadataDisplayName || user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={user?.id ?? "demo"} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const navigateToView = useCallback((nextView: View) => {
+    setView(nextView);
+    storeWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey, nextView);
+  }, [accountKey]);
+  const retryApiHealth = useCallback(() => {
+    setApiStatus("checking");
+    setHealthRevision((revision) => revision + 1);
+  }, []);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {
     let active = true;
@@ -2901,7 +3319,26 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
     void check();
     const timer = window.setInterval(check, 15_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  }, [healthRevision]);
+
+  useEffect(() => {
+    if (isDemo) return;
+
+    let active = true;
+    void api.listPlans("stage")
+      .then((plans) => {
+        if (!active) return;
+        const selected = selectSidebarStage(plans, shanghaiDateKey(new Date()));
+        setSidebarStage(selected);
+        setSidebarStageState(selected ? "ready" : "empty");
+      })
+      .catch(() => {
+        if (!active) return;
+        setSidebarStage(null);
+        setSidebarStageState("error");
+      });
+    return () => { active = false; };
+  }, [isDemo, planRevision, view]);
 
   useEffect(() => {
     const openSearchWithShortcut = (event: KeyboardEvent) => {
@@ -2918,18 +3355,25 @@ function Workbench({ user, isDemo, onSignOut }: { user: User | null; isDemo: boo
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
-        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-        <div className="sidebar-goal"><span>2028 考研目标</span><strong>长三角 · 软件工程专硕</strong><div className="progress-track"><span style={{ width: "18%" }} /></div><small>基础阶段 · 第 3 周</small></div>
-        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="退出登录" title="退出登录" onClick={() => void onSignOut()}>退出</button>}</div>
+        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+        <div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
+          <span>2028 考研阶段</span>
+          <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
+          <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
+          <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
+          <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
+        </div>
+        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
       </aside>
       <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
+        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><button type="button" className={`sync-status ${isDemo ? "offline" : apiStatus}`} onClick={retryApiHealth} disabled={isDemo || apiStatus === "checking"} title={isDemo ? "离线演示模式不连接云端" : "点击立即重新检查云端连接"}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接 · 点击重试" : "正在重新检查数据服务…"}</button><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
-        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
+        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
-      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
-      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
-      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
+      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={navigateToView} />
+      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={navigateToView} onCountChange={setAttentionCount} />
+      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); navigateToView("today"); }} />
+      {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
     </main>
   );
 }
@@ -2940,6 +3384,7 @@ export default function Home() {
     user: null,
   }));
   const [authNotice, setAuthNotice] = useState("");
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
     const client = getSupabaseClient();
@@ -2959,8 +3404,9 @@ export default function Home() {
         setApiAccessToken(null);
         setAuthState({ status: "signed_out", user: null });
       });
-    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = client.auth.onAuthStateChange((event, session) => {
       if (!active) return;
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
       setApiAccessToken(session?.access_token ?? null);
       setAuthState({ status: session ? "signed_in" : "signed_out", user: session?.user ?? null });
     });
@@ -2983,9 +3429,11 @@ export default function Home() {
     if (client) await client.auth.signOut();
     setApiAccessToken(null);
     setAuthNotice("");
+    setPasswordRecovery(false);
   }
 
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
+  if (passwordRecovery) return <AuthScreen recoveryMode onRecoveryComplete={(notice) => { setPasswordRecovery(false); setAuthNotice(notice); setAuthState({ status: "signed_out", user: null }); }} />;
   if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
-  return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} />;
+  return <Workbench key={authState.user?.id ?? "demo"} user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} onUserUpdated={(user) => setAuthState({ status: "signed_in", user })} />;
 }

@@ -44,6 +44,26 @@ test("Agent 页面允许手动选择双模型档位并展示实际来源", () =>
   assert.match(pageSource, /Qwen 备用/);
 });
 
+test("Agent 页面展示可刷新的云端能力状态", () => {
+  assert.match(pageSource, /aria-label="云端能力状态"/);
+  assert.match(pageSource, /重新检查配置/);
+  assert.match(pageSource, /primary_model_configured/);
+  assert.match(pageSource, /fallback_model_configured/);
+  assert.match(pageSource, /embedding_configured/);
+  assert.match(pageSource, /ocr\.configured/);
+  assert.match(pageSource, /未配置 Tavily Key，不会生成虚假网络来源/);
+});
+
+test("Agent 请求失败会区分登录、限流、云端异常和后端未启动", () => {
+  assert.match(pageSource, /function agentRequestErrorMessage/);
+  assert.match(pageSource, /error instanceof ApiError/);
+  assert.match(pageSource, /登录状态已失效，请重新登录后重试/);
+  assert.match(pageSource, /模型服务请求过于频繁或额度不足/);
+  assert.match(pageSource, /云端模型或检索服务暂时不可用/);
+  assert.match(pageSource, /无法连接后端服务，请确认本地后端已在 8000 端口启动/);
+  assert.match(pageSource, /本次请求没有写入学习数据/);
+});
+
 test("Agent 恢复历史会话时保留模型档位和消息模型元数据", () => {
   assert.match(pageSource, /setModelProfile\(thread\.model_profile\)/);
   assert.match(pageSource, /restoredAgentModel\(message\.metadata\)/);

@@ -9,10 +9,18 @@ test("手动补录可以关联今日任务并沿用任务科目", () => {
   assert.match(pageSource, /aria-label="补录关联今日任务"/);
   assert.match(pageSource, /if \(task\) setManualSubject\(task\.subject\)/);
   assert.match(pageSource, /task_id: linkedTask\?\.id/);
-  assert.match(pageSource, /disabled=\{Boolean\(manualTaskId\)\}/);
+  assert.match(pageSource, /disabled=\{manualBusy \|\| Boolean\(manualTaskId\)\}/);
 });
 
 test("演示补录会同步累计关联任务的实际学习时长", () => {
   assert.match(pageSource, /actualMinutes: task\.actualMinutes \+ interval\.effectiveMinutes/);
   assert.match(pageSource, /setManualTaskId\(""\)/);
+});
+
+test("手动补录保存期间锁定表单并转换云端错误", () => {
+  assert.match(pageSource, /if \(manualBusy\) return/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "保存手动补录"\)/);
+  assert.match(pageSource, /aria-label="补录关联今日任务" disabled=\{manualBusy\}/);
+  assert.match(pageSource, /disabled=\{manualBusy \|\| Boolean\(manualTaskId\)\}/);
+  assert.match(pageSource, /manualBusy \? "正在保存…" : "保存记录"/);
 });

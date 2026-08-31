@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { api, setApiAccessToken } from "../app/lib/api.ts";
+
+const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 
 test("求职记录支持按类型和状态筛选", async () => {
   const originalFetch = globalThis.fetch;
@@ -75,4 +78,12 @@ test("求职记录增删改使用当前登录身份且不允许前端指定用�
     setApiAccessToken(null);
     globalThis.fetch = originalFetch;
   }
+});
+
+test("求职记录写入期间防止重复请求并显示中文云端反馈", () => {
+  assert.match(pageSource, /async function saveItem[\s\S]*?if \(busy\) return;/);
+  assert.match(pageSource, /async function removeItem[\s\S]*?if \(deleteBusyId\) return;/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, editingItem \? "修改求职记录" : "保存求职记录"\)/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "删除求职记录"\)/);
+  assert.match(pageSource, /deleteBusyId === item\.id \? "删除中…" : "删除"/);
 });

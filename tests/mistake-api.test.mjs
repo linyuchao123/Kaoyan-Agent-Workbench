@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { api, setApiAccessToken } from "../app/lib/api.ts";
+
+const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+
+test("错题保存与复习失败使用中文云端安全提示", () => {
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "保存错题"\)/);
+  assert.match(pageSource, /studyWriteErrorMessage\(error, "保存复习记录"\)/);
+  assert.doesNotMatch(pageSource, /`错题保存失败：\$\{error\.message\}`/);
+  assert.doesNotMatch(pageSource, /`复习记录失败：\$\{error\.message\}`/);
+});
 
 test("错题录入、到期查询和复习反馈均携带当前登录身份", async () => {
   const originalFetch = globalThis.fetch;
