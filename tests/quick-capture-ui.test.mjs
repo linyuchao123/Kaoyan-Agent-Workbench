@@ -19,7 +19,7 @@ test("快速记录可以写入任务或错题且不传用户编号", () => {
 
 test("快速记录保存后刷新今日工作台", () => {
   assert.match(pageSource, /setStudyRevision\(\(value\) => value \+ 1\)/);
-  assert.match(pageSource, /setView\("today"\)/);
+  assert.match(pageSource, /navigateToView\("today"\)/);
 });
 
 test("快速记录失败时显示中文云端提示且不暴露底层错误", () => {

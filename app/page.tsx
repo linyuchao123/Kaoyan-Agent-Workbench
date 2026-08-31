@@ -5,9 +5,10 @@ import type { User } from "@supabase/supabase-js";
 import { ApiError, api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
+import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
 
 type Scope = ContributionScope;
-type View = "today" | "plan" | "subjects" | "schools" | "career" | "materials" | "backup" | "agents";
+type View = WorkbenchView;
 
 type StudyDay = {
   date: string;
@@ -3276,7 +3277,8 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
 }
 
 function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
-  const [view, setView] = useState<View>("today");
+  const accountKey = user?.id ?? "demo";
+  const [view, setView] = useState<View>(() => readStoredWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey));
   const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
   const [searchOpen, setSearchOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
@@ -3287,7 +3289,11 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
   const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
   const displayName = metadataDisplayName || user?.email?.split("@")[0] || "林宇超";
   const avatar = displayName.slice(0, 2).toUpperCase();
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={user?.id ?? "demo"} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => setView("materials")} onOpenToday={() => setView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const navigateToView = useCallback((nextView: View) => {
+    setView(nextView);
+    storeWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey, nextView);
+  }, [accountKey]);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
 
   useEffect(() => {
     let active = true;
@@ -3314,18 +3320,18 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
-        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
+        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
         <div className="sidebar-goal"><span>2028 考研目标</span><strong>长三角 · 软件工程专硕</strong><div className="progress-track"><span style={{ width: "18%" }} /></div><small>基础阶段 · 第 3 周</small></div>
         <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
       </aside>
       <section className="main-content">
         <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><div className={`sync-status ${isDemo ? "offline" : apiStatus}`}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接" : "正在检查数据服务"}</div><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
         <div className="content-wrap">{content}</div>
-        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => setView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
+        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
       </section>
-      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={setView} />
-      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={setView} onCountChange={setAttentionCount} />
-      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); setView("today"); }} />
+      <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={navigateToView} />
+      <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={navigateToView} onCountChange={setAttentionCount} />
+      <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); navigateToView("today"); }} />
       {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
     </main>
   );
@@ -3388,5 +3394,5 @@ export default function Home() {
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
   if (passwordRecovery) return <AuthScreen recoveryMode onRecoveryComplete={(notice) => { setPasswordRecovery(false); setAuthNotice(notice); setAuthState({ status: "signed_out", user: null }); }} />;
   if (authState.status === "signed_out") return <AuthScreen initialStatus={authNotice} />;
-  return <Workbench user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} onUserUpdated={(user) => setAuthState({ status: "signed_in", user })} />;
+  return <Workbench key={authState.user?.id ?? "demo"} user={authState.user} isDemo={authState.status === "demo"} onSignOut={signOut} onUserUpdated={(user) => setAuthState({ status: "signed_in", user })} />;
 }

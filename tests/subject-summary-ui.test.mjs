@@ -17,6 +17,6 @@ test("学科学习页面读取云端统计并展示真实指标", () => {
 test("学科学习页面的资料与复习入口具备交互", () => {
   assert.match(pageSource, /onClick=\{onOpenMaterials\}/);
   assert.match(pageSource, /onClick=\{onOpenToday\}/);
-  assert.match(pageSource, /onOpenMaterials=\{\(\) => setView\("materials"\)\}/);
-  assert.match(pageSource, /onOpenToday=\{\(\) => setView\("today"\)\}/);
+  assert.match(pageSource, /onOpenMaterials=\{\(\) => navigateToView\("materials"\)\}/);
+  assert.match(pageSource, /onOpenToday=\{\(\) => navigateToView\("today"\)\}/);
 });

@@ -19,5 +19,6 @@ test("恢复后的计时由时间戳重算并扣除暂停时间", () => {
 });
 
 test("专注状态使用登录用户编号隔离", () => {
-  assert.match(pageSource, /accountKey=\{user\?\.id \?\? "demo"\}/);
+  assert.match(pageSource, /const accountKey = user\?\.id \?\? "demo";/);
+  assert.match(pageSource, /accountKey=\{accountKey\}/);
 });
