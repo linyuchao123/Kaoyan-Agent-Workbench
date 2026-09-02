@@ -13,12 +13,16 @@ import { RequestStatePanel, type RequestState } from "./components/request-state
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
+type HeatmapMetric = "completion" | "minutes";
 
 type StudyDay = {
   date: string;
   minutes: Record<Exclude<Scope, "all">, number>;
   sessions: number;
   tasks: number;
+  targetTasks: number;
+  completedTargetTasks: number;
+  completionRate: number;
   mistakes: number;
 };
 
@@ -330,7 +334,7 @@ function shanghaiDisplayDate(date: Date) {
   }).format(date);
 }
 
-function buildYearData(year: number): StudyDay[] {
+function buildYearData(year: number, scope: Scope): StudyDay[] {
   const today = new Date();
   const currentYear = Number(shanghaiDateKey(today).slice(0, 4));
   const start = new Date(Date.UTC(year, 0, 1));
@@ -347,11 +351,17 @@ function buildYearData(year: number): StudyDay[] {
     const english = active ? Math.floor(load * (0.12 + seededValue(index + 8) * 0.1)) : 0;
     const cs408 = active ? Math.floor(load * (0.22 + seededValue(index + 19) * 0.14)) : 0;
     const career = active ? Math.max(0, load - math - english - cs408) : 0;
+    const allTargetTasks = active ? 2 + Math.floor(seededValue(index + 71) * 5) : 0;
+    const targetTasks = scope === "all" ? allTargetTasks : Math.round(allTargetTasks * ({ math, english, politics: 0, cs408, career }[scope] / Math.max(1, load)));
+    const completedTargetTasks = targetTasks ? Math.min(targetTasks, Math.floor(seededValue(index + 79) * (targetTasks + 1))) : 0;
     result.push({
       date: formatDate(cursor),
       minutes: { math, english, politics: 0, cs408, career },
       sessions: active ? 1 + Math.floor(seededValue(index + 31) * 4) : 0,
       tasks: active ? 1 + Math.floor(seededValue(index + 41) * 5) : 0,
+      targetTasks,
+      completedTargetTasks,
+      completionRate: targetTasks ? Math.round(completedTargetTasks / targetTasks * 100) : 0,
       mistakes: active ? Math.floor(seededValue(index + 53) * 4) : 0,
     });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -372,6 +382,9 @@ function buildEmptyYearData(year: number): StudyDay[] {
       minutes: { math: 0, english: 0, politics: 0, cs408: 0, career: 0 },
       sessions: 0,
       tasks: 0,
+      targetTasks: 0,
+      completedTargetTasks: 0,
+      completionRate: 0,
       mistakes: 0,
     });
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -391,6 +404,14 @@ function getLevel(minutes: number, scope: Scope) {
   if (minutes < thresholds[2]) return 2;
   if (minutes < thresholds[3]) return 3;
   return 4;
+}
+
+function getCompletionLevel(rate: number, targetTasks: number) {
+  if (targetTasks === 0) return 0;
+  if (rate >= 100) return 4;
+  if (rate >= 75) return 3;
+  if (rate >= 50) return 2;
+  return 1;
 }
 
 function formatMinutes(minutes: number) {
@@ -460,7 +481,8 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
   const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
   const [year, setYear] = useState(currentYear);
   const [scope, setScope] = useState<Scope>("all");
-  const demoData = useMemo(() => buildYearData(year), [year]);
+  const [metric, setMetric] = useState<HeatmapMetric>("completion");
+  const demoData = useMemo(() => buildYearData(year, scope), [scope, year]);
   const emptyData = useMemo(() => buildEmptyYearData(year), [year]);
   const queryKey = `${year}:${scope}`;
   const [cloudData, setCloudData] = useState<{ key: string; status: "api" | "error"; data: StudyDay[] | null } | null>(null);
@@ -490,6 +512,9 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
             },
             sessions: day.session_count,
             tasks: day.completed_tasks,
+            targetTasks: day.target_tasks,
+            completedTargetTasks: day.completed_target_tasks,
+            completionRate: day.task_completion_rate,
             mistakes: day.mistake_count,
           })),
         });
@@ -508,6 +533,7 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
   const weeks = Array.from({ length: Math.ceil(padded.length / 7) }, (_, index) => padded.slice(index * 7, index * 7 + 7));
   const totalMinutes = data.reduce((sum, day) => sum + getMinutes(day, scope), 0);
   const activeDays = data.filter((day) => getMinutes(day, scope) > 0).length;
+  const targetDays = data.filter((day) => day.targetTasks > 0).length;
   const isLoading = dataSource === "loading";
   const hasError = dataSource === "error";
 
@@ -521,14 +547,16 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
               ? "正在加载云端学习数据…"
               : hasError
                 ? "云端学习数据加载失败"
-                : `${year} 年有效学习 ${Math.round(totalMinutes / 60)} 小时`}
+                : metric === "completion"
+                  ? `${year} 年目标完成度`
+                  : `${year} 年有效学习 ${Math.round(totalMinutes / 60)} 小时`}
           </h2>
           <p>
             {isLoading
               ? "正在读取学习会话与年度统计"
               : hasError
                 ? "请确认数据服务已启动后刷新页面"
-                : `${activeDays} 个学习日 · ${dataSource === "api" ? "来自真实学习会话" : "离线演示数据"}`}
+                : `${metric === "completion" ? `${targetDays} 个目标日` : `${activeDays} 个学习日`} · ${dataSource === "api" ? "来自真实学习记录" : "离线演示数据"}`}
           </p>
         </div>
         <div className="year-switch" aria-label="选择年份">
@@ -536,6 +564,11 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
             <button key={item} className={year === item ? "active" : ""} onClick={() => setYear(item)}>{item}</button>
           ))}
         </div>
+      </div>
+
+      <div className="heatmap-metric-switch" aria-label="选择热力图指标">
+        <button type="button" className={metric === "completion" ? "active" : ""} aria-pressed={metric === "completion"} onClick={() => setMetric("completion")}>目标完成度</button>
+        <button type="button" className={metric === "minutes" ? "active" : ""} aria-pressed={metric === "minutes"} onClick={() => setMetric("minutes")}>有效学习时长</button>
       </div>
 
       <div className="scope-row" aria-label="筛选学习科目">
@@ -557,12 +590,16 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
                   const day = week[dayIndex] ?? null;
                   if (!day) return <span className="heat-cell empty" key={dayIndex} aria-hidden="true" />;
                   const minutes = getMinutes(day, scope);
+                  const level = metric === "completion" ? getCompletionLevel(day.completionRate, day.targetTasks) : getLevel(minutes, scope);
+                  const metricLabel = metric === "completion"
+                    ? `${day.completionRate}%（${day.completedTargetTasks}/${day.targetTasks} 项）`
+                    : formatMinutes(minutes);
                   return (
                     <button
                       key={day.date}
-                      className={`heat-cell level-${getLevel(minutes, scope)} ${selectedDate === day.date ? "selected" : ""}`}
-                      title={`${day.date}：${formatMinutes(minutes)}`}
-                      aria-label={`${day.date}，有效学习${formatMinutes(minutes)}`}
+                      className={`heat-cell level-${level} ${selectedDate === day.date ? "selected" : ""}`}
+                      title={`${day.date}：${metricLabel}`}
+                      aria-label={`${day.date}，${metric === "completion" ? `目标完成度${metricLabel}` : `有效学习${metricLabel}`}`}
                       onClick={() => setSelectedDate(day.date)}
                       role="gridcell"
                     />
@@ -583,7 +620,7 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
           ) : (
             <>
               <strong>{selectedDay.date}</strong>
-              <span>{formatMinutes(getMinutes(selectedDay, scope))}</span>
+              <span>{metric === "completion" ? `目标完成 ${selectedDay.completedTargetTasks} / ${selectedDay.targetTasks} 项 · ${selectedDay.completionRate}%` : formatMinutes(getMinutes(selectedDay, scope))}</span>
               <span>{selectedDay.sessions} 次专注</span>
               <span>{selectedDay.tasks} 项完成</span>
               <span>{selectedDay.mistakes} 道错题</span>

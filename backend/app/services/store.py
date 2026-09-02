@@ -379,6 +379,21 @@ class DemoStore:
             if item.get("completed_at"):
                 completed_tasks[item["completed_at"].astimezone(self.timezone).date()] += 1
 
+        target_tasks: dict[date, int] = defaultdict(int)
+        completed_target_tasks: dict[date, int] = defaultdict(int)
+        for item in self.tasks.values():
+            if scope != "all" and item["subject"] != scope:
+                continue
+            plan = self.plans.get(item.get("plan_id")) if item.get("plan_id") else None
+            target_day = plan["starts_on"] if plan and plan.get("level") == "day" else None
+            if target_day is None and item.get("due_at"):
+                target_day = item["due_at"].astimezone(self.timezone).date()
+            if target_day is None:
+                target_day = item["created_at"].astimezone(self.timezone).date()
+            target_tasks[target_day] += 1
+            if item.get("completed_at"):
+                completed_target_tasks[target_day] += 1
+
         mistake_counts: dict[date, int] = defaultdict(int)
         for item in self.mistake_cards.values():
             mistake_counts[item["created_at"].astimezone(self.timezone).date()] += 1
@@ -402,6 +417,13 @@ class DemoStore:
                     ),
                     session_count=session_days[cursor],
                     completed_tasks=completed_tasks[cursor],
+                    target_tasks=target_tasks[cursor],
+                    completed_target_tasks=completed_target_tasks[cursor],
+                    task_completion_rate=(
+                        round(completed_target_tasks[cursor] / target_tasks[cursor] * 100)
+                        if target_tasks[cursor]
+                        else 0
+                    ),
                     mistake_count=mistake_counts[cursor],
                     subject_minutes=subject_minutes,
                 )

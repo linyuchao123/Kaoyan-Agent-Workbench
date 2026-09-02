@@ -34,6 +34,9 @@ class ContributionDay(BaseModel):
     intensity_level: int = Field(ge=0, le=4)
     session_count: int = 0
     completed_tasks: int = 0
+    target_tasks: int = 0
+    completed_target_tasks: int = 0
+    task_completion_rate: int = Field(default=0, ge=0, le=100)
     mistake_count: int = 0
     subject_minutes: dict[str, int] = Field(default_factory=dict)
 
