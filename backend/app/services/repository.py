@@ -22,6 +22,7 @@ from app.schemas import (
     ContributionDay,
     ImportProposal,
     MistakeCardCreate,
+    MistakeCardUpdate,
     MistakeReviewCreate,
     OcrJob,
     PlanCreate,
@@ -190,6 +191,12 @@ class StudyRepository(Protocol):
     async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]: ...
 
     async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict: ...
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None: ...
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool: ...
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
@@ -481,6 +488,14 @@ class DemoRepository:
 
     async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
         return self._store(user).create_mistake(payload)
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None:
+        return self._store(user).update_mistake(card_id, payload)
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool:
+        return self._store(user).delete_mistake(card_id)
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
@@ -1469,6 +1484,43 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None:
+        changes = payload.model_dump(mode="json", exclude_unset=True, exclude_none=True)
+        if not changes:
+            current = await self._request(
+                user,
+                "GET",
+                "mistake_cards",
+                params={
+                    "select": "id,subject,title,question,answer,error_reason,mastery,next_review_at,review_count,created_at,updated_at",
+                    "id": f"eq.{card_id}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            return current[0] if current else None
+        changes["updated_at"] = datetime.now(UTC).isoformat()
+        rows = await self._request(
+            user,
+            "PATCH",
+            "mistake_cards",
+            params={"id": f"eq.{card_id}", "user_id": f"eq.{user.id}"},
+            json=changes,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "mistake_cards",
+            params={"id": f"eq.{card_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate

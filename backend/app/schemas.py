@@ -190,6 +190,14 @@ class MistakeCardCreate(StrictRequestModel):
     error_reason: str = Field(default="", max_length=10000)
 
 
+class MistakeCardUpdate(StrictRequestModel):
+    subject: AcademicSubject | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    question: str | None = Field(default=None, min_length=1, max_length=10000)
+    answer: str | None = Field(default=None, max_length=10000)
+    error_reason: str | None = Field(default=None, max_length=10000)
+
+
 class MistakeReviewCreate(StrictRequestModel):
     result: Literal["again", "hard", "good", "easy"]
 

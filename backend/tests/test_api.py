@@ -879,6 +879,52 @@ class ApiFlowTests(TestCase):
             404,
         )
 
+    def test_mistake_card_can_be_edited_deleted_and_remains_user_isolated(self):
+        card = self.client.post(
+            "/api/v1/mistakes",
+            json={
+                "subject": "math",
+                "title": "等价无穷小",
+                "question": "什么时候可以替换？",
+                "error_reason": "忽略了运算结构",
+            },
+        ).json()
+
+        updated = self.client.patch(
+            f"/api/v1/mistakes/{card['id']}",
+            json={
+                "title": "等价无穷小替换条件",
+                "answer": "乘除结构可直接替换，加减结构需先变形。",
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["title"], "等价无穷小替换条件")
+        self.assertEqual(updated.json()["subject"], "math")
+        self.assertIn("乘除结构", updated.json()["answer"])
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(
+            self.client.patch(
+                f"/api/v1/mistakes/{card['id']}", json={"title": "越权修改"}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.delete(f"/api/v1/mistakes/{card['id']}").status_code,
+            404,
+        )
+
+        self.current_user = self.user
+        self.assertEqual(
+            self.client.delete(f"/api/v1/mistakes/{card['id']}").status_code,
+            204,
+        )
+        self.assertEqual(self.client.get("/api/v1/mistakes").json(), [])
+
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(
             "/api/v1/tasks",

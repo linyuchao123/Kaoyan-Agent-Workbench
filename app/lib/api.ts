@@ -522,6 +522,14 @@ export const api = {
     answer?: string;
     error_reason?: string;
   }) => request<ApiMistakeCard>("/api/v1/mistakes", { method: "POST", body: JSON.stringify(payload) }),
+  updateMistake: (id: string, payload: Partial<{
+    subject: MistakeSubject;
+    title: string;
+    question: string;
+    answer: string;
+    error_reason: string;
+  }>) => request<ApiMistakeCard>(`/api/v1/mistakes/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteMistake: (id: string) => request<void>(`/api/v1/mistakes/${id}`, { method: "DELETE" }),
   reviewMistake: (id: string, result: MistakeReviewResult) =>
     request<ApiMistakeCard>(`/api/v1/mistakes/${id}/reviews`, { method: "POST", body: JSON.stringify({ result }) }),
   listSchoolOptions: (tier?: SchoolTier, examYear?: number) => {

@@ -65,3 +65,46 @@ test("错题录入、到期查询和复习反馈均携带当前登录身份", as
     globalThis.fetch = originalFetch;
   }
 });
+
+test("错题编辑与删除只通过当前登录身份调用云端接口", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init });
+    if (init.method === "DELETE") return new Response(null, { status: 204 });
+    return new Response(JSON.stringify({
+      id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      subject: "math",
+      title: "等价无穷小替换条件",
+      question: "什么时候可以替换？",
+      answer: "乘除结构可直接替换",
+      error_reason: "忽略运算结构",
+      mastery: 1,
+      next_review_at: "2026-09-02T00:00:00Z",
+      review_count: 0,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const updated = await api.updateMistake("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", {
+      title: "等价无穷小替换条件",
+      answer: "乘除结构可直接替换",
+    });
+    await api.deleteMistake("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    assert.equal(updated.subject, "math");
+    assert.equal(requests[0].init.method, "PATCH");
+    assert.equal(requests[1].init.method, "DELETE");
+    assert.deepEqual(JSON.parse(requests[0].init.body), {
+      title: "等价无穷小替换条件",
+      answer: "乘除结构可直接替换",
+    });
+    for (const request of requests) {
+      assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+      assert.match(request.input, /\/api\/v1\/mistakes\/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa$/);
+    }
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});

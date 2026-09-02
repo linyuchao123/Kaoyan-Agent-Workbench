@@ -40,6 +40,15 @@ class MigrationContractTests(TestCase):
         self.assertIn("update public.mistake_cards", sql)
         self.assertIn("grant execute on function public.review_mistake_card", sql)
 
+    def test_authenticated_owner_can_complete_mistake_card_crud(self):
+        sql = Path(
+            "supabase/migrations/202609020002_mistake_card_crud.sql"
+        ).read_text()
+        self.assertIn(
+            "grant select, insert, update, delete on public.mistake_cards to authenticated",
+            sql,
+        )
+
     def test_authenticated_users_can_access_plans_through_rls(self):
         sql = Path("supabase/migrations/202608110003_grant_plan_access.sql").read_text()
         self.assertIn(

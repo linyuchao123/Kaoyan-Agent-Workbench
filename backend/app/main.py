@@ -45,6 +45,7 @@ from app.schemas import (
     ImportPreviewRequest,
     ImportProposal,
     MistakeCardCreate,
+    MistakeCardUpdate,
     MistakeReviewCreate,
     PlanCreate,
     PlanLevel,
@@ -353,6 +354,28 @@ async def create_mistake(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> dict:
     return await repository.create_mistake(user, payload)
+
+
+@app.patch("/api/v1/mistakes/{card_id}")
+async def update_mistake(
+    card_id: UUID,
+    payload: MistakeCardUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    card = await repository.update_mistake(user, card_id, payload)
+    if not card:
+        raise HTTPException(404, "mistake card not found")
+    return card
+
+
+@app.delete("/api/v1/mistakes/{card_id}", status_code=204)
+async def delete_mistake(
+    card_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_mistake(user, card_id):
+        raise HTTPException(404, "mistake card not found")
+    return Response(status_code=204)
 
 
 @app.post("/api/v1/mistakes/{card_id}/reviews")
