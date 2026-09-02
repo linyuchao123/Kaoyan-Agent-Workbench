@@ -7,6 +7,7 @@ import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
+import { ExamCountdown } from "./components/exam-countdown";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -1183,6 +1184,8 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
         <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
+
+      <ExamCountdown key={accountKey} accountKey={accountKey} today={shanghaiDateKey(new Date())} />
 
       <StudyHeatmap isDemo={isDemo} refreshVersion={contributionRevision} />
 
