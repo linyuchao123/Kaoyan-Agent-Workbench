@@ -8,6 +8,7 @@ import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
 import { ExamCountdown } from "./components/exam-countdown";
+import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -3289,7 +3290,7 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
 function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
   const accountKey = user?.id ?? "demo";
   const [view, setView] = useState<View>(() => readStoredWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey));
-  const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [apiStatus, setApiStatus] = useState<WorkbenchApiStatus>("checking");
   const [healthRevision, setHealthRevision] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
@@ -3354,31 +3355,32 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     return () => window.removeEventListener("keydown", openSearchWithShortcut);
   }, []);
 
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
-        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-        <div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
-          <span>2028 考研阶段</span>
-          <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
-          <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
-          <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
-          <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
-        </div>
-        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
-      </aside>
-      <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><button type="button" className={`sync-status ${isDemo ? "offline" : apiStatus}`} onClick={retryApiHealth} disabled={isDemo || apiStatus === "checking"} title={isDemo ? "离线演示模式不连接云端" : "点击立即重新检查云端连接"}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接 · 点击重试" : "正在重新检查数据服务…"}</button><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
-        <div className="content-wrap">{content}</div>
-        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
-      </section>
+  return <WorkbenchLayout
+    activeView={view}
+    apiStatus={apiStatus}
+    isDemo={isDemo}
+    navItems={navItems}
+    attentionCount={attentionCount}
+    onNavigate={navigateToView}
+    onRetryApiHealth={retryApiHealth}
+    onOpenSearch={() => setSearchOpen(true)}
+    onOpenAttention={() => setAttentionOpen(true)}
+    onOpenQuickCapture={() => setQuickCaptureOpen(true)}
+    sidebarGoal={<div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
+      <span>2028 考研阶段</span>
+      <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
+      <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
+      <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
+      <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
+    </div>}
+    profile={<div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>}
+    overlays={<>
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={navigateToView} />
       <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={navigateToView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); navigateToView("today"); }} />
       {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
-    </main>
-  );
+    </>}
+  >{content}</WorkbenchLayout>;
 }
 
 export default function Home() {

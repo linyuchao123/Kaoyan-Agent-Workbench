@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const layoutSource = await readFile(new URL("../app/components/workbench-layout.tsx", import.meta.url), "utf8");
 const component = pageSource.slice(pageSource.indexOf("function GlobalSearch"), pageSource.indexOf("function QuickCapture"));
 
 test("顶部搜索按钮可以打开全局搜索弹窗", () => {
@@ -30,7 +31,7 @@ test("全局搜索支持 Ctrl 或 Command K 快捷键", () => {
   assert.match(pageSource, /event\.metaKey \|\| event\.ctrlKey/);
   assert.match(pageSource, /event\.key\.toLocaleLowerCase\(\) === "k"/);
   assert.match(pageSource, /event\.preventDefault\(\)/);
-  assert.match(pageSource, /搜索（Ctrl\/⌘ \+ K）/);
+  assert.match(layoutSource, /搜索（Ctrl\/⌘ \+ K）/);
 });
 
 test("全局搜索支持方向键选择与回车跳转", () => {
