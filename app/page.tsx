@@ -10,6 +10,7 @@ import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from 
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
+import { TodayActionStrip } from "./components/today-action-strip";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -633,7 +634,7 @@ function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVers
   );
 }
 
-function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displayName: string; accountKey: string }) {
+function TodayView({ isDemo, displayName, accountKey, onOpenAgentPlan }: { isDemo: boolean; displayName: string; accountKey: string; onOpenAgentPlan: () => void }) {
   const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
@@ -1206,6 +1207,10 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
     ? Math.max(0, focusTask.plannedMinutes - focusTaskMinutes)
     : 0;
 
+  function openMistakeReview() {
+    document.getElementById("today-mistake-review")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <>
       <div className="hero-row">
@@ -1223,6 +1228,8 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
         <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
+
+      <TodayActionStrip mistakeCount={mistakes.length} loading={cloudState === "loading"} onOpenAgentPlan={onOpenAgentPlan} onOpenMistakeReview={openMistakeReview} />
 
       <ExamCountdown key={accountKey} accountKey={accountKey} today={shanghaiDateKey(new Date())} />
 
@@ -1300,7 +1307,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </article>)}
             </div>
           </section>
-          <section className="panel review-card">
+          <section className="panel review-card" id="today-mistake-review" tabIndex={-1}>
             <div className="review-heading"><div><div className="eyebrow">错题复习</div><strong>{mistakes.length} 道待复习</strong></div><button type="button" onClick={() => { setMistakeFormOpen((value) => !value); setMistakeStatus(""); }}>{mistakeFormOpen ? "收起" : "＋ 速记"}</button></div>
             {mistakeFormOpen && <form className="mistake-form" onSubmit={addMistake}>
               <label>科目<select value={mistakeSubject} onChange={(event) => setMistakeSubject(event.target.value as MistakeSubject)}>{Object.entries(subjectMeta).filter(([key]) => key !== "career").map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
@@ -2495,10 +2502,10 @@ function restoredAgentModel(metadata: Record<string, unknown>): AgentModelMetada
   };
 }
 
-function AgentsView({ isDemo }: { isDemo: boolean }) {
-  const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
+function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isDemo: boolean; initialQuery?: string; onInitialQueryConsumed?: () => void }) {
+  const [mode, setMode] = useState<"coach" | "tutor" | "combined">(() => initialQuery ? "coach" : "combined");
   const [modelProfile, setModelProfile] = useState<AgentModelProfile>("flash");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [messages, setMessages] = useState<AgentChatMessage[]>([{ role: "agent", text: agentWelcomeMessage }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
   const [proposalDraft, setProposalDraft] = useState<AgentProposalEdit | null>(null);
@@ -2594,6 +2601,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     event.preventDefault();
     if (!query.trim() || busy) return;
     const text = query.trim();
+    onInitialQueryConsumed?.();
     setMessages((items) => [...items, { role: "user", text }]);
     setQuery("");
     if (isDemo) {
@@ -2857,7 +2865,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           />
         )}
         <form className="agent-input" onSubmit={submit}>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" disabled={busy} />
+          <input aria-label="Agent 问题" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" disabled={busy} />
           {busy
             ? <button className="cancel" type="button" onClick={stopWaiting}>停止等待</button>
             : <button type="submit" disabled={!query.trim()}>发送 ↑</button>}
@@ -3358,6 +3366,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
   const [planRevision, setPlanRevision] = useState(0);
+  const [agentPlanQuery, setAgentPlanQuery] = useState("");
   const [sidebarStage, setSidebarStage] = useState<ApiPlan | null>(() => isDemo ? selectSidebarStage(demoPlans, shanghaiDateKey(new Date())) : null);
   const [sidebarStageState, setSidebarStageState] = useState<"loading" | "ready" | "empty" | "error">(() => isDemo ? "ready" : "loading");
   const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
@@ -3371,7 +3380,11 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setApiStatus("checking");
     setHealthRevision((revision) => revision + 1);
   }, []);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const openAgentPlan = useCallback(() => {
+    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，提议一项今天最该优先完成的学习任务。请说明选择依据，并只生成待我批准的任务提案，不要直接写入。");
+    navigateToView("agents");
+  }, [navigateToView]);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {
