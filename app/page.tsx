@@ -9,6 +9,7 @@ import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
+import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -1830,6 +1831,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
   const [loading, setLoading] = useState(!isDemo);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
@@ -1855,12 +1857,15 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       .then((items) => {
         if (!active) return;
         setSchools(items);
+        setLoadError(null);
         setStatus(`已从云端加载 ${items.length} 所院校记录`);
       })
       .catch((error) => {
         if (!active) return;
         setSchools([]);
-        setStatus(cloudReadErrorMessage(error, "院校情报"));
+        const message = cloudReadErrorMessage(error, "院校情报");
+        setLoadError(message);
+        setStatus(message);
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1877,6 +1882,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     setYearFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setStatus("正在加载云端院校情报…");
     }
   }
@@ -1885,6 +1891,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     setTierFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setStatus("正在加载云端院校情报…");
     }
   }
@@ -1947,6 +1954,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       const saved = editingSchool
         ? await api.updateSchoolOption(editingSchool.id, payload)
         : await api.createSchoolOption(payload);
+      setLoadError(null);
       const remainsVisible = (tierFilter === "all" || tierFilter === saved.tier) && Number(yearFilter) === saved.exam_year;
       setSchools((items) => editingSchool
         ? (remainsVisible ? items.map((item) => item.id === saved.id ? saved : item) : items.filter((item) => item.id !== saved.id))
@@ -1980,10 +1988,14 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
+  const schoolRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleSchools.length ? "ready" : "empty";
+
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : visibleSchools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeSchool(school)}>{deleteBusyId === school.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
+    <RequestStatePanel state={schoolRequestState} loadingText="正在加载你的云端院校情报…" emptyTitle="当前筛选下还没有院校" emptyDescription="添加第一所目标院校，并记录招生年份与官方来源。" errorText={loadError}>
+      <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeSchool(school)}>{deleteBusyId === school.id ? "删除中…" : "删除"}</button></div></article>)}</div>
+    </RequestStatePanel>
   </section>;
 }
 
@@ -2015,6 +2027,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const [items, setItems] = useState<ApiCareerItem[]>(isDemo ? demoCareerItems : []);
   const [loading, setLoading] = useState(!isDemo);
   const [message, setMessage] = useState(isDemo ? "当前显示离线演示求职记录" : "正在加载云端求职记录…");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<CareerItemType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<CareerStatus | "all">("all");
   const [formOpen, setFormOpen] = useState(false);
@@ -2035,12 +2048,15 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       .then((records) => {
         if (!active) return;
         setItems(records);
+        setLoadError(null);
         setMessage(`已从云端加载 ${records.length} 条求职记录`);
       })
       .catch((error) => {
         if (!active) return;
         setItems([]);
-        setMessage(cloudReadErrorMessage(error, "求职记录"));
+        const message = cloudReadErrorMessage(error, "求职记录");
+        setLoadError(message);
+        setMessage(message);
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -2057,6 +2073,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     setTypeFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setMessage("正在加载云端求职记录…");
     }
   }
@@ -2065,6 +2082,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     setStatusFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setMessage("正在加载云端求职记录…");
     }
   }
@@ -2112,6 +2130,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       const saved = editingItem
         ? await api.updateCareerItem(editingItem.id, { ...payload, company: company.trim() || null, occurred_on: occurredOn || null })
         : await api.createCareerItem(payload);
+      setLoadError(null);
       const visible = (typeFilter === "all" || saved.item_type === typeFilter) && (statusFilter === "all" || saved.status === statusFilter);
       setItems((records) => editingItem
         ? (visible ? records.map((item) => item.id === saved.id ? saved : item) : records.filter((item) => item.id !== saved.id))
@@ -2151,6 +2170,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     interviewing: visibleItems.filter((item) => item.status === "interviewing").length,
     offer: visibleItems.filter((item) => item.status === "offer").length,
   };
+  const careerRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleItems.length ? "ready" : "empty";
 
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
@@ -2158,7 +2178,9 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
     <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
     {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
+    <RequestStatePanel state={careerRequestState} loadingText="正在加载你的云端求职记录…" emptyTitle="当前筛选下还没有求职记录" emptyDescription="从一个项目里程碑或第一版简历开始记录。" errorText={loadError}>
+      <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>
+    </RequestStatePanel>
   </section>;
 }
 
