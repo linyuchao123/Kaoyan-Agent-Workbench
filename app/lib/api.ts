@@ -193,6 +193,9 @@ export type ContributionDay = {
   intensity_level: number;
   session_count: number;
   completed_tasks: number;
+  target_tasks: number;
+  completed_target_tasks: number;
+  task_completion_rate: number;
   mistake_count: number;
   subject_minutes: Record<string, number>;
 };

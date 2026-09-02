@@ -22,6 +22,16 @@ class MigrationContractTests(TestCase):
         self.assertIn("grant select on public.profiles to authenticated", sql)
         self.assertIn("grant select on public.mistake_cards to authenticated", sql)
 
+    def test_daily_target_completion_is_scoped_and_keeps_rls_boundary(self):
+        sql = Path(
+            "supabase/migrations/202609020001_daily_target_completion.sql"
+        ).read_text()
+        self.assertIn("with (security_invoker = true)", sql)
+        self.assertIn("subject_target_tasks", sql)
+        self.assertIn("subject_completed_target_tasks", sql)
+        self.assertIn("case when plan.level = 'day' then plan.starts_on end", sql)
+        self.assertIn("grant select on public.daily_study_contributions to authenticated", sql)
+
     def test_mistake_review_is_atomic_and_user_scoped(self):
         sql = Path("supabase/migrations/202608110002_mistake_review_loop.sql").read_text()
         self.assertIn("create or replace function public.review_mistake_card", sql)

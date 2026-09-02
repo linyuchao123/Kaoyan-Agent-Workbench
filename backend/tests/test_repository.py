@@ -97,6 +97,10 @@ class RepositoryTests(IsolatedAsyncioTestCase):
                         "effective_minutes": 80,
                         "session_count": 1,
                         "completed_tasks": 1,
+                        "target_tasks": 2,
+                        "completed_target_tasks": 1,
+                        "subject_target_tasks": {"math": 2},
+                        "subject_completed_target_tasks": {"math": 1},
                         "mistake_count": 0,
                         "subject_minutes": {"math": 80},
                     }
@@ -114,6 +118,7 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual([day.effective_minutes for day in days], [80, 0])
         self.assertEqual([day.intensity_level for day in days], [3, 0])
+        self.assertEqual([day.task_completion_rate for day in days], [50, 0])
 
     async def test_supabase_reads_are_scoped_to_the_authenticated_user(self):
         requests: list[httpx.Request] = []

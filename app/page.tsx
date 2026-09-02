@@ -1,24 +1,20 @@
 "use client";
 
-import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { ApiError, api, setApiAccessToken, setApiAuthFailureHandler, type ActionProposal, type AgentModelMetadata, type AgentModelProfile, type AgentProposalEdit, type AgentSource, type AgentThreadHistory, type AgentThreadSummary, type ApiCareerItem, type ApiDocument, type ApiHealth, type ApiMistakeCard, type ApiPlan, type ApiPrivateKnowledgeSource, type ApiSchoolOption, type ApiStudySession, type ApiTask, type CareerItemType, type CareerStatus, type ContributionScope, type DashboardMetrics, type DegreeType, type ExportFormat, type ImportProposal, type MistakeReviewResult, type MistakeSubject, type PlanProgress, type PlanStatus, type SchoolTier, type Subject, type SubjectSummary } from "./lib/api";
 import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
+import { ExamCountdown } from "./components/exam-countdown";
+import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
+import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
+import { TodayActionStrip } from "./components/today-action-strip";
+import { StudyHeatmap } from "./components/study-heatmap";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
-
-type StudyDay = {
-  date: string;
-  minutes: Record<Exclude<Scope, "all">, number>;
-  sessions: number;
-  tasks: number;
-  mistakes: number;
-};
-
 type Task = {
   id: string;
   title: string;
@@ -299,15 +295,6 @@ function TaskStudyProgress({ task }: { task: Task }) {
   </span>;
 }
 
-function seededValue(seed: number) {
-  const x = Math.sin(seed * 9283.17) * 43758.5453;
-  return x - Math.floor(x);
-}
-
-function formatDate(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
-
 function shanghaiDateKey(date: Date) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Shanghai",
@@ -325,69 +312,6 @@ function shanghaiDisplayDate(date: Date) {
     day: "numeric",
     weekday: "short",
   }).format(date);
-}
-
-function buildYearData(year: number): StudyDay[] {
-  const today = new Date();
-  const currentYear = Number(shanghaiDateKey(today).slice(0, 4));
-  const start = new Date(Date.UTC(year, 0, 1));
-  const end = new Date(Date.UTC(year, 11, 31));
-  const result: StudyDay[] = [];
-  const cursor = new Date(start);
-  let index = 0;
-
-  while (cursor <= end) {
-    const isFuture = cursor > today;
-    const active = !isFuture && seededValue(index + year * 7) > (year === currentYear ? 0.36 : 0.28);
-    const load = active ? 40 + Math.floor(seededValue(index * 5 + 11) * 360) : 0;
-    const math = active ? Math.floor(load * (0.28 + seededValue(index + 3) * 0.18)) : 0;
-    const english = active ? Math.floor(load * (0.12 + seededValue(index + 8) * 0.1)) : 0;
-    const cs408 = active ? Math.floor(load * (0.22 + seededValue(index + 19) * 0.14)) : 0;
-    const career = active ? Math.max(0, load - math - english - cs408) : 0;
-    result.push({
-      date: formatDate(cursor),
-      minutes: { math, english, politics: 0, cs408, career },
-      sessions: active ? 1 + Math.floor(seededValue(index + 31) * 4) : 0,
-      tasks: active ? 1 + Math.floor(seededValue(index + 41) * 5) : 0,
-      mistakes: active ? Math.floor(seededValue(index + 53) * 4) : 0,
-    });
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-    index += 1;
-  }
-  return result;
-}
-
-function buildEmptyYearData(year: number): StudyDay[] {
-  const start = new Date(Date.UTC(year, 0, 1));
-  const end = new Date(Date.UTC(year, 11, 31));
-  const result: StudyDay[] = [];
-  const cursor = new Date(start);
-
-  while (cursor <= end) {
-    result.push({
-      date: formatDate(cursor),
-      minutes: { math: 0, english: 0, politics: 0, cs408: 0, career: 0 },
-      sessions: 0,
-      tasks: 0,
-      mistakes: 0,
-    });
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return result;
-}
-
-function getMinutes(day: StudyDay, scope: Scope) {
-  if (scope === "all") return Object.values(day.minutes).reduce((sum, value) => sum + value, 0);
-  return day.minutes[scope];
-}
-
-function getLevel(minutes: number, scope: Scope) {
-  const thresholds = scope === "all" ? [1, 60, 180, 300] : [1, 30, 60, 120];
-  if (minutes < thresholds[0]) return 0;
-  if (minutes < thresholds[1]) return 1;
-  if (minutes < thresholds[2]) return 2;
-  if (minutes < thresholds[3]) return 3;
-  return 4;
 }
 
 function formatMinutes(minutes: number) {
@@ -453,147 +377,8 @@ function formatTimer(seconds: number) {
   return `${hours}:${minutes}:${secs}`;
 }
 
-function StudyHeatmap({ isDemo, refreshVersion }: { isDemo: boolean; refreshVersion: number }) {
-  const currentYear = Number(shanghaiDateKey(new Date()).slice(0, 4));
-  const [year, setYear] = useState(currentYear);
-  const [scope, setScope] = useState<Scope>("all");
-  const demoData = useMemo(() => buildYearData(year), [year]);
-  const emptyData = useMemo(() => buildEmptyYearData(year), [year]);
-  const queryKey = `${year}:${scope}`;
-  const [cloudData, setCloudData] = useState<{ key: string; status: "api" | "error"; data: StudyDay[] | null } | null>(null);
-  const dataSource = isDemo ? "demo" : cloudData?.key === queryKey ? cloudData.status : "loading";
-  const remoteData = cloudData?.key === queryKey ? cloudData.data : null;
-  const data = dataSource === "demo" ? demoData : remoteData ?? emptyData;
-  const [selectedDate, setSelectedDate] = useState(shanghaiDateKey(new Date()));
-  const selectedDay = data.find((day) => day.date === selectedDate) ?? data[data.length - 1];
 
-  useEffect(() => {
-    if (isDemo) return;
-    let cancelled = false;
-    api.contributions(`${year}-01-01`, `${year}-12-31`, scope)
-      .then((days) => {
-        if (cancelled) return;
-        setCloudData({
-          key: queryKey,
-          status: "api",
-          data: days.map((day) => ({
-            date: day.date,
-            minutes: {
-              math: day.subject_minutes.math ?? 0,
-              english: day.subject_minutes.english ?? 0,
-              politics: day.subject_minutes.politics ?? 0,
-              cs408: day.subject_minutes.cs408 ?? 0,
-              career: day.subject_minutes.career ?? 0,
-            },
-            sessions: day.session_count,
-            tasks: day.completed_tasks,
-            mistakes: day.mistake_count,
-          })),
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setCloudData({ key: queryKey, status: "error", data: null });
-      });
-    return () => { cancelled = true; };
-  }, [isDemo, queryKey, refreshVersion, scope, year]);
-
-  const padded = useMemo(() => {
-    const first = new Date(`${year}-01-01T00:00:00Z`);
-    const mondayOffset = (first.getUTCDay() + 6) % 7;
-    return [...Array<StudyDay | null>(mondayOffset).fill(null), ...data];
-  }, [data, year]);
-  const weeks = Array.from({ length: Math.ceil(padded.length / 7) }, (_, index) => padded.slice(index * 7, index * 7 + 7));
-  const totalMinutes = data.reduce((sum, day) => sum + getMinutes(day, scope), 0);
-  const activeDays = data.filter((day) => getMinutes(day, scope) > 0).length;
-  const isLoading = dataSource === "loading";
-  const hasError = dataSource === "error";
-
-  return (
-    <section className="panel heatmap-panel" aria-busy={isLoading}>
-      <div className="panel-heading heatmap-heading">
-        <div>
-          <div className="eyebrow">学习轨迹</div>
-          <h2 className={isLoading ? "cloud-loading-text" : undefined}>
-            {isLoading
-              ? "正在加载云端学习数据…"
-              : hasError
-                ? "云端学习数据加载失败"
-                : `${year} 年有效学习 ${Math.round(totalMinutes / 60)} 小时`}
-          </h2>
-          <p>
-            {isLoading
-              ? "正在读取学习会话与年度统计"
-              : hasError
-                ? "请确认数据服务已启动后刷新页面"
-                : `${activeDays} 个学习日 · ${dataSource === "api" ? "来自真实学习会话" : "离线演示数据"}`}
-          </p>
-        </div>
-        <div className="year-switch" aria-label="选择年份">
-          {[currentYear, currentYear - 1].map((item) => (
-            <button key={item} className={year === item ? "active" : ""} onClick={() => setYear(item)}>{item}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="scope-row" aria-label="筛选学习科目">
-        {scopes.map((item) => (
-          <button key={item.key} className={scope === item.key ? "active" : ""} onClick={() => setScope(item.key)}>{item.label}</button>
-        ))}
-      </div>
-
-      <div className="heatmap-scroll">
-        <div className="month-row" aria-hidden="true">
-          {Array.from({ length: 12 }, (_, index) => <span key={index}>{index + 1}月</span>)}
-        </div>
-        <div className="heatmap-body">
-          <div className="weekday-labels" aria-hidden="true"><span>一</span><span></span><span>三</span><span></span><span>五</span><span></span><span>日</span></div>
-          <div className={`heatmap-grid ${isLoading ? "loading" : ""}`} role="grid" aria-label={`${year} 学习贡献热力图`}>
-            {weeks.map((week, weekIndex) => (
-              <div className="heatmap-week" key={weekIndex} role="row">
-                {Array.from({ length: 7 }, (_, dayIndex) => {
-                  const day = week[dayIndex] ?? null;
-                  if (!day) return <span className="heat-cell empty" key={dayIndex} aria-hidden="true" />;
-                  const minutes = getMinutes(day, scope);
-                  return (
-                    <button
-                      key={day.date}
-                      className={`heat-cell level-${getLevel(minutes, scope)} ${selectedDate === day.date ? "selected" : ""}`}
-                      title={`${day.date}：${formatMinutes(minutes)}`}
-                      aria-label={`${day.date}，有效学习${formatMinutes(minutes)}`}
-                      onClick={() => setSelectedDate(day.date)}
-                      role="gridcell"
-                    />
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="heatmap-footer">
-        <div className="selected-summary">
-          {isLoading ? (
-            <span className="cloud-loading-text">正在同步云端统计…</span>
-          ) : hasError ? (
-            <span>暂时无法读取学习统计</span>
-          ) : (
-            <>
-              <strong>{selectedDay.date}</strong>
-              <span>{formatMinutes(getMinutes(selectedDay, scope))}</span>
-              <span>{selectedDay.sessions} 次专注</span>
-              <span>{selectedDay.tasks} 项完成</span>
-              <span>{selectedDay.mistakes} 道错题</span>
-            </>
-          )}
-        </div>
-        <div className="legend"><span>少</span>{[0, 1, 2, 3, 4].map((level) => <i className={`level-${level}`} key={level} />)}<span>多</span></div>
-      </div>
-    </section>
-  );
-}
-
-function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displayName: string; accountKey: string }) {
+function TodayView({ isDemo, displayName, accountKey, onOpenAgentPlan }: { isDemo: boolean; displayName: string; accountKey: string; onOpenAgentPlan: () => void }) {
   const [tasks, setTasks] = useState<Task[]>(() => isDemo ? initialTasks : []);
   const [newTask, setNewTask] = useState("");
   const [newTaskSubject, setNewTaskSubject] = useState<Subject>("math");
@@ -1166,6 +951,10 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
     ? Math.max(0, focusTask.plannedMinutes - focusTaskMinutes)
     : 0;
 
+  function openMistakeReview() {
+    document.getElementById("today-mistake-review")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <>
       <div className="hero-row">
@@ -1183,6 +972,10 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
         <article className="metric-card"><span>连续学习</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在统计学习记录</em></> : cloudState === "error" || !dashboardMetrics ? <><strong>--</strong><em>云端数据暂时不可用</em></> : <><strong>{dashboardMetrics.current_streak_days}<small>天</small></strong><em>近一年最长 {dashboardMetrics.longest_streak_days} 天</em></>}</article>
         <article className="metric-card"><span>待复习错题</span>{cloudState === "loading" ? <><strong className="metric-loading">加载中</strong><em>正在读取复习队列</em></> : <><strong>{mistakes.length}<small>道</small></strong><em>{mistakes.length ? "已到期 · 建议今天完成" : "当前复习队列已清空"}</em></>}</article>
       </div>
+
+      <TodayActionStrip mistakeCount={mistakes.length} loading={cloudState === "loading"} onOpenAgentPlan={onOpenAgentPlan} onOpenMistakeReview={openMistakeReview} />
+
+      <ExamCountdown key={accountKey} accountKey={accountKey} today={shanghaiDateKey(new Date())} />
 
       <StudyHeatmap isDemo={isDemo} refreshVersion={contributionRevision} />
 
@@ -1258,7 +1051,7 @@ function TodayView({ isDemo, displayName, accountKey }: { isDemo: boolean; displ
               </article>)}
             </div>
           </section>
-          <section className="panel review-card">
+          <section className="panel review-card" id="today-mistake-review" tabIndex={-1}>
             <div className="review-heading"><div><div className="eyebrow">错题复习</div><strong>{mistakes.length} 道待复习</strong></div><button type="button" onClick={() => { setMistakeFormOpen((value) => !value); setMistakeStatus(""); }}>{mistakeFormOpen ? "收起" : "＋ 速记"}</button></div>
             {mistakeFormOpen && <form className="mistake-form" onSubmit={addMistake}>
               <label>科目<select value={mistakeSubject} onChange={(event) => setMistakeSubject(event.target.value as MistakeSubject)}>{Object.entries(subjectMeta).filter(([key]) => key !== "career").map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label>
@@ -1826,6 +1619,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
   const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
   const [loading, setLoading] = useState(!isDemo);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [deleteBusyId, setDeleteBusyId] = useState<string | null>(null);
@@ -1851,12 +1645,15 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       .then((items) => {
         if (!active) return;
         setSchools(items);
+        setLoadError(null);
         setStatus(`已从云端加载 ${items.length} 所院校记录`);
       })
       .catch((error) => {
         if (!active) return;
         setSchools([]);
-        setStatus(cloudReadErrorMessage(error, "院校情报"));
+        const message = cloudReadErrorMessage(error, "院校情报");
+        setLoadError(message);
+        setStatus(message);
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -1873,6 +1670,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     setYearFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setStatus("正在加载云端院校情报…");
     }
   }
@@ -1881,6 +1679,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     setTierFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setStatus("正在加载云端院校情报…");
     }
   }
@@ -1943,6 +1742,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
       const saved = editingSchool
         ? await api.updateSchoolOption(editingSchool.id, payload)
         : await api.createSchoolOption(payload);
+      setLoadError(null);
       const remainsVisible = (tierFilter === "all" || tierFilter === saved.tier) && Number(yearFilter) === saved.exam_year;
       setSchools((items) => editingSchool
         ? (remainsVisible ? items.map((item) => item.id === saved.id ? saved : item) : items.filter((item) => item.id !== saved.id))
@@ -1976,10 +1776,14 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
     }
   }
 
+  const schoolRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleSchools.length ? "ready" : "empty";
+
   return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端院校情报…</div> : visibleSchools.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有院校</strong><span>添加第一所目标院校，并记录招生年份与官方来源。</span></div> : <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeSchool(school)}>{deleteBusyId === school.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
+    <RequestStatePanel state={schoolRequestState} loadingText="正在加载你的云端院校情报…" emptyTitle="当前筛选下还没有院校" emptyDescription="添加第一所目标院校，并记录招生年份与官方来源。" errorText={loadError}>
+      <div className="school-list">{visibleSchools.map((school) => <article className="panel school-card" key={school.id}><div className={`tier tier-${school.tier}`}>{schoolTierMeta[school.tier].label}</div><div className="school-main"><span>{school.exam_year} 年 · {schoolTierMeta[school.tier].title} · {school.degree_type === "professional" ? "专硕" : "学硕"}</span><h2>{school.university}</h2><p>{school.college} · {school.major_code} {school.major_name}</p></div><div className="school-meta"><span>初试科目</span><strong>{school.exam_subjects.join(" · ") || "待核对"}</strong></div><div className="school-meta"><span>培养地点</span><strong>{school.location || "待核对"}</strong></div><div className="school-actions"><a href={school.source_url} target="_blank" rel="noreferrer">官方来源 ↗</a><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openSchoolEditor(school)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeSchool(school)}>{deleteBusyId === school.id ? "删除中…" : "删除"}</button></div></article>)}</div>
+    </RequestStatePanel>
   </section>;
 }
 
@@ -2011,6 +1815,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const [items, setItems] = useState<ApiCareerItem[]>(isDemo ? demoCareerItems : []);
   const [loading, setLoading] = useState(!isDemo);
   const [message, setMessage] = useState(isDemo ? "当前显示离线演示求职记录" : "正在加载云端求职记录…");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<CareerItemType | "all">("all");
   const [statusFilter, setStatusFilter] = useState<CareerStatus | "all">("all");
   const [formOpen, setFormOpen] = useState(false);
@@ -2031,12 +1836,15 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       .then((records) => {
         if (!active) return;
         setItems(records);
+        setLoadError(null);
         setMessage(`已从云端加载 ${records.length} 条求职记录`);
       })
       .catch((error) => {
         if (!active) return;
         setItems([]);
-        setMessage(cloudReadErrorMessage(error, "求职记录"));
+        const message = cloudReadErrorMessage(error, "求职记录");
+        setLoadError(message);
+        setMessage(message);
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -2053,6 +1861,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     setTypeFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setMessage("正在加载云端求职记录…");
     }
   }
@@ -2061,6 +1870,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     setStatusFilter(value);
     if (!isDemo) {
       setLoading(true);
+      setLoadError(null);
       setMessage("正在加载云端求职记录…");
     }
   }
@@ -2108,6 +1918,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
       const saved = editingItem
         ? await api.updateCareerItem(editingItem.id, { ...payload, company: company.trim() || null, occurred_on: occurredOn || null })
         : await api.createCareerItem(payload);
+      setLoadError(null);
       const visible = (typeFilter === "all" || saved.item_type === typeFilter) && (statusFilter === "all" || saved.status === statusFilter);
       setItems((records) => editingItem
         ? (visible ? records.map((item) => item.id === saved.id ? saved : item) : records.filter((item) => item.id !== saved.id))
@@ -2147,6 +1958,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     interviewing: visibleItems.filter((item) => item.status === "interviewing").length,
     offer: visibleItems.filter((item) => item.status === "offer").length,
   };
+  const careerRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleItems.length ? "ready" : "empty";
 
   return <section className="content-view">
     <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
@@ -2154,7 +1966,9 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
     <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
     {formOpen && <form className="panel career-form" onSubmit={saveItem}><div className="career-form-heading"><div className="eyebrow">{editingItem ? "编辑求职记录" : "新增求职记录"}</div><h2>{editingItem ? `更新 ${editingItem.title}` : "沉淀可复盘的求职过程"}</h2></div><label>记录类型<select value={itemType} onChange={(event) => setItemType(event.target.value as CareerItemType)}>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>状态<select value={careerStatus} onChange={(event) => setCareerStatus(event.target.value as CareerStatus)}>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="career-form-wide">标题<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} placeholder="例如：AI Agent 实习投递" required /></label><label>公司 / 版本<input value={company} onChange={(event) => setCompany(event.target.value)} maxLength={160} placeholder="公司名称或简历版本" /></label><label>计划 / 发生日期<input type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} /></label><label className="career-form-wide">复盘备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录准备内容、投递渠道、面试问题和后续改进" /></label><div className="career-form-actions"><button type="button" onClick={() => { setFormOpen(false); resetForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingItem ? "保存修改" : "保存求职记录"}</button></div></form>}
-    {loading ? <div className="panel plan-empty cloud-loading-text">正在加载你的云端求职记录…</div> : visibleItems.length === 0 ? <div className="panel plan-empty"><strong>当前筛选下还没有求职记录</strong><span>从一个项目里程碑或第一版简历开始记录。</span></div> : <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>}
+    <RequestStatePanel state={careerRequestState} loadingText="正在加载你的云端求职记录…" emptyTitle="当前筛选下还没有求职记录" emptyDescription="从一个项目里程碑或第一版简历开始记录。" errorText={loadError}>
+      <div className="career-list">{visibleItems.map((item) => <article className="panel career-card" key={item.id}><div className={`career-type career-type-${item.item_type}`}>{careerTypeMeta[item.item_type].short}</div><div className="career-main"><span>{careerTypeMeta[item.item_type].label} · {careerStatusMeta[item.status]}</span><h2>{item.title}</h2><p>{item.company || "个人成长记录"}{item.occurred_on ? ` · ${item.occurred_on}` : " · 日期待定"}</p></div><div className="career-notes">{item.notes || "暂未填写复盘备注"}</div><div className="career-actions"><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => openEditor(item)}>编辑</button><button type="button" disabled={busy || deleteBusyId !== null} onClick={() => void removeItem(item)}>{deleteBusyId === item.id ? "删除中…" : "删除"}</button></div></article>)}</div>
+    </RequestStatePanel>
   </section>;
 }
 
@@ -2432,10 +2246,10 @@ function restoredAgentModel(metadata: Record<string, unknown>): AgentModelMetada
   };
 }
 
-function AgentsView({ isDemo }: { isDemo: boolean }) {
-  const [mode, setMode] = useState<"coach" | "tutor" | "combined">("combined");
+function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isDemo: boolean; initialQuery?: string; onInitialQueryConsumed?: () => void }) {
+  const [mode, setMode] = useState<"coach" | "tutor" | "combined">(() => initialQuery ? "coach" : "combined");
   const [modelProfile, setModelProfile] = useState<AgentModelProfile>("flash");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [messages, setMessages] = useState<AgentChatMessage[]>([{ role: "agent", text: agentWelcomeMessage }]);
   const [proposal, setProposal] = useState<ActionProposal | null>(null);
   const [proposalDraft, setProposalDraft] = useState<AgentProposalEdit | null>(null);
@@ -2531,6 +2345,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
     event.preventDefault();
     if (!query.trim() || busy) return;
     const text = query.trim();
+    onInitialQueryConsumed?.();
     setMessages((items) => [...items, { role: "user", text }]);
     setQuery("");
     if (isDemo) {
@@ -2794,7 +2609,7 @@ function AgentsView({ isDemo }: { isDemo: boolean }) {
           />
         )}
         <form className="agent-input" onSubmit={submit}>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" disabled={busy} />
+          <input aria-label="Agent 问题" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="询问计划、资料或最新院校信息…" disabled={busy} />
           {busy
             ? <button className="cancel" type="button" onClick={stopWaiting}>停止等待</button>
             : <button type="submit" disabled={!query.trim()}>发送 ↑</button>}
@@ -3286,7 +3101,7 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
 function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
   const accountKey = user?.id ?? "demo";
   const [view, setView] = useState<View>(() => readStoredWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey));
-  const [apiStatus, setApiStatus] = useState<"checking" | "cloud" | "demo" | "offline">("checking");
+  const [apiStatus, setApiStatus] = useState<WorkbenchApiStatus>("checking");
   const [healthRevision, setHealthRevision] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [attentionOpen, setAttentionOpen] = useState(false);
@@ -3295,6 +3110,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
   const [accountSecurityOpen, setAccountSecurityOpen] = useState(false);
   const [studyRevision, setStudyRevision] = useState(0);
   const [planRevision, setPlanRevision] = useState(0);
+  const [agentPlanQuery, setAgentPlanQuery] = useState("");
   const [sidebarStage, setSidebarStage] = useState<ApiPlan | null>(() => isDemo ? selectSidebarStage(demoPlans, shanghaiDateKey(new Date())) : null);
   const [sidebarStageState, setSidebarStageState] = useState<"loading" | "ready" | "empty" | "error">(() => isDemo ? "ready" : "loading");
   const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
@@ -3308,7 +3124,11 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setApiStatus("checking");
     setHealthRevision((revision) => revision + 1);
   }, []);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} /> }[view];
+  const openAgentPlan = useCallback(() => {
+    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，提议一项今天最该优先完成的学习任务。请说明选择依据，并只生成待我批准的任务提案，不要直接写入。");
+    navigateToView("agents");
+  }, [navigateToView]);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {
@@ -3351,31 +3171,32 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     return () => window.removeEventListener("keydown", openSearchWithShortcut);
   }, []);
 
-  return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">研</span><div><strong>研途</strong><small>Agent Workbench</small></div></div>
-        <nav>{navItems.map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span>{item.label}</button>)}</nav>
-        <div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
-          <span>2028 考研阶段</span>
-          <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
-          <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
-          <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
-          <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
-        </div>
-        <div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>
-      </aside>
-      <section className="main-content">
-        <header className="topbar"><div className="mobile-brand"><span className="brand-mark">研</span><strong>研途</strong></div><button type="button" className={`sync-status ${isDemo ? "offline" : apiStatus}`} onClick={retryApiHealth} disabled={isDemo || apiStatus === "checking"} title={isDemo ? "离线演示模式不连接云端" : "点击立即重新检查云端连接"}><i /> {isDemo ? "离线演示模式" : apiStatus === "cloud" ? "Supabase 云端同步已连接" : apiStatus === "demo" ? "已登录 · 后端仍为临时仓库" : apiStatus === "offline" ? "数据服务未连接 · 点击重试" : "正在重新检查数据服务…"}</button><div className="top-actions"><button className="global-search-trigger" aria-label="搜索" title="搜索（Ctrl/⌘ + K）" onClick={() => setSearchOpen(true)}>⌕</button><button className="attention-trigger" aria-label="待处理事项" onClick={() => setAttentionOpen(true)}>○{attentionCount > 0 && <span>{attentionCount > 99 ? "99+" : attentionCount}</span>}</button><button className="quick-capture" onClick={() => setQuickCaptureOpen(true)}>＋ 快速记录</button></div></header>
-        <div className="content-wrap">{content}</div>
-        <nav className="mobile-nav">{navItems.slice(0, 5).map((item) => <button key={item.key} className={view === item.key ? "active" : ""} onClick={() => navigateToView(item.key)}><span>{item.icon}</span><small>{item.label.slice(0,2)}</small></button>)}</nav>
-      </section>
+  return <WorkbenchLayout
+    activeView={view}
+    apiStatus={apiStatus}
+    isDemo={isDemo}
+    navItems={navItems}
+    attentionCount={attentionCount}
+    onNavigate={navigateToView}
+    onRetryApiHealth={retryApiHealth}
+    onOpenSearch={() => setSearchOpen(true)}
+    onOpenAttention={() => setAttentionOpen(true)}
+    onOpenQuickCapture={() => setQuickCaptureOpen(true)}
+    sidebarGoal={<div className={`sidebar-goal ${sidebarStageState}`} aria-busy={sidebarStageState === "loading"}>
+      <span>2028 考研阶段</span>
+      <strong>{sidebarStageState === "loading" ? "正在读取阶段计划…" : sidebarStageState === "error" ? "阶段计划暂时不可用" : sidebarStageState === "empty" ? "尚未创建阶段计划" : sidebarStage?.title}</strong>
+      <div className="progress-track" aria-label={sidebarStage ? `阶段日期进度 ${sidebarStageProgress}%` : "暂无阶段进度"}><span style={{ width: `${sidebarStageProgress}%` }} /></div>
+      <small>{sidebarStageState === "ready" && sidebarStage ? `${planDateRange(sidebarStage)} · ${sidebarStageProgress}%` : sidebarStageState === "loading" ? "正在同步云端数据" : sidebarStageState === "error" ? "请检查云端连接后重试" : "先制定第一轮复习目标"}</small>
+      <button type="button" onClick={() => navigateToView("plan")}>{sidebarStageState === "empty" ? "创建阶段计划" : "查看三级计划"}</button>
+    </div>}
+    profile={<div className="profile"><span>{avatar}</span><div><strong>{displayName}</strong><small>{isDemo ? "离线演示账户" : user?.email}</small></div>{isDemo ? <button aria-label="演示模式说明">•••</button> : <button aria-label="打开账户安全" title="账户安全" onClick={() => setAccountSecurityOpen(true)}>账户</button>}</div>}
+    overlays={<>
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={navigateToView} />
       <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={navigateToView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); navigateToView("today"); }} />
       {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
-    </main>
-  );
+    </>}
+  >{content}</WorkbenchLayout>;
 }
 
 export default function Home() {

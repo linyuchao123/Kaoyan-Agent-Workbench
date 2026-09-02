@@ -19,6 +19,22 @@ class DemoStoreTests(TestCase):
         self.assertIsNotNone(updated)
         contribution = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "all")[0]
         self.assertEqual(contribution.completed_tasks, 1)
+        self.assertEqual(contribution.target_tasks, 1)
+        self.assertEqual(contribution.completed_target_tasks, 1)
+        self.assertEqual(contribution.task_completion_rate, 100)
+
+    def test_task_target_completion_is_scoped_by_subject(self):
+        math = self.store.create_task(TaskCreate(title="极限", subject="math"))
+        self.store.create_task(TaskCreate(title="单词", subject="english"))
+        self.store.update_task(math["id"], TaskUpdate(completed=True))
+
+        overall = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "all")[0]
+        math_day = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "math")[0]
+        english_day = self.store.contributions(date(2026, 8, 10), date(2026, 8, 10), "english")[0]
+        self.assertEqual((overall.completed_target_tasks, overall.target_tasks), (1, 2))
+        self.assertEqual(overall.task_completion_rate, 50)
+        self.assertEqual(math_day.task_completion_rate, 100)
+        self.assertEqual(english_day.task_completion_rate, 0)
 
     def test_task_can_be_edited_and_deleted(self):
         task = self.store.create_task(TaskCreate(title="线性表复习", subject="cs408"))

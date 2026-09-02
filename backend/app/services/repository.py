@@ -2281,7 +2281,7 @@ class SupabaseRepository:
             "GET",
             "daily_study_contributions",
             params={
-                "select": "study_date,effective_minutes,session_count,completed_tasks,mistake_count,subject_minutes",
+                "select": "study_date,effective_minutes,session_count,completed_tasks,mistake_count,subject_minutes,target_tasks,completed_target_tasks,subject_target_tasks,subject_completed_target_tasks",
                 "user_id": f"eq.{user.id}",
                 "and": (
                     f"(study_date.gte.{from_date.isoformat()},study_date.lte.{to_date.isoformat()})"
@@ -2295,10 +2295,24 @@ class SupabaseRepository:
         while cursor <= to_date:
             row = by_day.get(cursor, {})
             subject_minutes = dict(row.get("subject_minutes") or {})
+            subject_target_tasks = dict(row.get("subject_target_tasks") or {})
+            subject_completed_target_tasks = dict(
+                row.get("subject_completed_target_tasks") or {}
+            )
             minutes = (
                 int(row.get("effective_minutes", 0))
                 if scope == "all"
                 else int(subject_minutes.get(scope, 0))
+            )
+            target_tasks = (
+                int(row.get("target_tasks", 0))
+                if scope == "all"
+                else int(subject_target_tasks.get(scope, 0))
+            )
+            completed_target_tasks = (
+                int(row.get("completed_target_tasks", 0))
+                if scope == "all"
+                else int(subject_completed_target_tasks.get(scope, 0))
             )
             result.append(
                 ContributionDay(
@@ -2308,6 +2322,13 @@ class SupabaseRepository:
                     intensity_level=intensity_level(minutes, cast(Scope, scope)),
                     session_count=int(row.get("session_count", 0)),
                     completed_tasks=int(row.get("completed_tasks", 0)),
+                    target_tasks=target_tasks,
+                    completed_target_tasks=completed_target_tasks,
+                    task_completion_rate=(
+                        round(completed_target_tasks / target_tasks * 100)
+                        if target_tasks
+                        else 0
+                    ),
                     mistake_count=int(row.get("mistake_count", 0)),
                     subject_minutes=subject_minutes,
                 )

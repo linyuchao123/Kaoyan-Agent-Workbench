@@ -3,9 +3,11 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const layoutSource = await readFile(new URL("../app/components/workbench-layout.tsx", import.meta.url), "utf8");
 
 test("顶部快速记录按钮可以打开真实表单", () => {
-  assert.match(pageSource, /onClick=\{\(\) => setQuickCaptureOpen\(true\)\}/);
+  assert.match(layoutSource, /onClick=\{onOpenQuickCapture\}/);
+  assert.match(pageSource, /onOpenQuickCapture=\{\(\) => setQuickCaptureOpen\(true\)\}/);
   assert.match(pageSource, /role="dialog"/);
   assert.match(pageSource, /aria-labelledby="quick-capture-title"/);
 });

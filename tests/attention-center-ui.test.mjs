@@ -3,11 +3,13 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const layoutSource = await readFile(new URL("../app/components/workbench-layout.tsx", import.meta.url), "utf8");
 const component = pageSource.slice(pageSource.indexOf("function AttentionCenter"), pageSource.indexOf("function QuickCapture"));
 
 test("顶部待处理按钮可以打开事项中心", () => {
-  assert.match(pageSource, /aria-label="待处理事项"/);
-  assert.match(pageSource, /setAttentionOpen\(true\)/);
+  assert.match(layoutSource, /aria-label="待处理事项"/);
+  assert.match(layoutSource, /onClick=\{onOpenAttention\}/);
+  assert.match(pageSource, /onOpenAttention=\{\(\) => setAttentionOpen\(true\)\}/);
   assert.match(component, /role="dialog"/);
 });
 
