@@ -28,12 +28,17 @@ class WorkbenchState(TypedDict, total=False):
     proposal_ids: list[str]
 
 
+def latest_message_content(state: WorkbenchState) -> str:
+    messages = state.get("messages") or []
+    return str(messages[-1].content) if messages else ""
+
+
 def route_request(state: WorkbenchState) -> WorkbenchState:
     requested_route = state.get("requested_route")
     if requested_route:
-        text = str(state["messages"][-1].content).lower()
+        text = latest_message_content(state).lower()
         return {"route": requested_route, "retrieval_mode": choose_retrieval_mode(text)}
-    text = str(state["messages"][-1].content).lower()
+    text = latest_message_content(state).lower()
     coach_markers = ("计划", "复盘", "任务", "时间", "进度", "安排")
     tutor_markers = ("解释", "资料", "为什么", "招生", "检索", "题目", "知识点")
     coach = any(marker in text for marker in coach_markers)
@@ -56,7 +61,7 @@ def coach_fallback(state: WorkbenchState) -> str:
         f"未完成任务 {len(tasks)} 个，到期错题 {len(mistakes)} 道；"
         f"最近 {len(sessions)} 次学习共 {effective_minutes} 分钟。"
     )
-    message = str(state["messages"][-1].content)
+    message = latest_message_content(state)
     if is_daily_plan_request(message):
         daily_tasks = build_daily_plan_tasks(context)
         task_lines = "\n".join(
@@ -140,7 +145,7 @@ def build_graph(model: AgentModel):
 
     async def coach_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = coach_fallback(state)
-        question = str(state["messages"][-1].content)
+        question = latest_message_content(state)
         answer = await model.generate(
             agent="coach",
             question=question,
@@ -155,7 +160,7 @@ def build_graph(model: AgentModel):
         context = state.get("context", {})
         if not context.get("private_sources") and not context.get("web_sources"):
             return fallback_result(fallback)
-        question = str(state["messages"][-1].content)
+        question = latest_message_content(state)
         answer = await model.generate(
             agent="tutor",
             question=question,

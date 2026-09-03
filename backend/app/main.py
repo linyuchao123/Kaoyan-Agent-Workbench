@@ -1110,7 +1110,11 @@ async def stream_agent(
             answer_parts: list[str] = []
             generated = False
             model_runs: list[dict[str, str | bool | int]] = []
-            state = {"context": context, "retrieval_mode": retrieval_mode}
+            state = {
+                "messages": [HumanMessage(content=payload.message)],
+                "context": context,
+                "retrieval_mode": retrieval_mode,
+            }
 
             async def stream_branch(kind: Literal["coach", "tutor"]):
                 nonlocal generated

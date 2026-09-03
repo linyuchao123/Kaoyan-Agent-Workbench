@@ -140,6 +140,19 @@ class ApiFlowTests(TestCase):
         self.assertIsNone(metrics["estimated_cost"])
         self.assertNotIn("message", summary.text.lower())
 
+    def test_coach_daily_plan_stream_keeps_request_message_for_safe_fallback(self):
+        response = self.client.post(
+            "/api/v1/agents/coach/runs/stream",
+            json={"message": "请生成今天的学习计划"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("event: error", response.text)
+        self.assertIn("event: done", response.text)
+        self.assertIn("今日草案共", response.text)
+        self.assertIn('"action": "create_daily_tasks"', response.text)
+        self.assertEqual(self.task_count(), 0)
+
     def test_model_usage_rejects_out_of_range_window(self):
         self.assertEqual(
             self.client.get("/api/v1/analytics/model-usage?days=0").status_code,
