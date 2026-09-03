@@ -242,21 +242,26 @@ export type SubjectSummary = {
   weak_points: SubjectWeakPoint[];
 };
 
-export type ActionProposal = {
+export type AgentProposalTask = {
+  title: string;
+  subject: Subject;
+  planned_minutes: number;
+};
+
+type ActionProposalBase = {
   id: string;
   agent: "coach" | "tutor";
-  action: string;
-  payload: {
-    title: string;
-    subject: Subject;
-    planned_minutes: number;
-  };
   summary: string;
   idempotency_key: string;
   status: "pending" | "approved" | "edited" | "rejected" | "applied" | "failed";
 };
 
-export type AgentProposalEdit = ActionProposal["payload"];
+export type ActionProposal = ActionProposalBase & (
+  | { action: "create_review_task"; payload: AgentProposalTask }
+  | { action: "create_daily_tasks"; payload: { tasks: AgentProposalTask[] } }
+);
+
+export type AgentProposalEdit = AgentProposalTask | { tasks: AgentProposalTask[] };
 
 export type AgentSource = {
   source_type: "private" | "web";

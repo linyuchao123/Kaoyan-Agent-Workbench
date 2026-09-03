@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const pageSource = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const proposalSource = await readFile(new URL("../app/components/agent-proposal-card.tsx", import.meta.url), "utf8");
 
 test("Agent 页面可以开始新对话并清除旧线程编号", () => {
   assert.match(pageSource, /function startNewConversation\(\)/);
@@ -52,6 +53,15 @@ test("Agent 页面展示可刷新的云端能力状态", () => {
   assert.match(pageSource, /embedding_configured/);
   assert.match(pageSource, /ocr\.configured/);
   assert.match(pageSource, /未配置 Tavily Key，不会生成虚假网络来源/);
+});
+
+test("Agent 今日计划提案可审阅并编辑多项任务", () => {
+  assert.match(pageSource, /生成今天的学习计划/);
+  assert.match(proposalSource, /proposal\.action === "create_daily_tasks"/);
+  assert.match(proposalSource, /批准后一次性写入/);
+  assert.match(proposalSource, /合计 \{draftMinutes\} \/ 240 分钟/);
+  assert.match(proposalSource, /＋ 添加任务/);
+  assert.match(proposalSource, /移除/);
 });
 
 test("Agent 请求失败会区分登录、限流、云端异常和后端未启动", () => {

@@ -13,6 +13,7 @@ import { RequestStatePanel, type RequestState } from "./components/request-state
 import { TodayActionStrip } from "./components/today-action-strip";
 import { StudyHeatmap } from "./components/study-heatmap";
 import { MistakeLibrary } from "./components/mistake-library";
+import { AgentProposalCard } from "./components/agent-proposal-card";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -2218,11 +2219,6 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
-function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onStartEdit, onCancelEdit, onSaveEdit, onApprove, onReject }: { proposal: ActionProposal; draft: AgentProposalEdit | null; editing: boolean; busy: boolean; onDraftChange: (draft: AgentProposalEdit) => void; onStartEdit: () => void; onCancelEdit: () => void; onSaveEdit: (event: FormEvent) => void; onApprove: () => void; onReject: () => void }) {
-  const canDecide = proposal.status === "pending" || proposal.status === "edited";
-  return <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.payload.title} · {subjectMeta[proposal.payload.subject].label} · {proposal.payload.planned_minutes} 分钟</p></div>{editing && draft ? <form className="agent-proposal-edit" onSubmit={onSaveEdit}><label>任务标题<input required maxLength={160} value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} /></label><label>科目<select value={draft.subject} onChange={(event) => onDraftChange({ ...draft, subject: event.target.value as Subject })}>{scopes.filter((item) => item.key !== "all").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>计划分钟<input required type="number" min={1} max={1440} value={draft.planned_minutes} onChange={(event) => onDraftChange({ ...draft, planned_minutes: Number(event.target.value) })} /></label><div><button className="approve" disabled={busy} type="submit">保存编辑</button><button className="text-button" disabled={busy} type="button" onClick={onCancelEdit}>取消</button></div></form> : canDecide && <div><button className="approve" disabled={busy} onClick={onApprove}>批准写入</button><button className="outline-button" disabled={busy} onClick={onStartEdit}>编辑</button><button className="text-button" disabled={busy} onClick={onReject}>拒绝</button></div>}</div>;
-}
-
 const agentWelcomeMessage = "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。";
 
 type AgentChatMessage = {
@@ -3133,7 +3129,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setHealthRevision((revision) => revision + 1);
   }, []);
   const openAgentPlan = useCallback(() => {
-    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，提议一项今天最该优先完成的学习任务。请说明选择依据，并只生成待我批准的任务提案，不要直接写入。");
+    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
   const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
