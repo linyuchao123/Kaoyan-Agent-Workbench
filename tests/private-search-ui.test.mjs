@@ -35,3 +35,12 @@ test("资料列表解释每个处理阶段并提供可操作失败提示", () =>
   assert.match(pageSource, /处理建议：确认文件可正常打开、云端模型额度充足后重新处理/);
   assert.match(pageSource, /function materialRequestErrorMessage/);
 });
+
+test("资料库可以安全打开 PDF 或 Markdown 电子书", () => {
+  assert.match(pageSource, /api\.readDocumentContent\(document\.id\)/);
+  assert.match(pageSource, /URL\.createObjectURL\(blob\)/);
+  assert.match(pageSource, /URL\.revokeObjectURL\(readerUrl\)/);
+  assert.match(pageSource, /aria-label="关闭阅读器"/);
+  assert.match(pageSource, /<iframe title=\{readerDocument\.title\}/);
+  assert.match(pageSource, /<pre>\{readerText\}<\/pre>/);
+});

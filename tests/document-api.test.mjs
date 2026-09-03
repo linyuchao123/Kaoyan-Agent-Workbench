@@ -46,6 +46,29 @@ test("资料列表读取当前账户的云端记录", async () => {
   }
 });
 
+test("电子书原文读取使用登录身份并返回 Blob", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response("# 高等数学", {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const blob = await api.readDocumentContent(documentRecord.id);
+    assert.equal(await blob.text(), "# 高等数学");
+    assert.match(request.input, new RegExp(`/documents/${documentRecord.id}/content$`));
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("资料上传使用 multipart 表单并携带当前登录身份", async () => {
   const originalFetch = globalThis.fetch;
   let request;

@@ -607,6 +607,9 @@ export const api = {
   }) => request<ApiStudySession>("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
   deleteSession: (id: string) => request<void>(`/api/v1/sessions/${id}`, { method: "DELETE" }),
   listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
+  readDocumentContent: async (id: string) => (
+    await download(`/api/v1/documents/${id}/content`)
+  ).blob,
   searchPrivateKnowledge: (query: string, documentId?: string) => {
     const params = new URLSearchParams({ query, limit: "8" });
     if (documentId) params.set("document_id", documentId);

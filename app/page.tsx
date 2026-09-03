@@ -2052,6 +2052,11 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<number>>(new Set());
   const [reindexingId, setReindexingId] = useState<string | null>(null);
+  const [readerDocument, setReaderDocument] = useState<ApiDocument | null>(null);
+  const [readerText, setReaderText] = useState<string | null>(null);
+  const [readerUrl, setReaderUrl] = useState<string | null>(null);
+  const [readerBusy, setReaderBusy] = useState(false);
+  const [readerError, setReaderError] = useState("");
   const pendingDocumentIds = docs
     .filter((document) => ["queued", "processing", "ocr_required"].includes(document.ingestion_status))
     .map((document) => document.id)
@@ -2083,6 +2088,41 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [isDemo, pendingDocumentIds]);
+
+  useEffect(() => () => {
+    if (readerUrl) URL.revokeObjectURL(readerUrl);
+  }, [readerUrl]);
+
+  function closeReader() {
+    setReaderDocument(null);
+    setReaderText(null);
+    setReaderUrl(null);
+    setReaderError("");
+  }
+
+  async function openDocument(document: ApiDocument) {
+    setReaderDocument(document);
+    setReaderText(null);
+    setReaderUrl(null);
+    setReaderError("");
+    if (isDemo) {
+      setReaderError("演示资料没有对应原文件；登录后可阅读自己上传的 PDF 或 Markdown。");
+      return;
+    }
+    setReaderBusy(true);
+    try {
+      const blob = await api.readDocumentContent(document.id);
+      if (document.content_type === "application/pdf") {
+        setReaderUrl(URL.createObjectURL(blob));
+      } else {
+        setReaderText(await blob.text());
+      }
+    } catch (error) {
+      setReaderError(materialRequestErrorMessage(error, "load"));
+    } finally {
+      setReaderBusy(false);
+    }
+  }
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2205,6 +2245,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
           <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>
           <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
           <span className={`document-status status-${doc.ingestion_status}`}><strong>● {ingestionCopy.label}</strong><small>{ingestionCopy.description}</small></span>
+          <button className="document-read" type="button" onClick={() => void openDocument(doc)}>阅读</button>
           <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
           {doc.ingestion_status === "failed" && <p className="document-error" role="alert">处理建议：确认文件可正常打开、云端模型额度充足后重新处理。{doc.ingestion_error ? "后台已记录详细错误，便于继续排查。" : ""}</p>}
         </div>; })}
@@ -2216,6 +2257,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       <small className="private-search-status">{searchStatus}</small>
       {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span><span>相关度 {Math.max(0, source.score).toFixed(2)}</span></div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
     </section>
+    {readerDocument && <div className="document-reader-backdrop" role="presentation"><section className="document-reader" role="dialog" aria-modal="true" aria-label={`阅读 ${readerDocument.original_filename || readerDocument.title}`}><header><div><div className="eyebrow">私有电子书</div><h2>{readerDocument.original_filename || readerDocument.title}</h2></div><button type="button" onClick={closeReader} aria-label="关闭阅读器">×</button></header><div className="document-reader-body">{readerBusy && <div className="plan-empty compact">正在安全读取原文…</div>}{readerError && <div className="request-state error" role="alert"><strong>原文暂时无法打开</strong><span>{readerError}</span></div>}{readerUrl && <iframe title={readerDocument.title} src={readerUrl} />}{readerText !== null && <pre>{readerText}</pre>}</div></section></div>}
   </section>;
 }
 
