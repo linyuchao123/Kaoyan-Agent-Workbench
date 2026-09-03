@@ -6,6 +6,7 @@ from hashlib import sha256
 from io import BytesIO
 from time import perf_counter
 from typing import Annotated, Literal, cast
+from urllib.parse import quote
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -675,6 +676,30 @@ async def upload_document(
 @app.get("/api/v1/documents")
 async def list_documents(user: Annotated[AuthUser, Depends(get_current_user)]) -> list[dict]:
     return await repository.list_documents(user)
+
+
+@app.get("/api/v1/documents/{document_id}/content")
+async def read_document(
+    document_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
+) -> Response:
+    document = await repository.get_document(user, document_id)
+    if not document:
+        raise HTTPException(404, "document not found")
+    content = await repository.read_document_content(user, document_id)
+    stored_content_type = str(document.get("content_type") or "")
+    media_type = "application/pdf" if stored_content_type == "application/pdf" else "text/plain"
+    filename = str(document.get("original_filename") or document.get("title") or "document")
+    filename = filename.replace("\r", "").replace("\n", "")
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename, safe='')}",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.post("/api/v1/documents/{document_id}/reindex")

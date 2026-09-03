@@ -1276,6 +1276,29 @@ class ApiFlowTests(TestCase):
         )
         self.assertEqual(blocked.status_code, 422)
 
+    def test_document_content_is_private_and_safe_for_inline_reading(self):
+        content = "# 极限\n函数极限的定义。".encode()
+        uploaded = self.client.post(
+            "/api/v1/documents/upload",
+            files={"file": ("高等数学讲义.md", content, "text/markdown")},
+        ).json()
+
+        response = self.client.get(f"/api/v1/documents/{uploaded['id']}/content")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, content)
+        self.assertEqual(response.headers["content-type"], "text/plain; charset=utf-8")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        self.assertIn("inline; filename*=UTF-8''", response.headers["content-disposition"])
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        foreign = self.client.get(f"/api/v1/documents/{uploaded['id']}/content")
+        self.assertEqual(foreign.status_code, 404)
+
     def test_document_can_be_reindexed_from_its_private_source_file(self):
         content = ("# 函数\n\n函数的定义与性质。" * 180).encode()
         uploaded = self.client.post(
