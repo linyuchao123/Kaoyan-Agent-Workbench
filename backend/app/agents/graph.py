@@ -7,6 +7,7 @@ from langgraph.graph.message import add_messages
 
 from app.agents.context import AgentContext
 from app.agents.model import AgentModel, AgentModelResult, ModelProfile
+from app.domain.agent_daily_plan import build_daily_plan_tasks, is_daily_plan_request
 from app.services.rag import choose_retrieval_mode
 
 
@@ -55,6 +56,19 @@ def coach_fallback(state: WorkbenchState) -> str:
         f"未完成任务 {len(tasks)} 个，到期错题 {len(mistakes)} 道；"
         f"最近 {len(sessions)} 次学习共 {effective_minutes} 分钟。"
     )
+    message = str(state["messages"][-1].content)
+    if is_daily_plan_request(message):
+        daily_tasks = build_daily_plan_tasks(context)
+        task_lines = "\n".join(
+            f"{index}. {task['title']}（{task['planned_minutes']} 分钟）"
+            for index, task in enumerate(daily_tasks, start=1)
+        )
+        total_minutes = sum(task["planned_minutes"] for task in daily_tasks)
+        return (
+            f"{summary}\n今日草案共 {len(daily_tasks)} 项、{total_minutes} 分钟：\n"
+            f"{task_lines}\n安排依据：到期错题优先，其后衔接未完成任务，并对同科目同标题去重。"
+            "\n整组任务仍是待确认提案，只有批准后才会原子写入。"
+        )
     if mistakes:
         advice = f"建议优先复习到期错题「{mistakes[0]['title']}」，完成后再安排新任务。"
     elif tasks:

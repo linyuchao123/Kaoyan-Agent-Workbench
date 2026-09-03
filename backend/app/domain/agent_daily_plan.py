@@ -6,12 +6,17 @@ MAX_DAILY_PLAN_TASKS = 4
 MAX_DAILY_PLAN_MINUTES = 240
 MAX_PRIORITY_MISTAKES = 2
 DEFAULT_TASK_MINUTES = 45
+DAILY_PLAN_INTENT_MARKERS = ("今日计划", "今天的计划", "安排今天", "今天的学习", "今天学习")
 
 
 class DailyPlanTask(TypedDict):
     title: str
     subject: Subject
     planned_minutes: int
+
+
+def is_daily_plan_request(message: str) -> bool:
+    return any(marker in message for marker in DAILY_PLAN_INTENT_MARKERS)
 
 
 def _subject(value: Any) -> Subject:

@@ -21,7 +21,7 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
-from app.domain.agent_daily_plan import build_daily_plan_tasks
+from app.domain.agent_daily_plan import build_daily_plan_tasks, is_daily_plan_request
 from app.domain.dashboard import (
     active_stage_title,
     attach_task_actual_minutes,
@@ -99,7 +99,6 @@ agent_graph = build_graph(agent_model)
 search_provider = get_search_provider(settings)
 
 WRITE_INTENT_MARKERS = ("安排", "创建", "添加", "生成任务", "调整计划", "写入", "建立任务")
-DAILY_PLAN_INTENT_MARKERS = ("今日计划", "今天的计划", "安排今天", "今天的学习", "今天学习")
 
 
 @app.exception_handler(RepositoryError)
@@ -847,7 +846,7 @@ async def prepare_agent_execution(
         idempotency_key = sha256(
             f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
         ).hexdigest()
-        if any(marker in payload.message for marker in DAILY_PLAN_INTENT_MARKERS):
+        if is_daily_plan_request(payload.message):
             daily_tasks = build_daily_plan_tasks(context)
             total_minutes = sum(task["planned_minutes"] for task in daily_tasks)
             requested_proposal = ActionProposal(

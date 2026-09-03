@@ -439,6 +439,8 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertIn("到期错题 1 道", body["answer"])
         self.assertIn("洛必达使用条件", body["answer"])
+        self.assertIn("安排依据：到期错题优先", body["answer"])
+        self.assertIn("只有批准后才会原子写入", body["answer"])
         self.assertEqual(body["proposal"]["action"], "create_daily_tasks")
         self.assertEqual(body["proposal"]["payload"]["tasks"][0]["subject"], "math")
         self.assertIn("洛必达使用条件", body["proposal"]["payload"]["tasks"][0]["title"])

@@ -4,10 +4,16 @@ from app.domain.agent_daily_plan import (
     MAX_DAILY_PLAN_MINUTES,
     MAX_DAILY_PLAN_TASKS,
     build_daily_plan_tasks,
+    is_daily_plan_request,
 )
 
 
 class AgentDailyPlanTests(TestCase):
+    def test_recognizes_today_plan_intent_without_matching_tomorrow(self):
+        self.assertTrue(is_daily_plan_request("请生成今天的学习计划"))
+        self.assertTrue(is_daily_plan_request("帮我安排今天要做的事"))
+        self.assertFalse(is_daily_plan_request("安排明天的 408 复习"))
+
     def test_prioritizes_two_due_mistakes_then_pending_tasks(self):
         plan = build_daily_plan_tasks(
             {
