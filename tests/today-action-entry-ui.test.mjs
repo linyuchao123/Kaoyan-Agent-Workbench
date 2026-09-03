@@ -9,7 +9,7 @@ test("首页展示 AI 今日计划提案与今日错题复习入口", () => {
   assert.match(pageSource, /<TodayActionStrip/);
   assert.match(componentSource, /AI 今日计划提案/);
   assert.match(componentSource, /今日错题复习/);
-  assert.match(componentSource, /只生成待确认提案；批准后才会写入任务/);
+  assert.match(componentSource, /先审阅和编辑整组计划；批准后才会原子写入/);
 });
 
 test("AI 计划入口将安全请求预填到计划教练但不会自动提交", () => {

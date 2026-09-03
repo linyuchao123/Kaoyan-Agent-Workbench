@@ -10,6 +10,7 @@ from app.schemas import (
     CareerItemUpdate,
     ContributionDay,
     MistakeCardCreate,
+    MistakeCardUpdate,
     MistakeReviewCreate,
     PlanCreate,
     PlanUpdate,
@@ -214,6 +215,20 @@ class DemoStore:
         }
         self.mistake_cards[card["id"]] = card
         return card
+
+    def update_mistake(self, card_id: UUID, payload: MistakeCardUpdate) -> dict | None:
+        card = self.mistake_cards.get(card_id)
+        if not card:
+            return None
+        card.update(payload.model_dump(exclude_unset=True, exclude_none=True))
+        card["updated_at"] = self.now()
+        return card
+
+    def delete_mistake(self, card_id: UUID) -> bool:
+        if card_id not in self.mistake_cards:
+            return False
+        self.mistake_cards.pop(card_id)
+        return True
 
     def review_mistake(self, card_id: UUID, payload: MistakeReviewCreate) -> dict | None:
         card = self.mistake_cards.get(card_id)

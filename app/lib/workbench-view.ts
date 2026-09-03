@@ -2,6 +2,7 @@ export const workbenchViews = [
   "today",
   "plan",
   "subjects",
+  "mistakes",
   "schools",
   "career",
   "materials",

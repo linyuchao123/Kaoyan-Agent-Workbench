@@ -40,6 +40,15 @@ class MigrationContractTests(TestCase):
         self.assertIn("update public.mistake_cards", sql)
         self.assertIn("grant execute on function public.review_mistake_card", sql)
 
+    def test_authenticated_owner_can_complete_mistake_card_crud(self):
+        sql = Path(
+            "supabase/migrations/202609020002_mistake_card_crud.sql"
+        ).read_text()
+        self.assertIn(
+            "grant select, insert, update, delete on public.mistake_cards to authenticated",
+            sql,
+        )
+
     def test_authenticated_users_can_access_plans_through_rls(self):
         sql = Path("supabase/migrations/202608110003_grant_plan_access.sql").read_text()
         self.assertIn(
@@ -179,6 +188,19 @@ class MigrationContractTests(TestCase):
         self.assertIn("insert into public.audit_logs", sql)
         self.assertIn("insert into public.tasks", sql)
         self.assertIn("security definer", sql)
+        self.assertIn("to authenticated", sql)
+
+    def test_daily_plan_approval_is_atomic_bounded_and_audited(self):
+        sql = Path(
+            "supabase/migrations/202609030001_agent_daily_plan_proposal.sql"
+        ).read_text()
+        self.assertIn("current_proposal.action = 'create_daily_tasks'", sql)
+        self.assertIn("jsonb_array_length", sql)
+        self.assertIn("task_count not between 1 and 4", sql)
+        self.assertIn("total_minutes > 240", sql)
+        self.assertIn("for update", sql)
+        self.assertIn("proposal_approval_replayed", sql)
+        self.assertIn("insert into public.audit_logs", sql)
         self.assertIn("to authenticated", sql)
 
     def test_import_proposals_are_granted_with_existing_owner_rls(self):

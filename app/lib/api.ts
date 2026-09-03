@@ -242,21 +242,26 @@ export type SubjectSummary = {
   weak_points: SubjectWeakPoint[];
 };
 
-export type ActionProposal = {
+export type AgentProposalTask = {
+  title: string;
+  subject: Subject;
+  planned_minutes: number;
+};
+
+type ActionProposalBase = {
   id: string;
   agent: "coach" | "tutor";
-  action: string;
-  payload: {
-    title: string;
-    subject: Subject;
-    planned_minutes: number;
-  };
   summary: string;
   idempotency_key: string;
   status: "pending" | "approved" | "edited" | "rejected" | "applied" | "failed";
 };
 
-export type AgentProposalEdit = ActionProposal["payload"];
+export type ActionProposal = ActionProposalBase & (
+  | { action: "create_review_task"; payload: AgentProposalTask }
+  | { action: "create_daily_tasks"; payload: { tasks: AgentProposalTask[] } }
+);
+
+export type AgentProposalEdit = AgentProposalTask | { tasks: AgentProposalTask[] };
 
 export type AgentSource = {
   source_type: "private" | "web";
@@ -522,6 +527,14 @@ export const api = {
     answer?: string;
     error_reason?: string;
   }) => request<ApiMistakeCard>("/api/v1/mistakes", { method: "POST", body: JSON.stringify(payload) }),
+  updateMistake: (id: string, payload: Partial<{
+    subject: MistakeSubject;
+    title: string;
+    question: string;
+    answer: string;
+    error_reason: string;
+  }>) => request<ApiMistakeCard>(`/api/v1/mistakes/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteMistake: (id: string) => request<void>(`/api/v1/mistakes/${id}`, { method: "DELETE" }),
   reviewMistake: (id: string, result: MistakeReviewResult) =>
     request<ApiMistakeCard>(`/api/v1/mistakes/${id}/reviews`, { method: "POST", body: JSON.stringify({ result }) }),
   listSchoolOptions: (tier?: SchoolTier, examYear?: number) => {

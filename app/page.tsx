@@ -12,6 +12,8 @@ import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
 import { TodayActionStrip } from "./components/today-action-strip";
 import { StudyHeatmap } from "./components/study-heatmap";
+import { MistakeLibrary } from "./components/mistake-library";
+import { AgentProposalCard } from "./components/agent-proposal-card";
 
 type Scope = ContributionScope;
 type View = WorkbenchView;
@@ -225,6 +227,7 @@ const navItems: { key: View; label: string; icon: string }[] = [
   { key: "today", label: "今日工作台", icon: "⌂" },
   { key: "plan", label: "三级计划", icon: "◇" },
   { key: "subjects", label: "学科学习", icon: "▤" },
+  { key: "mistakes", label: "错题库", icon: "↻" },
   { key: "schools", label: "院校情报", icon: "◎" },
   { key: "career", label: "求职副线", icon: "◫" },
   { key: "materials", label: "资料库", icon: "▱" },
@@ -2216,11 +2219,6 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   </section>;
 }
 
-function AgentProposalCard({ proposal, draft, editing, busy, onDraftChange, onStartEdit, onCancelEdit, onSaveEdit, onApprove, onReject }: { proposal: ActionProposal; draft: AgentProposalEdit | null; editing: boolean; busy: boolean; onDraftChange: (draft: AgentProposalEdit) => void; onStartEdit: () => void; onCancelEdit: () => void; onSaveEdit: (event: FormEvent) => void; onApprove: () => void; onReject: () => void }) {
-  const canDecide = proposal.status === "pending" || proposal.status === "edited";
-  return <div className={`agent-proposal proposal-${proposal.status}`}><div><strong>{proposal.status === "pending" ? "待确认提案" : `提案状态：${proposal.status}`}</strong><p>{proposal.payload.title} · {subjectMeta[proposal.payload.subject].label} · {proposal.payload.planned_minutes} 分钟</p></div>{editing && draft ? <form className="agent-proposal-edit" onSubmit={onSaveEdit}><label>任务标题<input required maxLength={160} value={draft.title} onChange={(event) => onDraftChange({ ...draft, title: event.target.value })} /></label><label>科目<select value={draft.subject} onChange={(event) => onDraftChange({ ...draft, subject: event.target.value as Subject })}>{scopes.filter((item) => item.key !== "all").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}</select></label><label>计划分钟<input required type="number" min={1} max={1440} value={draft.planned_minutes} onChange={(event) => onDraftChange({ ...draft, planned_minutes: Number(event.target.value) })} /></label><div><button className="approve" disabled={busy} type="submit">保存编辑</button><button className="text-button" disabled={busy} type="button" onClick={onCancelEdit}>取消</button></div></form> : canDecide && <div><button className="approve" disabled={busy} onClick={onApprove}>批准写入</button><button className="outline-button" disabled={busy} onClick={onStartEdit}>编辑</button><button className="text-button" disabled={busy} onClick={onReject}>拒绝</button></div>}</div>;
-}
-
 const agentWelcomeMessage = "我可以结合你的学习记录与资料库，为你调整计划、解释知识点，或联网核对最新院校信息。任何写入操作都会先让你确认。";
 
 type AgentChatMessage = {
@@ -2781,7 +2779,7 @@ function GlobalSearch({ open, isDemo, onClose, onNavigate }: { open: boolean; is
       setEntries([
         ...today.tasks.map((task) => ({ id: task.id, view: "today" as const, category: "今日任务", title: task.title, detail: `${subjectMeta[task.subject].label} · ${task.planned_minutes} 分钟` })),
         ...plans.map((plan) => ({ id: plan.id, view: "plan" as const, category: `${plan.level === "stage" ? "阶段" : plan.level === "week" ? "周" : "日"}计划`, title: plan.title, detail: `${plan.starts_on} 至 ${plan.ends_on}` })),
-        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "错题卡", title: mistake.title, detail: subjectMeta[mistake.subject].label })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "mistakes" as const, category: "错题卡", title: mistake.title, detail: subjectMeta[mistake.subject].label })),
         ...schools.map((school) => ({ id: school.id, view: "schools" as const, category: "院校情报", title: `${school.university} · ${school.major_name}`, detail: `${school.college} · ${school.exam_year}` })),
         ...documents.map((document) => ({ id: document.id, view: "materials" as const, category: "个人资料", title: document.title, detail: document.original_filename || document.content_type })),
         ...careerItems.map((item) => ({ id: item.id, view: "career" as const, category: "求职记录", title: item.title, detail: item.company || careerStatusMeta[item.status] })),
@@ -2882,7 +2880,7 @@ function AttentionCenter({ open, isDemo, onClose, onNavigate, onCountChange }: {
       if (!active) return;
       const nextItems: AttentionEntry[] = [
         ...today.tasks.filter((task) => !task.completed).map((task) => ({ id: task.id, view: "today" as const, category: "待完成任务", title: task.title, detail: `${subjectMeta[task.subject].label} · 计划 ${task.planned_minutes} 分钟` })),
-        ...mistakes.map((mistake) => ({ id: mistake.id, view: "today" as const, category: "到期错题", title: mistake.title, detail: `已复习 ${mistake.review_count} 次` })),
+        ...mistakes.map((mistake) => ({ id: mistake.id, view: "mistakes" as const, category: "到期错题", title: mistake.title, detail: `已复习 ${mistake.review_count} 次` })),
         ...proposals.filter((proposal) => proposal.status === "pending" || proposal.status === "edited").map((proposal) => ({ id: proposal.id, view: "agents" as const, category: "Agent 提案", title: proposal.summary, detail: "需要批准、编辑或拒绝" })),
         ...documents.filter((document) => document.ingestion_status === "ocr_required" || document.ingestion_status === "failed").map((document) => ({ id: document.id, view: "materials" as const, category: document.ingestion_status === "ocr_required" ? "等待 OCR" : "资料处理失败", title: document.title, detail: document.ingestion_error || document.original_filename || "请进入资料库检查" })),
       ].slice(0, 30);
@@ -3100,7 +3098,7 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
 
 function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
   const accountKey = user?.id ?? "demo";
-  const [view, setView] = useState<View>(() => readStoredWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey));
+  const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<WorkbenchApiStatus>("checking");
   const [healthRevision, setHealthRevision] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -3120,15 +3118,21 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setView(nextView);
     storeWorkbenchView(typeof window === "undefined" ? null : window.localStorage, accountKey, nextView);
   }, [accountKey]);
+  useEffect(() => {
+    const hydrationTimer = window.setTimeout(() => {
+      setView(readStoredWorkbenchView(window.localStorage, accountKey));
+    });
+    return () => window.clearTimeout(hydrationTimer);
+  }, [accountKey]);
   const retryApiHealth = useCallback(() => {
     setApiStatus("checking");
     setHealthRevision((revision) => revision + 1);
   }, []);
   const openAgentPlan = useCallback(() => {
-    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，提议一项今天最该优先完成的学习任务。请说明选择依据，并只生成待我批准的任务提案，不要直接写入。");
+    setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {

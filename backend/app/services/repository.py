@@ -22,6 +22,7 @@ from app.schemas import (
     ContributionDay,
     ImportProposal,
     MistakeCardCreate,
+    MistakeCardUpdate,
     MistakeReviewCreate,
     OcrJob,
     PlanCreate,
@@ -190,6 +191,12 @@ class StudyRepository(Protocol):
     async def list_mistakes(self, user: AuthUser, due_only: bool = False) -> list[dict]: ...
 
     async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict: ...
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None: ...
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool: ...
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
@@ -481,6 +488,14 @@ class DemoRepository:
 
     async def create_mistake(self, user: AuthUser, payload: MistakeCardCreate) -> dict:
         return self._store(user).create_mistake(payload)
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None:
+        return self._store(user).update_mistake(card_id, payload)
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool:
+        return self._store(user).delete_mistake(card_id)
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate
@@ -991,16 +1006,32 @@ class DemoRepository:
         if proposal.status not in {"pending", "edited"}:
             return proposal
         if decision == "approve":
-            if proposal.action != "create_review_task":
+            if proposal.action == "create_review_task":
+                tasks = [
+                    TaskCreate(
+                        title=str(proposal.payload.get("title", "Agent 复习任务")),
+                        subject=str(proposal.payload.get("subject", "cs408")),
+                        planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
+                    )
+                ]
+            elif proposal.action == "create_daily_tasks":
+                raw_tasks = proposal.payload.get("tasks")
+                if not isinstance(raw_tasks, list):
+                    raise RepositoryValidationError("daily plan tasks are required")
+                try:
+                    tasks = [TaskCreate.model_validate(task) for task in raw_tasks]
+                except (TypeError, ValueError) as error:
+                    raise RepositoryValidationError(str(error)) from error
+                if not 1 <= len(tasks) <= 4:
+                    raise RepositoryValidationError("daily plan must contain 1 to 4 tasks")
+                if any(task.planned_minutes > 120 for task in tasks):
+                    raise RepositoryValidationError("daily plan task cannot exceed 120 minutes")
+                if sum(task.planned_minutes for task in tasks) > 240:
+                    raise RepositoryValidationError("daily plan cannot exceed 240 minutes")
+            else:
                 raise RepositoryValidationError("unsupported proposal action")
-            await self.create_task(
-                user,
-                TaskCreate(
-                    title=str(proposal.payload.get("title", "Agent 复习任务")),
-                    subject=str(proposal.payload.get("subject", "cs408")),
-                    planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
-                ),
-            )
+            for task in tasks:
+                await self.create_task(user, task)
             status = "applied"
         elif decision == "edit":
             status = "edited"
@@ -1469,6 +1500,43 @@ class SupabaseRepository:
             prefer="return=representation",
         )
         return rows[0]
+
+    async def update_mistake(
+        self, user: AuthUser, card_id: UUID, payload: MistakeCardUpdate
+    ) -> dict | None:
+        changes = payload.model_dump(mode="json", exclude_unset=True, exclude_none=True)
+        if not changes:
+            current = await self._request(
+                user,
+                "GET",
+                "mistake_cards",
+                params={
+                    "select": "id,subject,title,question,answer,error_reason,mastery,next_review_at,review_count,created_at,updated_at",
+                    "id": f"eq.{card_id}",
+                    "user_id": f"eq.{user.id}",
+                },
+            )
+            return current[0] if current else None
+        changes["updated_at"] = datetime.now(UTC).isoformat()
+        rows = await self._request(
+            user,
+            "PATCH",
+            "mistake_cards",
+            params={"id": f"eq.{card_id}", "user_id": f"eq.{user.id}"},
+            json=changes,
+            prefer="return=representation",
+        )
+        return rows[0] if rows else None
+
+    async def delete_mistake(self, user: AuthUser, card_id: UUID) -> bool:
+        rows = await self._request(
+            user,
+            "DELETE",
+            "mistake_cards",
+            params={"id": f"eq.{card_id}", "user_id": f"eq.{user.id}"},
+            prefer="return=representation",
+        )
+        return bool(rows)
 
     async def review_mistake(
         self, user: AuthUser, card_id: UUID, payload: MistakeReviewCreate

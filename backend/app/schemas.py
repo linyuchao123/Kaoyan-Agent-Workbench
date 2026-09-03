@@ -190,6 +190,14 @@ class MistakeCardCreate(StrictRequestModel):
     error_reason: str = Field(default="", max_length=10000)
 
 
+class MistakeCardUpdate(StrictRequestModel):
+    subject: AcademicSubject | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    question: str | None = Field(default=None, min_length=1, max_length=10000)
+    answer: str | None = Field(default=None, max_length=10000)
+    error_reason: str | None = Field(default=None, max_length=10000)
+
+
 class MistakeReviewCreate(StrictRequestModel):
     result: Literal["again", "hard", "good", "easy"]
 
@@ -375,3 +383,19 @@ class AgentProposalEditRequest(StrictRequestModel):
     title: str = Field(min_length=1, max_length=160)
     subject: Subject
     planned_minutes: int = Field(ge=1, le=1440)
+
+
+class AgentDailyPlanTaskEdit(StrictRequestModel):
+    title: str = Field(min_length=1, max_length=160)
+    subject: Subject
+    planned_minutes: int = Field(ge=1, le=120)
+
+
+class AgentDailyPlanEditRequest(StrictRequestModel):
+    tasks: list[AgentDailyPlanTaskEdit] = Field(min_length=1, max_length=4)
+
+    @model_validator(mode="after")
+    def limit_total_minutes(self):
+        if sum(task.planned_minutes for task in self.tasks) > 240:
+            raise ValueError("daily plan cannot exceed 240 minutes")
+        return self

@@ -140,6 +140,19 @@ class ApiFlowTests(TestCase):
         self.assertIsNone(metrics["estimated_cost"])
         self.assertNotIn("message", summary.text.lower())
 
+    def test_coach_daily_plan_stream_keeps_request_message_for_safe_fallback(self):
+        response = self.client.post(
+            "/api/v1/agents/coach/runs/stream",
+            json={"message": "请生成今天的学习计划"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("event: error", response.text)
+        self.assertIn("event: done", response.text)
+        self.assertIn("今日草案共", response.text)
+        self.assertIn('"action": "create_daily_tasks"', response.text)
+        self.assertEqual(self.task_count(), 0)
+
     def test_model_usage_rejects_out_of_range_window(self):
         self.assertEqual(
             self.client.get("/api/v1/analytics/model-usage?days=0").status_code,
@@ -439,8 +452,50 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertIn("到期错题 1 道", body["answer"])
         self.assertIn("洛必达使用条件", body["answer"])
-        self.assertEqual(body["proposal"]["payload"]["subject"], "math")
-        self.assertIn("洛必达使用条件", body["proposal"]["summary"])
+        self.assertIn("安排依据：到期错题优先", body["answer"])
+        self.assertIn("只有批准后才会原子写入", body["answer"])
+        self.assertEqual(body["proposal"]["action"], "create_daily_tasks")
+        self.assertEqual(body["proposal"]["payload"]["tasks"][0]["subject"], "math")
+        self.assertIn("洛必达使用条件", body["proposal"]["payload"]["tasks"][0]["title"])
+
+    def test_daily_plan_approval_creates_all_tasks_once(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "完成概率论练习", "subject": "math", "planned_minutes": 60},
+        )
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "请生成今天的学习计划"},
+        ).json()
+
+        proposal = run["proposal"]
+        self.assertEqual(proposal["action"], "create_daily_tasks")
+        self.assertEqual(self.task_count(), 1)
+        first = self.client.post(f"/api/v1/proposals/{proposal['id']}/approve")
+        second = self.client.post(f"/api/v1/proposals/{proposal['id']}/approve")
+
+        self.assertEqual(first.json()["status"], "applied")
+        self.assertEqual(second.json()["status"], "applied")
+        self.assertEqual(self.task_count(), 2)
+
+    def test_daily_plan_edit_validates_count_and_total_minutes(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "请生成今天的学习计划"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+        response = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={
+                "tasks": [
+                    {"title": "数学", "subject": "math", "planned_minutes": 120},
+                    {"title": "英语", "subject": "english", "planned_minutes": 121},
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.task_count(), 0)
 
     def test_tutor_answer_cites_matching_private_material(self):
         self.client.post(
@@ -878,6 +933,52 @@ class ApiFlowTests(TestCase):
             ).status_code,
             404,
         )
+
+    def test_mistake_card_can_be_edited_deleted_and_remains_user_isolated(self):
+        card = self.client.post(
+            "/api/v1/mistakes",
+            json={
+                "subject": "math",
+                "title": "等价无穷小",
+                "question": "什么时候可以替换？",
+                "error_reason": "忽略了运算结构",
+            },
+        ).json()
+
+        updated = self.client.patch(
+            f"/api/v1/mistakes/{card['id']}",
+            json={
+                "title": "等价无穷小替换条件",
+                "answer": "乘除结构可直接替换，加减结构需先变形。",
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["title"], "等价无穷小替换条件")
+        self.assertEqual(updated.json()["subject"], "math")
+        self.assertIn("乘除结构", updated.json()["answer"])
+
+        self.current_user = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="user-two-token",
+        )
+        self.assertEqual(
+            self.client.patch(
+                f"/api/v1/mistakes/{card['id']}", json={"title": "越权修改"}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.delete(f"/api/v1/mistakes/{card['id']}").status_code,
+            404,
+        )
+
+        self.current_user = self.user
+        self.assertEqual(
+            self.client.delete(f"/api/v1/mistakes/{card['id']}").status_code,
+            204,
+        )
+        self.assertEqual(self.client.get("/api/v1/mistakes").json(), [])
 
     def test_client_cannot_choose_the_task_owner(self):
         response = self.client.post(

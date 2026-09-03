@@ -21,6 +21,7 @@ from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
 from app.config import get_settings
+from app.domain.agent_daily_plan import build_daily_plan_tasks, is_daily_plan_request
 from app.domain.dashboard import (
     active_stage_title,
     attach_task_actual_minutes,
@@ -31,6 +32,7 @@ from app.domain.subjects import build_subject_summaries
 from app.schemas import (
     ActionProposal,
     AgentCitation,
+    AgentDailyPlanEditRequest,
     AgentModelUsageSummary,
     AgentProposalEditRequest,
     AgentRunRequest,
@@ -45,6 +47,7 @@ from app.schemas import (
     ImportPreviewRequest,
     ImportProposal,
     MistakeCardCreate,
+    MistakeCardUpdate,
     MistakeReviewCreate,
     PlanCreate,
     PlanLevel,
@@ -353,6 +356,28 @@ async def create_mistake(
     user: Annotated[AuthUser, Depends(get_current_user)],
 ) -> dict:
     return await repository.create_mistake(user, payload)
+
+
+@app.patch("/api/v1/mistakes/{card_id}")
+async def update_mistake(
+    card_id: UUID,
+    payload: MistakeCardUpdate,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> dict:
+    card = await repository.update_mistake(user, card_id, payload)
+    if not card:
+        raise HTTPException(404, "mistake card not found")
+    return card
+
+
+@app.delete("/api/v1/mistakes/{card_id}", status_code=204)
+async def delete_mistake(
+    card_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+) -> Response:
+    if not await repository.delete_mistake(user, card_id):
+        raise HTTPException(404, "mistake card not found")
+    return Response(status_code=204)
 
 
 @app.post("/api/v1/mistakes/{card_id}/reviews")
@@ -821,27 +846,39 @@ async def prepare_agent_execution(
         idempotency_key = sha256(
             f"{payload.thread_id}:{proposal_id}:{agent}:{payload.message}".encode()
         ).hexdigest()
-        priority = (
-            context["due_mistakes"][0]
-            if context["due_mistakes"]
-            else context["pending_tasks"][0]
-            if context["pending_tasks"]
-            else None
-        )
-        proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
-        proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
-        requested_proposal = ActionProposal(
-            id=proposal_id,
-            agent="coach",
-            action="create_review_task",
-            payload={
-                "title": proposal_title,
-                "subject": proposal_subject,
-                "planned_minutes": 45,
-            },
-            summary=f"创建一个 45 分钟的「{proposal_title}」任务",
-            idempotency_key=idempotency_key,
-        )
+        if is_daily_plan_request(payload.message):
+            daily_tasks = build_daily_plan_tasks(context)
+            total_minutes = sum(task["planned_minutes"] for task in daily_tasks)
+            requested_proposal = ActionProposal(
+                id=proposal_id,
+                agent="coach",
+                action="create_daily_tasks",
+                payload={"tasks": daily_tasks},
+                summary=f"创建今日 {len(daily_tasks)} 项学习计划，共 {total_minutes} 分钟",
+                idempotency_key=idempotency_key,
+            )
+        else:
+            priority = (
+                context["due_mistakes"][0]
+                if context["due_mistakes"]
+                else context["pending_tasks"][0]
+                if context["pending_tasks"]
+                else None
+            )
+            proposal_title = f"{priority['title']}复习" if priority else "建立今日学习任务"
+            proposal_subject = str(priority.get("subject", "cs408")) if priority else "cs408"
+            requested_proposal = ActionProposal(
+                id=proposal_id,
+                agent="coach",
+                action="create_review_task",
+                payload={
+                    "title": proposal_title,
+                    "subject": proposal_subject,
+                    "planned_minutes": 45,
+                },
+                summary=f"创建一个 45 分钟的「{proposal_title}」任务",
+                idempotency_key=idempotency_key,
+            )
         thread_id, proposal = await repository.create_agent_proposal(
             user,
             thread_id=payload.thread_id,
@@ -1073,7 +1110,11 @@ async def stream_agent(
             answer_parts: list[str] = []
             generated = False
             model_runs: list[dict[str, str | bool | int]] = []
-            state = {"context": context, "retrieval_mode": retrieval_mode}
+            state = {
+                "messages": [HumanMessage(content=payload.message)],
+                "context": context,
+                "retrieval_mode": retrieval_mode,
+            }
 
             async def stream_branch(kind: Literal["coach", "tutor"]):
                 nonlocal generated
@@ -1255,7 +1296,7 @@ async def decide_proposal(
     proposal_id: UUID,
     decision: str,
     user: Annotated[AuthUser, Depends(get_current_user)],
-    payload: AgentProposalEditRequest | None = None,
+    payload: AgentProposalEditRequest | AgentDailyPlanEditRequest | None = None,
 ) -> ActionProposal:
     if decision not in {"approve", "edit", "reject"}:
         raise HTTPException(422, "decision must be approve, edit or reject")
