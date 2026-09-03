@@ -1006,16 +1006,32 @@ class DemoRepository:
         if proposal.status not in {"pending", "edited"}:
             return proposal
         if decision == "approve":
-            if proposal.action != "create_review_task":
+            if proposal.action == "create_review_task":
+                tasks = [
+                    TaskCreate(
+                        title=str(proposal.payload.get("title", "Agent 复习任务")),
+                        subject=str(proposal.payload.get("subject", "cs408")),
+                        planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
+                    )
+                ]
+            elif proposal.action == "create_daily_tasks":
+                raw_tasks = proposal.payload.get("tasks")
+                if not isinstance(raw_tasks, list):
+                    raise RepositoryValidationError("daily plan tasks are required")
+                try:
+                    tasks = [TaskCreate.model_validate(task) for task in raw_tasks]
+                except (TypeError, ValueError) as error:
+                    raise RepositoryValidationError(str(error)) from error
+                if not 1 <= len(tasks) <= 4:
+                    raise RepositoryValidationError("daily plan must contain 1 to 4 tasks")
+                if any(task.planned_minutes > 120 for task in tasks):
+                    raise RepositoryValidationError("daily plan task cannot exceed 120 minutes")
+                if sum(task.planned_minutes for task in tasks) > 240:
+                    raise RepositoryValidationError("daily plan cannot exceed 240 minutes")
+            else:
                 raise RepositoryValidationError("unsupported proposal action")
-            await self.create_task(
-                user,
-                TaskCreate(
-                    title=str(proposal.payload.get("title", "Agent 复习任务")),
-                    subject=str(proposal.payload.get("subject", "cs408")),
-                    planned_minutes=int(proposal.payload.get("planned_minutes", 45)),
-                ),
-            )
+            for task in tasks:
+                await self.create_task(user, task)
             status = "applied"
         elif decision == "edit":
             status = "edited"

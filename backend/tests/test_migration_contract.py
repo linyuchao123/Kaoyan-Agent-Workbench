@@ -190,6 +190,19 @@ class MigrationContractTests(TestCase):
         self.assertIn("security definer", sql)
         self.assertIn("to authenticated", sql)
 
+    def test_daily_plan_approval_is_atomic_bounded_and_audited(self):
+        sql = Path(
+            "supabase/migrations/202609030001_agent_daily_plan_proposal.sql"
+        ).read_text()
+        self.assertIn("current_proposal.action = 'create_daily_tasks'", sql)
+        self.assertIn("jsonb_array_length", sql)
+        self.assertIn("task_count not between 1 and 4", sql)
+        self.assertIn("total_minutes > 240", sql)
+        self.assertIn("for update", sql)
+        self.assertIn("proposal_approval_replayed", sql)
+        self.assertIn("insert into public.audit_logs", sql)
+        self.assertIn("to authenticated", sql)
+
     def test_import_proposals_are_granted_with_existing_owner_rls(self):
         sql = Path(
             "supabase/migrations/202608130002_import_proposal_permissions.sql"

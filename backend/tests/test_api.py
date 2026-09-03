@@ -439,8 +439,48 @@ class ApiFlowTests(TestCase):
         body = run.json()
         self.assertIn("到期错题 1 道", body["answer"])
         self.assertIn("洛必达使用条件", body["answer"])
-        self.assertEqual(body["proposal"]["payload"]["subject"], "math")
-        self.assertIn("洛必达使用条件", body["proposal"]["summary"])
+        self.assertEqual(body["proposal"]["action"], "create_daily_tasks")
+        self.assertEqual(body["proposal"]["payload"]["tasks"][0]["subject"], "math")
+        self.assertIn("洛必达使用条件", body["proposal"]["payload"]["tasks"][0]["title"])
+
+    def test_daily_plan_approval_creates_all_tasks_once(self):
+        self.client.post(
+            "/api/v1/tasks",
+            json={"title": "完成概率论练习", "subject": "math", "planned_minutes": 60},
+        )
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "请生成今天的学习计划"},
+        ).json()
+
+        proposal = run["proposal"]
+        self.assertEqual(proposal["action"], "create_daily_tasks")
+        self.assertEqual(self.task_count(), 1)
+        first = self.client.post(f"/api/v1/proposals/{proposal['id']}/approve")
+        second = self.client.post(f"/api/v1/proposals/{proposal['id']}/approve")
+
+        self.assertEqual(first.json()["status"], "applied")
+        self.assertEqual(second.json()["status"], "applied")
+        self.assertEqual(self.task_count(), 2)
+
+    def test_daily_plan_edit_validates_count_and_total_minutes(self):
+        run = self.client.post(
+            "/api/v1/agents/coach/runs",
+            json={"message": "请生成今天的学习计划"},
+        ).json()
+        proposal_id = run["proposal"]["id"]
+        response = self.client.post(
+            f"/api/v1/proposals/{proposal_id}/edit",
+            json={
+                "tasks": [
+                    {"title": "数学", "subject": "math", "planned_minutes": 120},
+                    {"title": "英语", "subject": "english", "planned_minutes": 121},
+                ]
+            },
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.task_count(), 0)
 
     def test_tutor_answer_cites_matching_private_material(self):
         self.client.post(
