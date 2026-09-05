@@ -702,6 +702,28 @@ async def read_document(
     )
 
 
+@app.get("/api/v1/documents/{document_id}/local-index")
+async def local_document_index(
+    document_id: UUID,
+    user: Annotated[AuthUser, Depends(get_current_user)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    document = await repository.get_document(user, document_id)
+    if not document:
+        raise HTTPException(404, "document not found")
+    rows = await repository.list_safe_document_chunks(user, document_id, offset, limit + 1)
+    return {
+        "document_id": document_id,
+        "document_version": document.get("version", 1),
+        "chunking_version": document.get("chunking_version", 1),
+        "indexed_at": document.get("indexed_at"),
+        "offset": offset,
+        "has_more": len(rows) > limit,
+        "chunks": rows[:limit],
+    }
+
+
 @app.post("/api/v1/documents/{document_id}/reindex")
 async def reindex_document(
     document_id: UUID, user: Annotated[AuthUser, Depends(get_current_user)]
