@@ -12,6 +12,14 @@ test("院校与求职页面只预填分析问题并进入资料导师", () => {
   assert.match(pageSource, /只做分析，不要创建或修改任何记录/);
 });
 
+test("资料库预填带原文定位要求的可编辑问题", () => {
+  assert.match(pageSource, /AI 解读资料/);
+  assert.match(pageSource, /const openMaterialAdvisor = useCallback[\s\S]*?setAgentInitialMode\("tutor"\)/);
+  assert.match(pageSource, /只根据我的资料解释这个知识点，并标注原文标题与定位/);
+  assert.match(pageSource, /请在这里补充具体知识点/);
+  assert.match(pageSource, /<MaterialsView[\s\S]*?onOpenAdvisor=\{openMaterialAdvisor\}/);
+});
+
 test("上下文入口不会被历史线程覆盖或自动发送", () => {
   assert.match(pageSource, /initialMode \?\? \(initialQuery \? "coach" : "combined"\)/);
   assert.match(pageSource, /enteredWithInitialQuery = useRef\(Boolean\(initialQuery\)\)/);

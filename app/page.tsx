@@ -2038,7 +2038,7 @@ function HighlightedSearchText({ text, terms }: { text: string; terms: string[] 
     : <span key={`${part}-${index}`}>{part}</span>)}</>;
 }
 
-function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: string }) {
+function MaterialsView({ isDemo, accountKey, onOpenAdvisor }: { isDemo: boolean; accountKey: string; onOpenAdvisor: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
@@ -2314,7 +2314,7 @@ function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: st
 
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
   return <section className="content-view">
-    <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div>
+    <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={onOpenAdvisor}>AI 解读资料</button><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div></div>
     <div className="material-layout">
       <section className="panel upload-zone">
         <input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} />
@@ -3282,7 +3282,12 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setAgentPlanQuery("请根据我已保存的实习、简历、投递和面试记录，分析当前求职进展、主要缺口与下一步优先级。只做分析，不要创建或修改任何记录。");
     navigateToView("agents");
   }, [navigateToView]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} onOpenAdvisor={openSchoolAdvisor} />, career: <CareerView isDemo={isDemo} onOpenAdvisor={openCareerAdvisor} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} initialMode={agentInitialMode} onInitialQueryConsumed={() => { setAgentPlanQuery(""); setAgentInitialMode("combined"); }} /> }[view];
+  const openMaterialAdvisor = useCallback(() => {
+    setAgentInitialMode("tutor");
+    setAgentPlanQuery("请只根据我的资料解释这个知识点，并标注原文标题与定位：请在这里补充具体知识点");
+    navigateToView("agents");
+  }, [navigateToView]);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} onOpenAdvisor={openSchoolAdvisor} />, career: <CareerView isDemo={isDemo} onOpenAdvisor={openCareerAdvisor} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} onOpenAdvisor={openMaterialAdvisor} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} initialMode={agentInitialMode} onInitialQueryConsumed={() => { setAgentPlanQuery(""); setAgentInitialMode("combined"); }} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {
