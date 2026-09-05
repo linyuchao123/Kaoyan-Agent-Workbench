@@ -2326,6 +2326,10 @@ function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: st
       </section>
       <section className="panel material-list">
         <div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>
+        <div className="local-rag-privacy-note" role="note">
+          <strong>设备缓存由你控制</strong>
+          <span>“缓存索引”仅把当前账户的安全原文片段保存到这个浏览器；风险片段不会写入缓存，可随时点“移除本地”清除。</span>
+        </div>
         {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => { const ingestionCopy = documentIngestionCopy(doc); return <div className="document-row" key={doc.id}>
           <span className="document-icon">▤</span>
           <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>

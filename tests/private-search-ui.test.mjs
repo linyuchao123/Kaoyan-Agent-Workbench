@@ -54,6 +54,13 @@ test("本地索引由用户显式缓存并按账户隔离", () => {
   assert.match(pageSource, /移除本地/);
 });
 
+test("资料库清楚说明设备缓存范围和移除方式", () => {
+  assert.match(pageSource, /设备缓存由你控制/);
+  assert.match(pageSource, /仅把当前账户的安全原文片段保存到这个浏览器/);
+  assert.match(pageSource, /风险片段不会写入缓存/);
+  assert.match(pageSource, /可随时点“移除本地”清除/);
+});
+
 test("私有检索优先使用本地缓存且无命中时回退云端", () => {
   const localRead = pageSource.indexOf("readValidLocalRagBundle(accountKey, document)", pageSource.indexOf("async function searchPrivateKnowledge"));
   const cloudSearch = pageSource.indexOf("api.searchPrivateKnowledge(query, selectedDocumentId || undefined)");
