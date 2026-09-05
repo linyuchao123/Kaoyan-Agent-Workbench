@@ -88,7 +88,24 @@ def tutor_fallback(state: WorkbenchState) -> str:
     context = state.get("context", {})
     sources = context.get("private_sources", [])
     web_sources = context.get("web_sources", [])
+    schools = context.get("school_options", [])
+    career_items = context.get("career_items", [])
     sections = []
+    if schools:
+        school_lines = "\n".join(
+            f"- {school['university']} · {school['college']} · "
+            f"{school['major_code']} {school['major_name']}（{school['exam_year']}，"
+            f"{school['source_url']}）"
+            for school in schools
+        )
+        sections.append(f"已保存院校档案（{len(schools)}）：\n{school_lines}")
+    if career_items:
+        career_lines = "\n".join(
+            f"- {item['title']}（{item.get('company') or '未填写单位'}，"
+            f"状态 {item['status']}）"
+            for item in career_items
+        )
+        sections.append(f"已保存求职记录（{len(career_items)}）：\n{career_lines}")
     if sources:
         citations = "\n".join(
             f"- 《{source['title']}》{source['locator']}：{source['content']}" for source in sources
@@ -158,7 +175,10 @@ def build_graph(model: AgentModel):
     async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = tutor_fallback(state)
         context = state.get("context", {})
-        if not context.get("private_sources") and not context.get("web_sources"):
+        if not any(
+            context.get(key)
+            for key in ("private_sources", "web_sources", "school_options", "career_items")
+        ):
             return fallback_result(fallback)
         question = latest_message_content(state)
         answer = await model.generate(

@@ -3,8 +3,16 @@ from unittest import IsolatedAsyncioTestCase
 from uuid import UUID
 
 from app.agents.context import build_agent_context
+from app.agents.graph import tutor_fallback
 from app.auth import AuthUser
-from app.schemas import MistakeCardCreate, PlanCreate, StudySessionCreate, TaskCreate
+from app.schemas import (
+    CareerItemCreate,
+    MistakeCardCreate,
+    PlanCreate,
+    SchoolOptionCreate,
+    StudySessionCreate,
+    TaskCreate,
+)
 from app.services.repository import DemoRepository
 from app.services.search import WebResult
 
@@ -102,6 +110,77 @@ class AgentContextTests(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(context["pending_tasks"], [])
+
+    async def test_tutor_context_reads_only_requested_school_and_career_records(self):
+        await self.repository.create_school_option(
+            self.user,
+            SchoolOptionCreate(
+                tier="match",
+                university="苏州大学",
+                college="计算机科学与技术学院",
+                major_code="085405",
+                major_name="软件工程",
+                degree_type="professional",
+                exam_year=2028,
+                exam_subjects=["政治", "英语二", "数学二", "408"],
+                source_url="https://example.edu/admission",
+                notes="院校备注" * 500,
+            ),
+        )
+        await self.repository.create_career_item(
+            self.user,
+            CareerItemCreate(
+                item_type="application",
+                title="投递 AI 应用开发实习",
+                company="示例科技",
+                notes="求职复盘" * 500,
+            ),
+        )
+
+        context = await build_agent_context(
+            self.repository,
+            self.user,
+            message="对比我的目标院校和实习投递",
+            route="tutor",
+            retrieval_mode="private",
+        )
+
+        self.assertEqual(context["school_options"][0]["university"], "苏州大学")
+        self.assertEqual(context["career_items"][0]["company"], "示例科技")
+        self.assertNotIn("id", context["school_options"][0])
+        self.assertNotIn("id", context["career_items"][0])
+        self.assertEqual(len(context["school_options"][0]["notes"]), 800)
+        self.assertEqual(len(context["career_items"][0]["notes"]), 800)
+        answer = tutor_fallback({"context": context, "retrieval_mode": "private"})
+        self.assertIn("已保存院校档案（1）", answer)
+        self.assertIn("已保存求职记录（1）", answer)
+
+        other = AuthUser(
+            id=UUID("22222222-2222-2222-2222-222222222222"),
+            email="two@example.com",
+            access_token="other-token",
+        )
+        other_context = await build_agent_context(
+            self.repository,
+            other,
+            message="对比我的目标院校和实习投递",
+            route="tutor",
+            retrieval_mode="private",
+        )
+        self.assertEqual(other_context["school_options"], [])
+        self.assertEqual(other_context["career_items"], [])
+
+    async def test_context_skips_unrequested_decision_records(self):
+        context = await build_agent_context(
+            self.repository,
+            self.user,
+            message="解释二叉树遍历",
+            route="tutor",
+            retrieval_mode="private",
+        )
+
+        self.assertEqual(context["school_options"], [])
+        self.assertEqual(context["career_items"], [])
 
     async def test_web_context_keeps_traceable_sources(self):
         context = await build_agent_context(

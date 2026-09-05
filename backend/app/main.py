@@ -1166,7 +1166,15 @@ async def stream_agent(
             async def stream_branch(kind: Literal["coach", "tutor"]):
                 nonlocal generated
                 fallback = coach_fallback(state) if kind == "coach" else tutor_fallback(state)
-                has_evidence = bool(context["private_sources"] or context["web_sources"])
+                has_evidence = any(
+                    context[key]
+                    for key in (
+                        "private_sources",
+                        "web_sources",
+                        "school_options",
+                        "career_items",
+                    )
+                )
                 can_generate = kind == "coach" or has_evidence
                 received = False
                 if can_generate:

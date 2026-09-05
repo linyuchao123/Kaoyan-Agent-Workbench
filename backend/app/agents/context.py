@@ -13,10 +13,16 @@ class AgentContext(TypedDict):
     pending_tasks: list[dict[str, Any]]
     recent_sessions: list[dict[str, Any]]
     due_mistakes: list[dict[str, Any]]
+    school_options: list[dict[str, Any]]
+    career_items: list[dict[str, Any]]
     private_sources: list[dict[str, Any]]
     web_sources: list[dict[str, Any]]
     web_search_status: Literal["not_requested", "unconfigured", "success", "failed"]
     recent_effective_minutes: int
+
+
+SCHOOL_CONTEXT_MARKERS = ("院校", "学校", "专业", "招生", "择校", "目标校", "复试")
+CAREER_CONTEXT_MARKERS = ("实习", "求职", "简历", "投递", "面试", "项目经历")
 
 
 def _effective_minutes(session: dict[str, Any]) -> int:
@@ -49,6 +55,8 @@ async def build_agent_context(
     tasks_task = None
     sessions_task = None
     mistakes_task = None
+    schools_task = None
+    career_task = None
     sources_task = None
     web_task = None
     web_search_status: Literal["not_requested", "unconfigured", "success", "failed"] = (
@@ -60,6 +68,11 @@ async def build_agent_context(
         tasks_task = asyncio.create_task(repository.list_tasks(user))
         sessions_task = asyncio.create_task(repository.list_sessions(user))
         mistakes_task = asyncio.create_task(repository.list_mistakes(user, due_only=True))
+    normalized_message = message.casefold()
+    if any(marker in normalized_message for marker in SCHOOL_CONTEXT_MARKERS):
+        schools_task = asyncio.create_task(repository.list_school_options(user))
+    if any(marker in normalized_message for marker in CAREER_CONTEXT_MARKERS):
+        career_task = asyncio.create_task(repository.list_career_items(user))
     if route in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}:
         sources_task = asyncio.create_task(
             repository.search_private_knowledge(
@@ -79,6 +92,8 @@ async def build_agent_context(
     tasks = await tasks_task if tasks_task else []
     sessions = await sessions_task if sessions_task else []
     mistakes = await mistakes_task if mistakes_task else []
+    schools = await schools_task if schools_task else []
+    career_items = await career_task if career_task else []
     sources = await sources_task if sources_task else []
     web_results = []
     if web_task:
@@ -113,6 +128,36 @@ async def build_agent_context(
     ][:8]
     recent_sessions = list(reversed(sessions))[:8]
     due_mistakes = mistakes[:6]
+    school_options = [
+        {
+            "tier": school.get("tier"),
+            "university": school.get("university"),
+            "college": school.get("college"),
+            "major_code": school.get("major_code"),
+            "major_name": school.get("major_name"),
+            "degree_type": school.get("degree_type"),
+            "exam_year": school.get("exam_year"),
+            "exam_subjects": school.get("exam_subjects"),
+            "tuition_total": school.get("tuition_total"),
+            "duration_years": school.get("duration_years"),
+            "location": school.get("location"),
+            "source_url": school.get("source_url"),
+            "source_checked_at": school.get("source_checked_at"),
+            "notes": str(school.get("notes") or "")[:800],
+        }
+        for school in schools[:8]
+    ]
+    career_context = [
+        {
+            "item_type": item.get("item_type"),
+            "title": item.get("title"),
+            "company": item.get("company"),
+            "status": item.get("status"),
+            "occurred_on": item.get("occurred_on"),
+            "notes": str(item.get("notes") or "")[:800],
+        }
+        for item in career_items[:8]
+    ]
     private_sources = [
         {
             "document_id": str(source.document_id),
@@ -137,6 +182,8 @@ async def build_agent_context(
         "pending_tasks": pending_tasks,
         "recent_sessions": recent_sessions,
         "due_mistakes": due_mistakes,
+        "school_options": school_options,
+        "career_items": career_context,
         "private_sources": private_sources,
         "web_sources": web_sources,
         "web_search_status": web_search_status,
