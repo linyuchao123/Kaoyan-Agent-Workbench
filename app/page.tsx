@@ -7,6 +7,7 @@ import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
+import { readValidLocalRagBundle, removeLocalRagBundle, saveLocalRagBundle } from "./lib/local-rag";
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
@@ -2037,7 +2038,7 @@ function HighlightedSearchText({ text, terms }: { text: string; terms: string[] 
     : <span key={`${part}-${index}`}>{part}</span>)}</>;
 }
 
-function MaterialsView({ isDemo }: { isDemo: boolean }) {
+function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
@@ -2057,6 +2058,8 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const [readerUrl, setReaderUrl] = useState<string | null>(null);
   const [readerBusy, setReaderBusy] = useState(false);
   const [readerError, setReaderError] = useState("");
+  const [cachedDocumentIds, setCachedDocumentIds] = useState<Set<string>>(new Set());
+  const [cachingDocumentId, setCachingDocumentId] = useState<string | null>(null);
   const pendingDocumentIds = docs
     .filter((document) => ["queued", "processing", "ocr_required"].includes(document.ingestion_status))
     .map((document) => document.id)
@@ -2093,6 +2096,21 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     if (readerUrl) URL.revokeObjectURL(readerUrl);
   }, [readerUrl]);
 
+  useEffect(() => {
+    if (isDemo || docs.length === 0) return;
+    let active = true;
+    void Promise.all(docs.map(async (document) => {
+      try {
+        return [document.id, Boolean(await readValidLocalRagBundle(accountKey, document))] as const;
+      } catch {
+        return [document.id, false] as const;
+      }
+    })).then((statuses) => {
+      if (active) setCachedDocumentIds(new Set(statuses.filter(([, cached]) => cached).map(([id]) => id)));
+    });
+    return () => { active = false; };
+  }, [accountKey, docs, isDemo]);
+
   function closeReader() {
     setReaderDocument(null);
     setReaderText(null);
@@ -2121,6 +2139,40 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       setReaderError(materialRequestErrorMessage(error, "load"));
     } finally {
       setReaderBusy(false);
+    }
+  }
+
+  async function toggleLocalIndex(document: ApiDocument) {
+    if (isDemo || cachingDocumentId) return;
+    setCachingDocumentId(document.id);
+    try {
+      if (cachedDocumentIds.has(document.id)) {
+        await removeLocalRagBundle(accountKey, document.id);
+        setCachedDocumentIds((current) => { const next = new Set(current); next.delete(document.id); return next; });
+        setImportStatus(`已从当前设备移除《${document.title}》的本地索引`);
+        return;
+      }
+      let offset = 0;
+      let hasMore = true;
+      let firstPage: Awaited<ReturnType<typeof api.getDocumentLocalIndex>> | null = null;
+      const chunks: Awaited<ReturnType<typeof api.getDocumentLocalIndex>>["chunks"] = [];
+      while (hasMore) {
+        const page = await api.getDocumentLocalIndex(document.id, offset, 200);
+        firstPage ??= page;
+        chunks.push(...page.chunks);
+        if (chunks.length > 10_000) throw new Error("local index exceeds safe chunk limit");
+        if (page.has_more && page.chunks.length === 0) throw new Error("local index pagination stalled");
+        offset += page.chunks.length;
+        hasMore = page.has_more;
+      }
+      if (!firstPage) throw new Error("local index unavailable");
+      await saveLocalRagBundle(accountKey, { ...firstPage, offset: 0, has_more: false, chunks });
+      setCachedDocumentIds((current) => new Set(current).add(document.id));
+      setImportStatus(`已将《${document.title}》的 ${chunks.length} 个安全片段缓存到当前设备`);
+    } catch (error) {
+      setImportStatus(materialRequestErrorMessage(error, "search"));
+    } finally {
+      setCachingDocumentId(null);
     }
   }
 
@@ -2246,6 +2298,7 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
           <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
           <span className={`document-status status-${doc.ingestion_status}`}><strong>● {ingestionCopy.label}</strong><small>{ingestionCopy.description}</small></span>
           <button className="document-read" type="button" onClick={() => void openDocument(doc)}>阅读</button>
+          <button className="document-cache" type="button" disabled={isDemo || cachingDocumentId !== null || doc.ingestion_status !== "ready"} onClick={() => void toggleLocalIndex(doc)}>{cachingDocumentId === doc.id ? "缓存中…" : cachedDocumentIds.has(doc.id) ? "移除本地" : "缓存索引"}</button>
           <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
           {doc.ingestion_status === "failed" && <p className="document-error" role="alert">处理建议：确认文件可正常打开、云端模型额度充足后重新处理。{doc.ingestion_error ? "后台已记录详细错误，便于继续排查。" : ""}</p>}
         </div>; })}
@@ -3174,7 +3227,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {

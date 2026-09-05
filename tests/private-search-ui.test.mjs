@@ -44,3 +44,12 @@ test("资料库可以安全打开 PDF 或 Markdown 电子书", () => {
   assert.match(pageSource, /<iframe title=\{readerDocument\.title\}/);
   assert.match(pageSource, /<pre>\{readerText\}<\/pre>/);
 });
+
+test("本地索引由用户显式缓存并按账户隔离", () => {
+  assert.match(pageSource, /readValidLocalRagBundle\(accountKey, document\)/);
+  assert.match(pageSource, /api\.getDocumentLocalIndex\(document\.id, offset, 200\)/);
+  assert.match(pageSource, /saveLocalRagBundle\(accountKey/);
+  assert.match(pageSource, /removeLocalRagBundle\(accountKey, document\.id\)/);
+  assert.match(pageSource, /缓存索引/);
+  assert.match(pageSource, /移除本地/);
+});

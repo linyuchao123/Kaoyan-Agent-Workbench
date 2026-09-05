@@ -186,6 +186,24 @@ export type ApiPrivateKnowledgeSource = {
   score: number;
 };
 
+export type ApiLocalRagChunk = {
+  chunk_index: number;
+  heading: string | null;
+  page_number: number | null;
+  locator: string;
+  content: string;
+};
+
+export type ApiLocalRagBundle = {
+  document_id: string;
+  document_version: number;
+  chunking_version: number;
+  indexed_at: string | null;
+  offset: number;
+  has_more: boolean;
+  chunks: ApiLocalRagChunk[];
+};
+
 export type ContributionDay = {
   date: string;
   scope: string;
@@ -610,6 +628,9 @@ export const api = {
   readDocumentContent: async (id: string) => (
     await download(`/api/v1/documents/${id}/content`)
   ).blob,
+  getDocumentLocalIndex: (id: string, offset = 0, limit = 200) => request<ApiLocalRagBundle>(
+    `/api/v1/documents/${id}/local-index?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`,
+  ),
   searchPrivateKnowledge: (query: string, documentId?: string) => {
     const params = new URLSearchParams({ query, limit: "8" });
     if (documentId) params.set("document_id", documentId);
