@@ -182,7 +182,7 @@ export type ApiPrivateKnowledgeSource = {
   content: string;
   snippet: string;
   matched_terms: string[];
-  retrieval_mode: "keyword" | "hybrid";
+  retrieval_mode: "keyword" | "hybrid" | "local";
   score: number;
 };
 

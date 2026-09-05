@@ -53,3 +53,11 @@ test("本地索引由用户显式缓存并按账户隔离", () => {
   assert.match(pageSource, /缓存索引/);
   assert.match(pageSource, /移除本地/);
 });
+
+test("私有检索优先使用本地缓存且无命中时回退云端", () => {
+  const localRead = pageSource.indexOf("readValidLocalRagBundle(accountKey, document)", pageSource.indexOf("async function searchPrivateKnowledge"));
+  const cloudSearch = pageSource.indexOf("api.searchPrivateKnowledge(query, selectedDocumentId || undefined)");
+  assert.ok(localRead > 0 && localRead < cloudSearch);
+  assert.match(pageSource, /查询未发送到云端/);
+  assert.match(pageSource, /source\.retrieval_mode === "local" \? "本地检索"/);
+});

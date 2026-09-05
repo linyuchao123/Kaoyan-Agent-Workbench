@@ -7,7 +7,7 @@ import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
-import { readValidLocalRagBundle, removeLocalRagBundle, saveLocalRagBundle } from "./lib/local-rag";
+import { readValidLocalRagBundle, removeLocalRagBundle, saveLocalRagBundle, searchLocalRagChunks } from "./lib/local-rag";
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
@@ -2246,6 +2246,40 @@ function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: st
     setSearchBusy(true);
     setSearchStatus(`正在检索“${query}”…`);
     try {
+      const availableDocuments = isDemo ? DEMO_DOCUMENTS : docs;
+      const localDocuments = availableDocuments.filter((document) => (
+        cachedDocumentIds.has(document.id)
+        && (!selectedDocumentId || document.id === selectedDocumentId)
+      ));
+      const localResults: ApiPrivateKnowledgeSource[] = [];
+      for (const document of localDocuments) {
+        let bundle = null;
+        try {
+          bundle = await readValidLocalRagBundle(accountKey, document);
+        } catch {
+          continue;
+        }
+        if (!bundle) continue;
+        localResults.push(...searchLocalRagChunks(bundle.chunks, query, 8).map((chunk) => ({
+          chunk_id: chunk.chunk_index,
+          document_id: document.id,
+          title: document.title,
+          heading: chunk.heading,
+          page_number: chunk.page_number,
+          locator: chunk.locator,
+          content: chunk.content,
+          snippet: chunk.content,
+          matched_terms: query.toLocaleLowerCase().split(/\s+/).filter(Boolean),
+          retrieval_mode: "local" as const,
+          score: 0,
+        })));
+      }
+      if (localResults.length > 0) {
+        setSearchResults(localResults.slice(0, 8));
+        setExpandedSourceIds(new Set());
+        setSearchStatus(`已优先从当前设备缓存中找到 ${Math.min(localResults.length, 8)} 个原文片段，查询未发送到云端`);
+        return;
+      }
       const results = await api.searchPrivateKnowledge(query, selectedDocumentId || undefined);
       setSearchResults(results);
       setExpandedSourceIds(new Set());
@@ -2308,7 +2342,7 @@ function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: st
       <div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>已启用关键词与 Embedding 混合检索；向量服务不可用时自动回退关键词检索。</p></div><span className="subtle-pill">仅当前账户</span></div>
       <form className="private-search-form" onSubmit={searchPrivateKnowledge}><select value={selectedDocumentId} onChange={(event) => setSelectedDocumentId(event.target.value)} aria-label="限定检索资料"><option value="">全部资料</option>{visibleDocuments.filter((doc) => doc.ingestion_status === "ready").map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename || doc.title}</option>)}</select><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：函数的定义" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form>
       <small className="private-search-status">{searchStatus}</small>
-      {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span><span>相关度 {Math.max(0, source.score).toFixed(2)}</span></div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
+      {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={`${source.document_id}-${source.chunk_id}`}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "local" ? "本地检索" : source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span>{source.retrieval_mode !== "local" && <span>相关度 {Math.max(0, source.score).toFixed(2)}</span>}</div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
     </section>
     {readerDocument && <div className="document-reader-backdrop" role="presentation"><section className="document-reader" role="dialog" aria-modal="true" aria-label={`阅读 ${readerDocument.original_filename || readerDocument.title}`}><header><div><div className="eyebrow">私有电子书</div><h2>{readerDocument.original_filename || readerDocument.title}</h2></div><button type="button" onClick={closeReader} aria-label="关闭阅读器">×</button></header><div className="document-reader-body">{readerBusy && <div className="plan-empty compact">正在安全读取原文…</div>}{readerError && <div className="request-state error" role="alert"><strong>原文暂时无法打开</strong><span>{readerError}</span></div>}{readerUrl && <iframe title={readerDocument.title} src={readerUrl} />}{readerText !== null && <pre>{readerText}</pre>}</div></section></div>}
   </section>;
