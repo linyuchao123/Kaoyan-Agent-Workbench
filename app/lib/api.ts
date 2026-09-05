@@ -182,8 +182,26 @@ export type ApiPrivateKnowledgeSource = {
   content: string;
   snippet: string;
   matched_terms: string[];
-  retrieval_mode: "keyword" | "hybrid";
+  retrieval_mode: "keyword" | "hybrid" | "local";
   score: number;
+};
+
+export type ApiLocalRagChunk = {
+  chunk_index: number;
+  heading: string | null;
+  page_number: number | null;
+  locator: string;
+  content: string;
+};
+
+export type ApiLocalRagBundle = {
+  document_id: string;
+  document_version: number;
+  chunking_version: number;
+  indexed_at: string | null;
+  offset: number;
+  has_more: boolean;
+  chunks: ApiLocalRagChunk[];
 };
 
 export type ContributionDay = {
@@ -607,6 +625,12 @@ export const api = {
   }) => request<ApiStudySession>("/api/v1/sessions", { method: "POST", body: JSON.stringify(payload) }),
   deleteSession: (id: string) => request<void>(`/api/v1/sessions/${id}`, { method: "DELETE" }),
   listDocuments: () => request<ApiDocument[]>("/api/v1/documents"),
+  readDocumentContent: async (id: string) => (
+    await download(`/api/v1/documents/${id}/content`)
+  ).blob,
+  getDocumentLocalIndex: (id: string, offset = 0, limit = 200) => request<ApiLocalRagBundle>(
+    `/api/v1/documents/${id}/local-index?${new URLSearchParams({ offset: String(offset), limit: String(limit) })}`,
+  ),
   searchPrivateKnowledge: (query: string, documentId?: string) => {
     const params = new URLSearchParams({ query, limit: "8" });
     if (documentId) params.set("document_id", documentId);

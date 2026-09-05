@@ -35,3 +35,36 @@ test("资料列表解释每个处理阶段并提供可操作失败提示", () =>
   assert.match(pageSource, /处理建议：确认文件可正常打开、云端模型额度充足后重新处理/);
   assert.match(pageSource, /function materialRequestErrorMessage/);
 });
+
+test("资料库可以安全打开 PDF 或 Markdown 电子书", () => {
+  assert.match(pageSource, /api\.readDocumentContent\(document\.id\)/);
+  assert.match(pageSource, /URL\.createObjectURL\(blob\)/);
+  assert.match(pageSource, /URL\.revokeObjectURL\(readerUrl\)/);
+  assert.match(pageSource, /aria-label="关闭阅读器"/);
+  assert.match(pageSource, /<iframe title=\{readerDocument\.title\}/);
+  assert.match(pageSource, /<pre>\{readerText\}<\/pre>/);
+});
+
+test("本地索引由用户显式缓存并按账户隔离", () => {
+  assert.match(pageSource, /readValidLocalRagBundle\(accountKey, document\)/);
+  assert.match(pageSource, /api\.getDocumentLocalIndex\(document\.id, offset, 200\)/);
+  assert.match(pageSource, /saveLocalRagBundle\(accountKey/);
+  assert.match(pageSource, /removeLocalRagBundle\(accountKey, document\.id\)/);
+  assert.match(pageSource, /缓存索引/);
+  assert.match(pageSource, /移除本地/);
+});
+
+test("资料库清楚说明设备缓存范围和移除方式", () => {
+  assert.match(pageSource, /设备缓存由你控制/);
+  assert.match(pageSource, /仅把当前账户的安全原文片段保存到这个浏览器/);
+  assert.match(pageSource, /风险片段不会写入缓存/);
+  assert.match(pageSource, /可随时点“移除本地”清除/);
+});
+
+test("私有检索优先使用本地缓存且无命中时回退云端", () => {
+  const localRead = pageSource.indexOf("readValidLocalRagBundle(accountKey, document)", pageSource.indexOf("async function searchPrivateKnowledge"));
+  const cloudSearch = pageSource.indexOf("api.searchPrivateKnowledge(query, selectedDocumentId || undefined)");
+  assert.ok(localRead > 0 && localRead < cloudSearch);
+  assert.match(pageSource, /查询未发送到云端/);
+  assert.match(pageSource, /source\.retrieval_mode === "local" \? "本地检索"/);
+});

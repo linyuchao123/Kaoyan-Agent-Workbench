@@ -248,6 +248,10 @@ class StudyRepository(Protocol):
 
     async def read_document_content(self, user: AuthUser, document_id: UUID) -> bytes: ...
 
+    async def list_safe_document_chunks(
+        self, user: AuthUser, document_id: UUID, offset: int, limit: int
+    ) -> list[dict]: ...
+
     async def replace_document_chunks(
         self,
         user: AuthUser,
@@ -604,6 +608,22 @@ class DemoRepository:
             return self.document_contents[(user.id, document_id)]
         except KeyError as error:
             raise RepositoryValidationError("document content not found") from error
+
+    async def list_safe_document_chunks(
+        self, user: AuthUser, document_id: UUID, offset: int, limit: int
+    ) -> list[dict]:
+        chunks = self.document_chunks.get((user.id, document_id), [])
+        safe_chunks = [chunk for chunk in chunks if not chunk.flagged_untrusted_instruction]
+        return [
+            {
+                "chunk_index": chunk.index,
+                "heading": chunk.heading,
+                "page_number": chunk.page_number,
+                "locator": chunk.locator,
+                "content": chunk.content,
+            }
+            for chunk in safe_chunks[offset : offset + limit]
+        ]
 
     async def replace_document_chunks(
         self,
@@ -1844,6 +1864,24 @@ class SupabaseRepository:
         if not storage_path:
             raise RepositoryValidationError("document has no stored source file")
         return await self._download_storage_object(user, str(storage_path))
+
+    async def list_safe_document_chunks(
+        self, user: AuthUser, document_id: UUID, offset: int, limit: int
+    ) -> list[dict]:
+        return await self._request(
+            user,
+            "GET",
+            "document_chunks",
+            params={
+                "select": "chunk_index,heading,page_number,locator,content",
+                "document_id": f"eq.{document_id}",
+                "user_id": f"eq.{user.id}",
+                "flagged_untrusted_instruction": "eq.false",
+                "order": "chunk_index.asc",
+                "offset": str(offset),
+                "limit": str(limit),
+            },
+        )
 
     async def replace_document_chunks(
         self,

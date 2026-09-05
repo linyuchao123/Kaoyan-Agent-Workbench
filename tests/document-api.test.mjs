@@ -46,6 +46,59 @@ test("资料列表读取当前账户的云端记录", async () => {
   }
 });
 
+test("电子书原文读取使用登录身份并返回 Blob", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response("# 高等数学", {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+    });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    const blob = await api.readDocumentContent(documentRecord.id);
+    assert.equal(await blob.text(), "# 高等数学");
+    assert.match(request.input, new RegExp(`/documents/${documentRecord.id}/content$`));
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("本地 RAG 分页接口编码文档与分页参数", async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (input, init) => {
+    request = { input: String(input), init };
+    return new Response(JSON.stringify({
+      document_id: documentRecord.id,
+      document_version: 1,
+      chunking_version: 2,
+      indexed_at: documentRecord.indexed_at,
+      offset: 200,
+      has_more: false,
+      chunks: [],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  setApiAccessToken("current-user-token");
+
+  try {
+    await api.getDocumentLocalIndex(documentRecord.id, 200, 100);
+    const url = new URL(request.input);
+    assert.equal(url.pathname, `/api/v1/documents/${documentRecord.id}/local-index`);
+    assert.equal(url.searchParams.get("offset"), "200");
+    assert.equal(url.searchParams.get("limit"), "100");
+    assert.equal(new Headers(request.init.headers).get("Authorization"), "Bearer current-user-token");
+  } finally {
+    setApiAccessToken(null);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("资料上传使用 multipart 表单并携带当前登录身份", async () => {
   const originalFetch = globalThis.fetch;
   let request;

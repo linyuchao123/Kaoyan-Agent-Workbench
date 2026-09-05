@@ -7,6 +7,7 @@ import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
+import { readValidLocalRagBundle, removeLocalRagBundle, saveLocalRagBundle, searchLocalRagChunks } from "./lib/local-rag";
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
@@ -2037,7 +2038,7 @@ function HighlightedSearchText({ text, terms }: { text: string; terms: string[] 
     : <span key={`${part}-${index}`}>{part}</span>)}</>;
 }
 
-function MaterialsView({ isDemo }: { isDemo: boolean }) {
+function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
@@ -2052,6 +2053,13 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
   const [selectedDocumentId, setSelectedDocumentId] = useState("");
   const [expandedSourceIds, setExpandedSourceIds] = useState<Set<number>>(new Set());
   const [reindexingId, setReindexingId] = useState<string | null>(null);
+  const [readerDocument, setReaderDocument] = useState<ApiDocument | null>(null);
+  const [readerText, setReaderText] = useState<string | null>(null);
+  const [readerUrl, setReaderUrl] = useState<string | null>(null);
+  const [readerBusy, setReaderBusy] = useState(false);
+  const [readerError, setReaderError] = useState("");
+  const [cachedDocumentIds, setCachedDocumentIds] = useState<Set<string>>(new Set());
+  const [cachingDocumentId, setCachingDocumentId] = useState<string | null>(null);
   const pendingDocumentIds = docs
     .filter((document) => ["queued", "processing", "ocr_required"].includes(document.ingestion_status))
     .map((document) => document.id)
@@ -2083,6 +2091,90 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [isDemo, pendingDocumentIds]);
+
+  useEffect(() => () => {
+    if (readerUrl) URL.revokeObjectURL(readerUrl);
+  }, [readerUrl]);
+
+  useEffect(() => {
+    if (isDemo || docs.length === 0) return;
+    let active = true;
+    void Promise.all(docs.map(async (document) => {
+      try {
+        return [document.id, Boolean(await readValidLocalRagBundle(accountKey, document))] as const;
+      } catch {
+        return [document.id, false] as const;
+      }
+    })).then((statuses) => {
+      if (active) setCachedDocumentIds(new Set(statuses.filter(([, cached]) => cached).map(([id]) => id)));
+    });
+    return () => { active = false; };
+  }, [accountKey, docs, isDemo]);
+
+  function closeReader() {
+    setReaderDocument(null);
+    setReaderText(null);
+    setReaderUrl(null);
+    setReaderError("");
+  }
+
+  async function openDocument(document: ApiDocument) {
+    setReaderDocument(document);
+    setReaderText(null);
+    setReaderUrl(null);
+    setReaderError("");
+    if (isDemo) {
+      setReaderError("演示资料没有对应原文件；登录后可阅读自己上传的 PDF 或 Markdown。");
+      return;
+    }
+    setReaderBusy(true);
+    try {
+      const blob = await api.readDocumentContent(document.id);
+      if (document.content_type === "application/pdf") {
+        setReaderUrl(URL.createObjectURL(blob));
+      } else {
+        setReaderText(await blob.text());
+      }
+    } catch (error) {
+      setReaderError(materialRequestErrorMessage(error, "load"));
+    } finally {
+      setReaderBusy(false);
+    }
+  }
+
+  async function toggleLocalIndex(document: ApiDocument) {
+    if (isDemo || cachingDocumentId) return;
+    setCachingDocumentId(document.id);
+    try {
+      if (cachedDocumentIds.has(document.id)) {
+        await removeLocalRagBundle(accountKey, document.id);
+        setCachedDocumentIds((current) => { const next = new Set(current); next.delete(document.id); return next; });
+        setImportStatus(`已从当前设备移除《${document.title}》的本地索引`);
+        return;
+      }
+      let offset = 0;
+      let hasMore = true;
+      let firstPage: Awaited<ReturnType<typeof api.getDocumentLocalIndex>> | null = null;
+      const chunks: Awaited<ReturnType<typeof api.getDocumentLocalIndex>>["chunks"] = [];
+      while (hasMore) {
+        const page = await api.getDocumentLocalIndex(document.id, offset, 200);
+        firstPage ??= page;
+        chunks.push(...page.chunks);
+        if (chunks.length > 10_000) throw new Error("local index exceeds safe chunk limit");
+        if (page.has_more && page.chunks.length === 0) throw new Error("local index pagination stalled");
+        offset += page.chunks.length;
+        hasMore = page.has_more;
+      }
+      if (!firstPage) throw new Error("local index unavailable");
+      await saveLocalRagBundle(accountKey, { ...firstPage, offset: 0, has_more: false, chunks });
+      setCachedDocumentIds((current) => new Set(current).add(document.id));
+      setImportStatus(`已将《${document.title}》的 ${chunks.length} 个安全片段缓存到当前设备`);
+    } catch (error) {
+      setImportStatus(materialRequestErrorMessage(error, "search"));
+    } finally {
+      setCachingDocumentId(null);
+    }
+  }
 
   async function upload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2154,6 +2246,40 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
     setSearchBusy(true);
     setSearchStatus(`正在检索“${query}”…`);
     try {
+      const availableDocuments = isDemo ? DEMO_DOCUMENTS : docs;
+      const localDocuments = availableDocuments.filter((document) => (
+        cachedDocumentIds.has(document.id)
+        && (!selectedDocumentId || document.id === selectedDocumentId)
+      ));
+      const localResults: ApiPrivateKnowledgeSource[] = [];
+      for (const document of localDocuments) {
+        let bundle = null;
+        try {
+          bundle = await readValidLocalRagBundle(accountKey, document);
+        } catch {
+          continue;
+        }
+        if (!bundle) continue;
+        localResults.push(...searchLocalRagChunks(bundle.chunks, query, 8).map((chunk) => ({
+          chunk_id: chunk.chunk_index,
+          document_id: document.id,
+          title: document.title,
+          heading: chunk.heading,
+          page_number: chunk.page_number,
+          locator: chunk.locator,
+          content: chunk.content,
+          snippet: chunk.content,
+          matched_terms: query.toLocaleLowerCase().split(/\s+/).filter(Boolean),
+          retrieval_mode: "local" as const,
+          score: 0,
+        })));
+      }
+      if (localResults.length > 0) {
+        setSearchResults(localResults.slice(0, 8));
+        setExpandedSourceIds(new Set());
+        setSearchStatus(`已优先从当前设备缓存中找到 ${Math.min(localResults.length, 8)} 个原文片段，查询未发送到云端`);
+        return;
+      }
       const results = await api.searchPrivateKnowledge(query, selectedDocumentId || undefined);
       setSearchResults(results);
       setExpandedSourceIds(new Set());
@@ -2200,11 +2326,17 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       </section>
       <section className="panel material-list">
         <div className="panel-heading compact"><div><div className="eyebrow">资料记录</div><h2>{loading ? "正在加载" : `${visibleDocuments.length} 份资料`}</h2></div><span className="subtle-pill">{isDemo ? "演示资料" : "私有云端资料"}</span></div>
+        <div className="local-rag-privacy-note" role="note">
+          <strong>设备缓存由你控制</strong>
+          <span>“缓存索引”仅把当前账户的安全原文片段保存到这个浏览器；风险片段不会写入缓存，可随时点“移除本地”清除。</span>
+        </div>
         {loading ? <div className="plan-empty compact">正在读取你的云端资料…</div> : visibleDocuments.length === 0 ? <div className="plan-empty compact"><strong>还没有个人资料</strong><span>上传第一份 PDF 或 Markdown，建立你的私有检索库。</span></div> : visibleDocuments.map((doc) => { const ingestionCopy = documentIngestionCopy(doc); return <div className="document-row" key={doc.id}>
           <span className="document-icon">▤</span>
           <div><strong>{doc.original_filename || doc.title}</strong><small>{doc.content_type} · {doc.byte_size === null ? "大小未知" : `${Math.max(1, Math.ceil(doc.byte_size / 1024))} KB`} · 分块 v{doc.chunking_version ?? 1}{doc.indexed_at ? ` · ${new Date(doc.indexed_at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} 更新` : ""}</small></div>
           <em>{doc.source_type === "web" ? "网页" : doc.content_type.includes("pdf") ? "PDF" : "MD"}</em>
           <span className={`document-status status-${doc.ingestion_status}`}><strong>● {ingestionCopy.label}</strong><small>{ingestionCopy.description}</small></span>
+          <button className="document-read" type="button" onClick={() => void openDocument(doc)}>阅读</button>
+          <button className="document-cache" type="button" disabled={isDemo || cachingDocumentId !== null || doc.ingestion_status !== "ready"} onClick={() => void toggleLocalIndex(doc)}>{cachingDocumentId === doc.id ? "缓存中…" : cachedDocumentIds.has(doc.id) ? "移除本地" : "缓存索引"}</button>
           <button className="document-reindex" type="button" disabled={isDemo || reindexingId !== null || doc.ingestion_status === "processing"} onClick={() => void reindexDocument(doc)}>{reindexingId === doc.id ? "解析中…" : doc.ingestion_status === "failed" ? "重新处理" : "重新解析"}</button>
           {doc.ingestion_status === "failed" && <p className="document-error" role="alert">处理建议：确认文件可正常打开、云端模型额度充足后重新处理。{doc.ingestion_error ? "后台已记录详细错误，便于继续排查。" : ""}</p>}
         </div>; })}
@@ -2214,8 +2346,9 @@ function MaterialsView({ isDemo }: { isDemo: boolean }) {
       <div className="panel-heading"><div><div className="eyebrow">私有资料检索</div><h2>从自己的原文中查找依据</h2><p>已启用关键词与 Embedding 混合检索；向量服务不可用时自动回退关键词检索。</p></div><span className="subtle-pill">仅当前账户</span></div>
       <form className="private-search-form" onSubmit={searchPrivateKnowledge}><select value={selectedDocumentId} onChange={(event) => setSelectedDocumentId(event.target.value)} aria-label="限定检索资料"><option value="">全部资料</option>{visibleDocuments.filter((doc) => doc.ingestion_status === "ready").map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename || doc.title}</option>)}</select><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} minLength={2} maxLength={500} placeholder="例如：函数的定义" aria-label="私有资料检索关键词" /><button type="submit" disabled={searchBusy || searchQuery.trim().length < 2}>{searchBusy ? "检索中…" : "检索原文"}</button></form>
       <small className="private-search-status">{searchStatus}</small>
-      {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={source.chunk_id}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span><span>相关度 {Math.max(0, source.score).toFixed(2)}</span></div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
+      {searchResults.length > 0 && <div className="private-search-results">{searchResults.map((source) => { const expanded = expandedSourceIds.has(source.chunk_id); const displayedText = expanded ? source.content : source.snippet || source.content; const canExpand = Boolean(source.snippet && source.content !== source.snippet); return <article key={`${source.document_id}-${source.chunk_id}`}><div><strong>{source.title}</strong><span>{source.page_number ? `第 ${source.page_number} 页` : source.heading || "文档正文"}</span></div><div className="search-result-meta"><span>{source.retrieval_mode === "local" ? "本地检索" : source.retrieval_mode === "hybrid" ? "混合检索" : "关键词检索"}</span>{source.retrieval_mode !== "local" && <span>相关度 {Math.max(0, source.score).toFixed(2)}</span>}</div><p><HighlightedSearchText text={displayedText} terms={source.matched_terms} /></p><footer><small>{source.locator}</small>{canExpand && <button type="button" onClick={() => setExpandedSourceIds((current) => { const next = new Set(current); if (expanded) next.delete(source.chunk_id); else next.add(source.chunk_id); return next; })}>{expanded ? "收起上下文" : "展开上下文"}</button>}</footer></article>; })}</div>}
     </section>
+    {readerDocument && <div className="document-reader-backdrop" role="presentation"><section className="document-reader" role="dialog" aria-modal="true" aria-label={`阅读 ${readerDocument.original_filename || readerDocument.title}`}><header><div><div className="eyebrow">私有电子书</div><h2>{readerDocument.original_filename || readerDocument.title}</h2></div><button type="button" onClick={closeReader} aria-label="关闭阅读器">×</button></header><div className="document-reader-body">{readerBusy && <div className="plan-empty compact">正在安全读取原文…</div>}{readerError && <div className="request-state error" role="alert"><strong>原文暂时无法打开</strong><span>{readerError}</span></div>}{readerUrl && <iframe title={readerDocument.title} src={readerUrl} />}{readerText !== null && <pre>{readerText}</pre>}</div></section></div>}
   </section>;
 }
 
@@ -3132,7 +3265,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {

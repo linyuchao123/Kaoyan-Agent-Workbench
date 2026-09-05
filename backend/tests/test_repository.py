@@ -594,6 +594,55 @@ class RepositoryTests(IsolatedAsyncioTestCase):
         )
         self.assertEqual(requests[1].headers["authorization"], "Bearer signed-user-jwt")
 
+    async def test_supabase_local_index_filters_owner_document_and_unsafe_chunks(self):
+        requests: list[httpx.Request] = []
+        document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "chunk_index": 2,
+                        "heading": "线性表",
+                        "page_number": 8,
+                        "locator": "第 8 页",
+                        "content": "顺序表支持按下标随机访问。",
+                    }
+                ],
+            )
+
+        repository = SupabaseRepository(
+            Settings(
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                demo_mode=False,
+            ),
+            httpx.MockTransport(handler),
+        )
+
+        rows = await repository.list_safe_document_chunks(
+            self.user,
+            document_id,
+            offset=100,
+            limit=51,
+        )
+
+        self.assertEqual(rows[0]["chunk_index"], 2)
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertTrue(request.url.path.endswith("/rest/v1/document_chunks"))
+        self.assertEqual(request.headers["authorization"], "Bearer signed-user-jwt")
+        self.assertEqual(request.url.params["document_id"], f"eq.{document_id}")
+        self.assertEqual(request.url.params["user_id"], f"eq.{self.user.id}")
+        self.assertEqual(
+            request.url.params["flagged_untrusted_instruction"], "eq.false"
+        )
+        self.assertEqual(request.url.params["order"], "chunk_index.asc")
+        self.assertEqual(request.url.params["offset"], "100")
+        self.assertEqual(request.url.params["limit"], "51")
+
     async def test_supabase_replaces_document_chunks_through_atomic_rpc(self):
         requests: list[httpx.Request] = []
         document_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
