@@ -2377,6 +2377,10 @@ function restoredAgentModel(metadata: Record<string, unknown>): AgentModelMetada
   };
 }
 
+function agentSourceLabel(sourceType: AgentSource["source_type"]) {
+  return { private: "个人资料", web: "网络", school: "院校档案", career: "求职记录" }[sourceType];
+}
+
 function AgentsView({ isDemo, initialQuery = "", initialMode, onInitialQueryConsumed }: { isDemo: boolean; initialQuery?: string; initialMode?: "coach" | "tutor" | "combined"; onInitialQueryConsumed?: () => void }) {
   const [mode, setMode] = useState<"coach" | "tutor" | "combined">(() => initialMode ?? (initialQuery ? "coach" : "combined"));
   const [modelProfile, setModelProfile] = useState<AgentModelProfile>("flash");
@@ -2715,10 +2719,10 @@ function AgentsView({ isDemo, initialQuery = "", initialMode, onInitialQueryCons
                     <strong>本次回答来源</strong>
                     {message.sources.map((source) => source.url ? (
                       <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer">
-                        <span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small>
+                        <span>{agentSourceLabel(source.source_type)}</span><b>{source.title}</b><small>{source.accessed_at ? `核验于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small>
                       </a>
                     ) : (
-                      <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>
+                      <div key={`${source.source_type}-${source.locator}`}><span>{agentSourceLabel(source.source_type)}</span><b>{source.title}</b><small>{source.locator}</small></div>
                     ))}
                   </div>
                 )}

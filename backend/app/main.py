@@ -948,14 +948,15 @@ async def prepare_agent_execution(
 
 
 def agent_citations(context: AgentContext) -> list[AgentCitation]:
-    return [
+    private_sources = [
         AgentCitation(
             source_type="private",
             title=source["title"],
             locator=source["locator"],
         )
         for source in context["private_sources"]
-    ] + [
+    ]
+    web_sources = [
         AgentCitation(
             source_type="web",
             title=source["title"],
@@ -965,6 +966,35 @@ def agent_citations(context: AgentContext) -> list[AgentCitation]:
         )
         for source in context["web_sources"]
     ]
+    school_sources = [
+        AgentCitation(
+            source_type="school",
+            title=f"{school['university']} · {school['major_name']}",
+            locator=(
+                f"{school['exam_year']} 年 · {school['college']} · {school['major_code']}"
+            ),
+            url=school["source_url"],
+            accessed_at=school["source_checked_at"],
+        )
+        for school in context["school_options"]
+    ]
+    career_sources = [
+        AgentCitation(
+            source_type="career",
+            title=career["title"],
+            locator=" · ".join(
+                str(value)
+                for value in (
+                    career.get("company") or "个人记录",
+                    career["status"],
+                    career.get("occurred_on"),
+                )
+                if value
+            ),
+        )
+        for career in context["career_items"]
+    ]
+    return school_sources + career_sources + private_sources + web_sources
 
 
 async def persist_agent_exchange(

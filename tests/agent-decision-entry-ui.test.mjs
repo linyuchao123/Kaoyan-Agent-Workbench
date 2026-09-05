@@ -20,3 +20,10 @@ test("上下文入口不会被历史线程覆盖或自动发送", () => {
   assert.match(pageSource, /<AgentsView[\s\S]*?initialMode=\{agentInitialMode\}/);
   assert.match(pageSource, /async function submit\(event: FormEvent\)[\s\S]*?api\.runAgentStream/);
 });
+
+test("Agent 回答区区分院校、求职、个人资料和网络来源", () => {
+  assert.match(pageSource, /function agentSourceLabel/);
+  assert.match(pageSource, /school: "院校档案"/);
+  assert.match(pageSource, /career: "求职记录"/);
+  assert.match(pageSource, /agentSourceLabel\(source\.source_type\)/);
+});
