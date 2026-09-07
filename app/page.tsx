@@ -1619,7 +1619,7 @@ const schoolTierMeta: Record<SchoolTier, { label: string; title: string }> = {
   safety: { label: "保", title: "保底" },
 };
 
-function SchoolsView({ isDemo }: { isDemo: boolean }) {
+function SchoolsView({ isDemo, onOpenAdvisor }: { isDemo: boolean; onOpenAdvisor: (examYear: number) => void }) {
   const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
   const [loading, setLoading] = useState(!isDemo);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
@@ -1782,7 +1782,7 @@ function SchoolsView({ isDemo }: { isDemo: boolean }) {
 
   const schoolRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleSchools.length ? "ready" : "empty";
 
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div>
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={() => onOpenAdvisor(Number(yearFilter) || 2028)}>AI 对比院校</button><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
     <RequestStatePanel state={schoolRequestState} loadingText="正在加载你的云端院校情报…" emptyTitle="当前筛选下还没有院校" emptyDescription="添加第一所目标院校，并记录招生年份与官方来源。" errorText={loadError}>
@@ -1815,7 +1815,7 @@ const careerStatusMeta: Record<CareerStatus, string> = {
   archived: "已归档",
 };
 
-function CareerView({ isDemo }: { isDemo: boolean }) {
+function CareerView({ isDemo, onOpenAdvisor }: { isDemo: boolean; onOpenAdvisor: () => void }) {
   const [items, setItems] = useState<ApiCareerItem[]>(isDemo ? demoCareerItems : []);
   const [loading, setLoading] = useState(!isDemo);
   const [message, setMessage] = useState(isDemo ? "当前显示离线演示求职记录" : "正在加载云端求职记录…");
@@ -1965,7 +1965,7 @@ function CareerView({ isDemo }: { isDemo: boolean }) {
   const careerRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleItems.length ? "ready" : "empty";
 
   return <section className="content-view">
-    <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div>
+    <div className="view-title"><div><div className="eyebrow">实习与 AI 应用开发成长轨迹</div><h1>求职副线</h1><p>记录项目、简历、投递和面试；这些记录不计入考研有效学习时长。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={onOpenAdvisor}>AI 分析进展</button><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); resetForm(); } else { resetForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加求职记录"}</button></div></div>
     <div className="career-separation-note"><strong>独立统计</strong><span>求职记录用于追踪就业准备，不会改变学习热力图、连续学习天数或考研完成率。</span></div>
     <div className="career-metrics"><article className="panel"><span>当前记录</span><strong>{metricCounts.total}</strong><small>条</small></article><article className="panel"><span>已进入流程</span><strong>{metricCounts.submitted}</strong><small>项</small></article><article className="panel"><span>面试中</span><strong>{metricCounts.interviewing}</strong><small>项</small></article><article className="panel"><span>Offer</span><strong>{metricCounts.offer}</strong><small>份</small></article></div>
     <div className="career-toolbar"><label>记录类型<select value={typeFilter} onChange={(event) => changeTypeFilter(event.target.value as CareerItemType | "all")}><option value="all">全部类型</option>{Object.entries(careerTypeMeta).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}</select></label><label>当前状态<select value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as CareerStatus | "all")}><option value="all">全部状态</option>{Object.entries(careerStatusMeta).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><span>● {message}</span></div>
@@ -2038,7 +2038,7 @@ function HighlightedSearchText({ text, terms }: { text: string; terms: string[] 
     : <span key={`${part}-${index}`}>{part}</span>)}</>;
 }
 
-function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: string }) {
+function MaterialsView({ isDemo, accountKey, onOpenAdvisor }: { isDemo: boolean; accountKey: string; onOpenAdvisor: () => void }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [docs, setDocs] = useState<ApiDocument[]>(isDemo ? DEMO_DOCUMENTS : []);
   const [sourceUrl, setSourceUrl] = useState("");
@@ -2314,7 +2314,7 @@ function MaterialsView({ isDemo, accountKey }: { isDemo: boolean; accountKey: st
 
   const visibleDocuments = isDemo ? DEMO_DOCUMENTS : docs;
   return <section className="content-view">
-    <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div>
+    <div className="view-title"><div><div className="eyebrow">个人资料 RAG</div><h1>资料库</h1><p>上传资料、保存可信网页，在回答中回到原文页码与链接。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={onOpenAdvisor}>AI 解读资料</button><button className="primary-button" onClick={() => fileInput.current?.click()}>＋ 导入资料</button></div></div>
     <div className="material-layout">
       <section className="panel upload-zone">
         <input ref={fileInput} className="visually-hidden" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown" onChange={(event) => void upload(event)} />
@@ -2377,8 +2377,12 @@ function restoredAgentModel(metadata: Record<string, unknown>): AgentModelMetada
   };
 }
 
-function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isDemo: boolean; initialQuery?: string; onInitialQueryConsumed?: () => void }) {
-  const [mode, setMode] = useState<"coach" | "tutor" | "combined">(() => initialQuery ? "coach" : "combined");
+function agentSourceLabel(sourceType: AgentSource["source_type"]) {
+  return { private: "个人资料", web: "网络", school: "院校档案", career: "求职记录" }[sourceType];
+}
+
+function AgentsView({ isDemo, initialQuery = "", initialMode, onInitialQueryConsumed }: { isDemo: boolean; initialQuery?: string; initialMode?: "coach" | "tutor" | "combined"; onInitialQueryConsumed?: () => void }) {
+  const [mode, setMode] = useState<"coach" | "tutor" | "combined">(() => initialMode ?? (initialQuery ? "coach" : "combined"));
   const [modelProfile, setModelProfile] = useState<AgentModelProfile>("flash");
   const [query, setQuery] = useState(initialQuery);
   const [messages, setMessages] = useState<AgentChatMessage[]>([{ role: "agent", text: agentWelcomeMessage }]);
@@ -2394,6 +2398,7 @@ function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isD
   const [copyFeedback, setCopyFeedback] = useState<{ index: number; label: string } | null>(null);
   const agentRequest = useRef<AbortController | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const enteredWithInitialQuery = useRef(Boolean(initialQuery));
 
   function restoreThread(thread: AgentThreadHistory) {
     setThreadId(thread.id);
@@ -2445,7 +2450,7 @@ function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isD
     void Promise.all([api.latestAgentThread(), api.listPendingProposals(), api.listAgentThreads()]).then(([thread, items, threadItems]) => {
       if (cancelled) return;
       setThreads(threadItems);
-      const restoredMessages = thread?.messages.length
+      const restoredMessages = !enteredWithInitialQuery.current && thread?.messages.length
         ? thread.messages.map((message) => ({
             role: message.role,
             text: message.content,
@@ -2453,7 +2458,7 @@ function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isD
             model: restoredAgentModel(message.metadata),
           }))
         : null;
-      if (thread) {
+      if (thread && !enteredWithInitialQuery.current) {
         setThreadId(thread.id);
         setMode(thread.mode);
         setModelProfile(thread.model_profile);
@@ -2714,10 +2719,10 @@ function AgentsView({ isDemo, initialQuery = "", onInitialQueryConsumed }: { isD
                     <strong>本次回答来源</strong>
                     {message.sources.map((source) => source.url ? (
                       <a key={`${source.source_type}-${source.locator}`} href={source.url} target="_blank" rel="noreferrer">
-                        <span>网络</span><b>{source.title}</b><small>{source.accessed_at ? `访问于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small>
+                        <span>{agentSourceLabel(source.source_type)}</span><b>{source.title}</b><small>{source.accessed_at ? `核验于 ${new Date(source.accessed_at).toLocaleString("zh-CN")}` : source.locator}</small>
                       </a>
                     ) : (
-                      <div key={`${source.source_type}-${source.locator}`}><span>个人</span><b>{source.title}</b><small>{source.locator}</small></div>
+                      <div key={`${source.source_type}-${source.locator}`}><span>{agentSourceLabel(source.source_type)}</span><b>{source.title}</b><small>{source.locator}</small></div>
                     ))}
                   </div>
                 )}
@@ -3242,6 +3247,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
   const [studyRevision, setStudyRevision] = useState(0);
   const [planRevision, setPlanRevision] = useState(0);
   const [agentPlanQuery, setAgentPlanQuery] = useState("");
+  const [agentInitialMode, setAgentInitialMode] = useState<"coach" | "tutor" | "combined">("combined");
   const [sidebarStage, setSidebarStage] = useState<ApiPlan | null>(() => isDemo ? selectSidebarStage(demoPlans, shanghaiDateKey(new Date())) : null);
   const [sidebarStageState, setSidebarStageState] = useState<"loading" | "ready" | "empty" | "error">(() => isDemo ? "ready" : "loading");
   const metadataDisplayName = typeof user?.user_metadata?.display_name === "string" ? user.user_metadata.display_name.trim() : "";
@@ -3262,10 +3268,26 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setHealthRevision((revision) => revision + 1);
   }, []);
   const openAgentPlan = useCallback(() => {
+    setAgentInitialMode("coach");
     setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
-  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} />, career: <CareerView isDemo={isDemo} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} onInitialQueryConsumed={() => setAgentPlanQuery("")} /> }[view];
+  const openSchoolAdvisor = useCallback((examYear: number) => {
+    setAgentInitialMode("tutor");
+    setAgentPlanQuery(`请根据我已保存的 ${examYear} 年目标院校档案，比较冲刺、匹配和保底结构、考试科目与待核验信息。如需最新招生事实，请只依据可追溯来源。只做分析，不要创建或修改任何记录。`);
+    navigateToView("agents");
+  }, [navigateToView]);
+  const openCareerAdvisor = useCallback(() => {
+    setAgentInitialMode("tutor");
+    setAgentPlanQuery("请根据我已保存的实习、简历、投递和面试记录，分析当前求职进展、主要缺口与下一步优先级。只做分析，不要创建或修改任何记录。");
+    navigateToView("agents");
+  }, [navigateToView]);
+  const openMaterialAdvisor = useCallback(() => {
+    setAgentInitialMode("tutor");
+    setAgentPlanQuery("请只根据我的资料解释这个知识点，并标注原文标题与定位：请在这里补充具体知识点");
+    navigateToView("agents");
+  }, [navigateToView]);
+  const content = { today: <TodayView key={`${isDemo ? "demo" : "cloud"}-${studyRevision}`} isDemo={isDemo} displayName={displayName} accountKey={accountKey} onOpenAgentPlan={openAgentPlan} />, plan: <PlanView isDemo={isDemo} onPlansChanged={() => setPlanRevision((revision) => revision + 1)} />, subjects: <SubjectsView isDemo={isDemo} onOpenMaterials={() => navigateToView("materials")} onOpenToday={() => navigateToView("today")} />, mistakes: <MistakeLibrary isDemo={isDemo} demoCards={initialMistakes} />, schools: <SchoolsView isDemo={isDemo} onOpenAdvisor={openSchoolAdvisor} />, career: <CareerView isDemo={isDemo} onOpenAdvisor={openCareerAdvisor} />, materials: <MaterialsView isDemo={isDemo} accountKey={accountKey} onOpenAdvisor={openMaterialAdvisor} />, backup: <BackupView isDemo={isDemo} />, agents: <AgentsView isDemo={isDemo} initialQuery={agentPlanQuery} initialMode={agentInitialMode} onInitialQueryConsumed={() => { setAgentPlanQuery(""); setAgentInitialMode("combined"); }} /> }[view];
   const sidebarStageProgress = sidebarStage ? stageDateProgress(sidebarStage, shanghaiDateKey(new Date())) : 0;
 
   useEffect(() => {

@@ -523,6 +523,71 @@ class ApiFlowTests(TestCase):
         self.assertIsNone(body["proposal"])
         self.assertEqual(self.task_count(), 0)
 
+    def test_tutor_cites_owned_school_and_career_records(self):
+        self.client.post(
+            "/api/v1/schools",
+            json={
+                "tier": "match",
+                "university": "苏州大学",
+                "college": "计算机科学与技术学院",
+                "major_code": "085405",
+                "major_name": "软件工程",
+                "degree_type": "professional",
+                "exam_year": 2028,
+                "exam_subjects": ["政治", "英语二", "数学二", "408"],
+                "source_url": "https://example.edu/admission",
+            },
+        )
+        self.client.post(
+            "/api/v1/career-items",
+            json={
+                "item_type": "application",
+                "title": "AI 应用开发实习",
+                "company": "示例科技",
+                "status": "submitted",
+            },
+        )
+
+        run = self.client.post(
+            "/api/v1/agents/tutor/runs",
+            json={"message": "分析我的目标院校和实习投递"},
+        )
+
+        self.assertEqual(run.status_code, 200)
+        body = run.json()
+        self.assertIsNone(body["proposal"])
+        self.assertEqual(
+            [source["source_type"] for source in body["sources"]],
+            ["school", "career"],
+        )
+        self.assertEqual(body["sources"][0]["url"], "https://example.edu/admission")
+        self.assertEqual(body["sources"][1]["title"], "AI 应用开发实习")
+        history = self.client.get("/api/v1/agents/threads/latest").json()
+        self.assertEqual(
+            [source["source_type"] for source in history["messages"][1]["sources"]],
+            ["school", "career"],
+        )
+
+    def test_structured_agent_question_skips_embedding_until_material_is_requested(self):
+        with patch.object(
+            main.embedding_provider,
+            "embed_query",
+            new=AsyncMock(return_value=None),
+        ) as embed_query:
+            structured = self.client.post(
+                "/api/v1/agents/tutor/runs",
+                json={"message": "分析我的实习投递进展"},
+            )
+            self.assertEqual(structured.status_code, 200)
+            embed_query.assert_not_awaited()
+
+            with_material = self.client.post(
+                "/api/v1/agents/tutor/runs",
+                json={"message": "结合我的简历资料分析实习投递"},
+            )
+            self.assertEqual(with_material.status_code, 200)
+            embed_query.assert_awaited_once()
+
     def test_combined_knowledge_question_does_not_create_write_proposal(self):
         run = self.client.post(
             "/api/v1/agents/combined/runs",

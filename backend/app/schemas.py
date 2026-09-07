@@ -333,7 +333,7 @@ class AgentRunRequest(StrictRequestModel):
 
 
 class AgentCitation(BaseModel):
-    source_type: Literal["private", "web"]
+    source_type: Literal["private", "web", "school", "career"]
     title: str
     locator: str
     url: HttpUrl | None = None

@@ -282,7 +282,7 @@ export type ActionProposal = ActionProposalBase & (
 export type AgentProposalEdit = AgentProposalTask | { tasks: AgentProposalTask[] };
 
 export type AgentSource = {
-  source_type: "private" | "web";
+  source_type: "private" | "web" | "school" | "career";
   title: string;
   locator: string;
   url: string | null;

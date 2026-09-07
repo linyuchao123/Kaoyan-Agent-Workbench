@@ -17,7 +17,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
-from app.agents.context import AgentContext, build_agent_context
+from app.agents.context import (
+    AgentContext,
+    build_agent_context,
+    should_search_private_context,
+)
 from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
@@ -871,7 +875,9 @@ async def prepare_agent_execution(
     retrieval_mode = choose_retrieval_mode(payload.message)
     query_embedding = (
         await embedding_provider.embed_query(payload.message)
-        if agent in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}
+        if agent in {"tutor", "combined"}
+        and retrieval_mode in {"private", "hybrid"}
+        and should_search_private_context(payload.message)
         else None
     )
     context = await build_agent_context(
@@ -948,14 +954,15 @@ async def prepare_agent_execution(
 
 
 def agent_citations(context: AgentContext) -> list[AgentCitation]:
-    return [
+    private_sources = [
         AgentCitation(
             source_type="private",
             title=source["title"],
             locator=source["locator"],
         )
         for source in context["private_sources"]
-    ] + [
+    ]
+    web_sources = [
         AgentCitation(
             source_type="web",
             title=source["title"],
@@ -965,6 +972,35 @@ def agent_citations(context: AgentContext) -> list[AgentCitation]:
         )
         for source in context["web_sources"]
     ]
+    school_sources = [
+        AgentCitation(
+            source_type="school",
+            title=f"{school['university']} · {school['major_name']}",
+            locator=(
+                f"{school['exam_year']} 年 · {school['college']} · {school['major_code']}"
+            ),
+            url=school["source_url"],
+            accessed_at=school["source_checked_at"],
+        )
+        for school in context["school_options"]
+    ]
+    career_sources = [
+        AgentCitation(
+            source_type="career",
+            title=career["title"],
+            locator=" · ".join(
+                str(value)
+                for value in (
+                    career.get("company") or "个人记录",
+                    career["status"],
+                    career.get("occurred_on"),
+                )
+                if value
+            ),
+        )
+        for career in context["career_items"]
+    ]
+    return school_sources + career_sources + private_sources + web_sources
 
 
 async def persist_agent_exchange(
@@ -1166,7 +1202,15 @@ async def stream_agent(
             async def stream_branch(kind: Literal["coach", "tutor"]):
                 nonlocal generated
                 fallback = coach_fallback(state) if kind == "coach" else tutor_fallback(state)
-                has_evidence = bool(context["private_sources"] or context["web_sources"])
+                has_evidence = any(
+                    context[key]
+                    for key in (
+                        "private_sources",
+                        "web_sources",
+                        "school_options",
+                        "career_items",
+                    )
+                )
                 can_generate = kind == "coach" or has_evidence
                 received = False
                 if can_generate:

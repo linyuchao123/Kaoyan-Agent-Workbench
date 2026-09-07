@@ -88,7 +88,24 @@ def tutor_fallback(state: WorkbenchState) -> str:
     context = state.get("context", {})
     sources = context.get("private_sources", [])
     web_sources = context.get("web_sources", [])
+    schools = context.get("school_options", [])
+    career_items = context.get("career_items", [])
     sections = []
+    if schools:
+        school_lines = "\n".join(
+            f"- {school['university']} · {school['college']} · "
+            f"{school['major_code']} {school['major_name']}（{school['exam_year']}，"
+            f"{school['source_url']}）"
+            for school in schools
+        )
+        sections.append(f"已保存院校档案（{len(schools)}）：\n{school_lines}")
+    if career_items:
+        career_lines = "\n".join(
+            f"- {item['title']}（{item.get('company') or '未填写单位'}，"
+            f"状态 {item['status']}）"
+            for item in career_items
+        )
+        sections.append(f"已保存求职记录（{len(career_items)}）：\n{career_lines}")
     if sources:
         citations = "\n".join(
             f"- 《{source['title']}》{source['locator']}：{source['content']}" for source in sources
@@ -101,12 +118,19 @@ def tutor_fallback(state: WorkbenchState) -> str:
             for source in web_sources
         )
         sections.append(f"网络来源（{len(web_sources)}）：\n{web_citations}")
-    if sections:
-        return "资料导师找到以下可回溯证据：\n" + "\n".join(sections)
-    if mode in {"web", "hybrid"}:
+    if schools:
+        sections.append("院校档案为用户已保存记录，其中的链接和记录时间不代表本次已核验最新招生信息。")
+    if mode in {"web", "hybrid"} and not web_sources:
         status = context.get("web_search_status", "unconfigured")
-        reason = "尚未配置 Tavily API Key" if status == "unconfigured" else "联网检索失败"
-        return f"资料导师没有取得可核验的网络来源（{reason}），因此不会自行补全答案。"
+        reason = {
+            "unconfigured": "尚未配置联网检索服务",
+            "failed": "联网检索失败",
+            "success": "联网检索未返回来源",
+            "not_requested": "本次未执行联网检索",
+        }.get(status, "联网检索状态未知")
+        sections.append(f"本次没有取得可核验的网络来源（{reason}），无法确认最新信息。")
+    if sections:
+        return "资料导师本次取得的证据与核验状态：\n" + "\n".join(sections)
     return "资料导师未在你的私有资料中找到足够证据，因此不会自行补全答案。"
 
 
@@ -158,7 +182,10 @@ def build_graph(model: AgentModel):
     async def tutor_subgraph(state: WorkbenchState) -> WorkbenchState:
         fallback = tutor_fallback(state)
         context = state.get("context", {})
-        if not context.get("private_sources") and not context.get("web_sources"):
+        if not any(
+            context.get(key)
+            for key in ("private_sources", "web_sources", "school_options", "career_items")
+        ):
             return fallback_result(fallback)
         question = latest_message_content(state)
         answer = await model.generate(
