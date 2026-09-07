@@ -200,6 +200,37 @@ class AgentContextTests(IsolatedAsyncioTestCase):
             [2028],
         )
 
+    async def test_career_context_prioritizes_actionable_records(self):
+        for index in range(8):
+            await self.repository.create_career_item(
+                self.user,
+                CareerItemCreate(
+                    item_type="application",
+                    title=f"已归档投递 {index}",
+                    status="archived",
+                ),
+            )
+        await self.repository.create_career_item(
+            self.user,
+            CareerItemCreate(
+                item_type="interview",
+                title="明天技术面试",
+                status="interviewing",
+            ),
+        )
+
+        context = await build_agent_context(
+            self.repository,
+            self.user,
+            message="分析我的求职和面试进展",
+            route="tutor",
+            retrieval_mode="private",
+        )
+
+        self.assertEqual(len(context["career_items"]), 8)
+        self.assertEqual(context["career_items"][0]["title"], "明天技术面试")
+        self.assertNotIn("已归档投递 7", [item["title"] for item in context["career_items"]])
+
     async def test_context_skips_unrequested_decision_records(self):
         context = await build_agent_context(
             self.repository,

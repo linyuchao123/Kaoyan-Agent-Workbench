@@ -36,6 +36,17 @@ PRIVATE_CONTEXT_MARKERS = (
     "我上传",
 )
 
+CAREER_STATUS_PRIORITY = {
+    "interviewing": 0,
+    "submitted": 1,
+    "in_progress": 2,
+    "planned": 3,
+    "offer": 4,
+    "completed": 5,
+    "rejected": 6,
+    "archived": 7,
+}
+
 
 def requested_decision_context(message: str) -> tuple[bool, bool]:
     normalized = message.casefold()
@@ -60,6 +71,15 @@ def requested_exam_year(message: str) -> int | None:
         if 2026 <= year <= 2100:
             return year
     return None
+
+
+def prioritize_career_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep the repository's date order inside each status priority group."""
+
+    return sorted(
+        items,
+        key=lambda item: CAREER_STATUS_PRIORITY.get(str(item.get("status")), 8),
+    )
 
 
 def _effective_minutes(session: dict[str, Any]) -> int:
@@ -199,7 +219,7 @@ async def build_agent_context(
             "occurred_on": item.get("occurred_on"),
             "notes": str(item.get("notes") or "")[:800],
         }
-        for item in career_items[:8]
+        for item in prioritize_career_items(career_items)[:8]
     ]
     private_sources = [
         {
