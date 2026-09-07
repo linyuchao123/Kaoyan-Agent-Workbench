@@ -77,6 +77,15 @@ test("退出时可选清理当前账户的本机资料缓存", () => {
   assert.match(pageSource, /不影响云端资料或其他账户/);
 });
 
+test("退出先等待云端确认并防止重复提交", () => {
+  assert.match(pageSource, /async function signOutAccount\(\)[\s\S]*?if \(busy\) return;[\s\S]*?setBusy\(true\)/);
+  assert.match(pageSource, /const result = await client\.auth\.signOut\(\)/);
+  assert.match(pageSource, /if \(result\.error\) throw result\.error/);
+  assert.match(pageSource, /await onSignOut\(clearLocalRagOnSignOut\)/);
+  assert.match(pageSource, /function accountSignOutErrorMessage\(error: unknown\)/);
+  assert.match(pageSource, /当前会话与本机缓存均未主动清理/);
+});
+
 test("Auth 昵称变更由数据库触发器同步到个人资料", () => {
   assert.match(profileMigrationSource, /create or replace function public\.sync_profile_display_name\(\)/);
   assert.match(profileMigrationSource, /security definer/);

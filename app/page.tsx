@@ -124,6 +124,17 @@ function accountPasswordUpdateErrorMessage(error: unknown) {
   return "账户设置保存失败，请稍后重试。";
 }
 
+function accountSignOutErrorMessage(error: unknown) {
+  const details = typeof error === "object" && error !== null
+    ? `${"code" in error ? String(error.code ?? "") : ""} ${"message" in error ? String(error.message ?? "") : ""}`.toLowerCase()
+    : String(error ?? "").toLowerCase();
+
+  if (details.includes("failed to fetch") || details.includes("network")) {
+    return "暂时无法联系 Supabase 完成退出，当前会话与本机缓存均未主动清理，请检查网络后重试。";
+  }
+  return "退出请求未能完成，当前会话与本机缓存均未主动清理，请稍后重试。";
+}
+
 function agentRequestErrorMessage(error: unknown, mode: "coach" | "tutor" | "combined") {
   const safetyNotice = "本次请求没有写入学习数据。";
   if (error instanceof ApiError) {
@@ -3215,6 +3226,18 @@ function AccountSecurity({ accountId, email, initialDisplayName, onClose, onSign
     }
   }
 
+  async function signOutAccount() {
+    if (busy) return;
+    setBusy(true);
+    setStatus("正在安全退出…");
+    try {
+      await onSignOut(clearLocalRagOnSignOut);
+    } catch (error) {
+      setStatus(accountSignOutErrorMessage(error));
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="account-security-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) resetAndClose(); }}>
       <section className="account-security-dialog panel" role="dialog" aria-modal="true" aria-labelledby="account-security-title">
@@ -3230,7 +3253,7 @@ function AccountSecurity({ accountId, email, initialDisplayName, onClose, onSign
           <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={passwordConfirmation ? 6 : undefined} autoComplete="new-password" /></label>
           <div className="account-local-cleanup"><input id="clear-local-rag-on-sign-out" type="checkbox" checked={clearLocalRagOnSignOut} onChange={(event) => setClearLocalRagOnSignOut(event.target.checked)} /><label htmlFor="clear-local-rag-on-sign-out"><strong>退出时清除此账户的本机资料缓存</strong><small>仅删除账户 {accountId.slice(0, 8)}… 缓存到当前浏览器的 RAG 原文片段，不影响云端资料或其他账户。</small></label></div>
           {status && <div className="account-security-status" role="status">{status}</div>}
-          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut(clearLocalRagOnSignOut)} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存账户设置"}</button></div>
+          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void signOutAccount()} disabled={busy}>{busy && status.includes("退出") ? "正在退出…" : "退出当前账户"}</button><button className="primary-button" type="submit" disabled={busy}>{busy && !status.includes("退出") ? "正在保存…" : "保存账户设置"}</button></div>
         </form>
       </section>
     </div>
@@ -3410,8 +3433,12 @@ export default function Home() {
   async function signOut(clearLocalRag: boolean) {
     const client = getSupabaseClient();
     const accountId = authState.user?.id;
+    if (!client || !accountId) throw new Error("active auth session unavailable");
+    const result = await client.auth.signOut();
+    if (result.error) throw result.error;
+    setApiAccessToken(null);
     let cleanupNotice = "";
-    if (clearLocalRag && accountId) {
+    if (clearLocalRag) {
       try {
         const removed = await removeAccountLocalRagBundles(accountId);
         cleanupNotice = removed > 0
@@ -3421,10 +3448,9 @@ export default function Home() {
         cleanupNotice = "已退出，但此浏览器未能清除本机资料缓存；请重新登录后在资料库逐份移除。";
       }
     }
-    if (client) await client.auth.signOut();
-    setApiAccessToken(null);
     setAuthNotice(cleanupNotice);
     setPasswordRecovery(false);
+    setAuthState({ status: "signed_out", user: null });
   }
 
   if (authState.status === "loading") return <main className="auth-loading"><span className="brand-mark">研</span><p>正在恢复登录状态…</p></main>;
