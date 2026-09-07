@@ -2,7 +2,8 @@ import type { ApiDocument, ApiLocalRagBundle, ApiLocalRagChunk } from "./api";
 
 const DATABASE_NAME = "yantu-local-rag";
 const STORE_NAME = "document-indexes";
-const DATABASE_VERSION = 1;
+const ACCOUNT_INDEX_NAME = "account-id";
+const DATABASE_VERSION = 2;
 
 type StoredLocalRagBundle = ApiLocalRagBundle & {
   key: string;
@@ -18,8 +19,11 @@ function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
     request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME, { keyPath: "key" });
+      const store = request.result.objectStoreNames.contains(STORE_NAME)
+        ? request.transaction!.objectStore(STORE_NAME)
+        : request.result.createObjectStore(STORE_NAME, { keyPath: "key" });
+      if (!store.indexNames.contains(ACCOUNT_INDEX_NAME)) {
+        store.createIndex(ACCOUNT_INDEX_NAME, "account_id", { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -72,6 +76,31 @@ export async function readValidLocalRagBundle(accountId: string, document: ApiDo
 
 export async function removeLocalRagBundle(accountId: string, documentId: string) {
   await withStore("readwrite", (store) => store.delete(localRagBundleKey(accountId, documentId)));
+}
+
+export async function removeAccountLocalRagBundles(accountId: string) {
+  if (!accountId) return 0;
+  const database = await openDatabase();
+  try {
+    return await new Promise<number>((resolve, reject) => {
+      let removed = 0;
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.index(ACCOUNT_INDEX_NAME).openCursor(IDBKeyRange.only(accountId));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        cursor.delete();
+        removed += 1;
+        cursor.continue();
+      };
+      request.onerror = () => reject(request.error ?? new Error("local RAG cleanup failed"));
+      transaction.oncomplete = () => resolve(removed);
+      transaction.onabort = () => reject(transaction.error ?? new Error("local RAG cleanup aborted"));
+    });
+  } finally {
+    database.close();
+  }
 }
 
 export function searchLocalRagChunks(

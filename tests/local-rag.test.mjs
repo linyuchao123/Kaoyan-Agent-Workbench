@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { localRagBundleKey, searchLocalRagChunks } from "../app/lib/local-rag.ts";
+
+const localRagSource = await readFile(new URL("../app/lib/local-rag.ts", import.meta.url), "utf8");
 
 const chunks = [
   { chunk_index: 2, heading: "线性表", page_number: 8, locator: "第 8 页", content: "链表适合频繁插入和删除。" },
@@ -22,4 +25,11 @@ test("本地 RAG 对空查询和无匹配查询返回空结果", () => {
 test("本地 RAG 缓存键按账户隔离", () => {
   assert.notEqual(localRagBundleKey("user-one", "doc-one"), localRagBundleKey("user-two", "doc-one"));
   assert.equal(localRagBundleKey("user-one", "doc-one"), "user-one:doc-one");
+});
+
+test("账户级本地 RAG 清理只删除匹配账户", () => {
+  assert.match(localRagSource, /createIndex\(ACCOUNT_INDEX_NAME, "account_id", \{ unique: false \}\)/);
+  assert.match(localRagSource, /openCursor\(IDBKeyRange\.only\(accountId\)\)/);
+  assert.match(localRagSource, /export async function removeAccountLocalRagBundles\(accountId: string\)/);
+  assert.doesNotMatch(localRagSource, /deleteDatabase\(/);
 });

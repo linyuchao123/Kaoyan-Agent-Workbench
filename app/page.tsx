@@ -7,7 +7,7 @@ import { createShanghaiStudyInterval } from "./lib/study-time";
 import { getSupabaseClient, isSupabaseConfigured } from "./lib/supabase";
 import { selectSidebarStage, stageDateProgress } from "./lib/stage-plan";
 import { readStoredWorkbenchView, storeWorkbenchView, type WorkbenchView } from "./lib/workbench-view";
-import { readValidLocalRagBundle, removeLocalRagBundle, saveLocalRagBundle, searchLocalRagChunks } from "./lib/local-rag";
+import { readValidLocalRagBundle, removeAccountLocalRagBundles, removeLocalRagBundle, saveLocalRagBundle, searchLocalRagChunks } from "./lib/local-rag";
 import { ExamCountdown } from "./components/exam-countdown";
 import { WorkbenchLayout, type WorkbenchApiStatus } from "./components/workbench-layout";
 import { RequestStatePanel, type RequestState } from "./components/request-state-panel";
@@ -3154,11 +3154,12 @@ function QuickCapture({ open, isDemo, onClose, onSaved }: { open: boolean; isDem
   );
 }
 
-function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUserUpdated }: { email: string; initialDisplayName: string; onClose: () => void; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
+function AccountSecurity({ accountId, email, initialDisplayName, onClose, onSignOut, onUserUpdated }: { accountId: string; email: string; initialDisplayName: string; onClose: () => void; onSignOut: (clearLocalRag: boolean) => Promise<void>; onUserUpdated: (user: User) => void }) {
   const [displayName, setDisplayName] = useState(initialDisplayName);
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [clearLocalRagOnSignOut, setClearLocalRagOnSignOut] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
 
@@ -3166,6 +3167,7 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
     setPassword("");
     setPasswordConfirmation("");
     setPasswordVisible(false);
+    setClearLocalRagOnSignOut(false);
     setStatus("");
     onClose();
   }, [onClose]);
@@ -3226,15 +3228,16 @@ function AccountSecurity({ email, initialDisplayName, onClose, onSignOut, onUser
           <div className="account-security-section"><strong>修改密码（可选）</strong><small>不需要修改密码时请保持以下两项为空。</small></div>
           <label>新密码<div className="auth-password-field"><input type={passwordVisible ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={password ? 6 : undefined} autoComplete="new-password" /><button type="button" aria-label={passwordVisible ? "隐藏新密码" : "显示新密码"} aria-pressed={passwordVisible} onClick={() => setPasswordVisible((value) => !value)}>{passwordVisible ? "隐藏" : "显示"}</button></div></label>
           <label>确认新密码<input type={passwordVisible ? "text" : "password"} value={passwordConfirmation} onChange={(event) => setPasswordConfirmation(event.target.value)} minLength={passwordConfirmation ? 6 : undefined} autoComplete="new-password" /></label>
+          <div className="account-local-cleanup"><input id="clear-local-rag-on-sign-out" type="checkbox" checked={clearLocalRagOnSignOut} onChange={(event) => setClearLocalRagOnSignOut(event.target.checked)} /><label htmlFor="clear-local-rag-on-sign-out"><strong>退出时清除此账户的本机资料缓存</strong><small>仅删除账户 {accountId.slice(0, 8)}… 缓存到当前浏览器的 RAG 原文片段，不影响云端资料或其他账户。</small></label></div>
           {status && <div className="account-security-status" role="status">{status}</div>}
-          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut()} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存账户设置"}</button></div>
+          <div className="account-security-actions"><button className="danger-button" type="button" onClick={() => void onSignOut(clearLocalRagOnSignOut)} disabled={busy}>退出当前账户</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存账户设置"}</button></div>
         </form>
       </section>
     </div>
   );
 }
 
-function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: () => Promise<void>; onUserUpdated: (user: User) => void }) {
+function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | null; isDemo: boolean; onSignOut: (clearLocalRag: boolean) => Promise<void>; onUserUpdated: (user: User) => void }) {
   const accountKey = user?.id ?? "demo";
   const [view, setView] = useState<View>("today");
   const [apiStatus, setApiStatus] = useState<WorkbenchApiStatus>("checking");
@@ -3353,7 +3356,7 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
       <GlobalSearch open={searchOpen} isDemo={isDemo} onClose={() => setSearchOpen(false)} onNavigate={navigateToView} />
       <AttentionCenter open={attentionOpen} isDemo={isDemo} onClose={() => setAttentionOpen(false)} onNavigate={navigateToView} onCountChange={setAttentionCount} />
       <QuickCapture open={quickCaptureOpen} isDemo={isDemo} onClose={() => setQuickCaptureOpen(false)} onSaved={() => { setStudyRevision((value) => value + 1); navigateToView("today"); }} />
-      {!isDemo && accountSecurityOpen && <AccountSecurity email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
+      {!isDemo && accountSecurityOpen && <AccountSecurity accountId={accountKey} email={user?.email ?? ""} initialDisplayName={displayName} onClose={() => setAccountSecurityOpen(false)} onSignOut={onSignOut} onUserUpdated={onUserUpdated} />}
     </>}
   >{content}</WorkbenchLayout>;
 }
@@ -3404,11 +3407,23 @@ export default function Home() {
     };
   }, []);
 
-  async function signOut() {
+  async function signOut(clearLocalRag: boolean) {
     const client = getSupabaseClient();
+    const accountId = authState.user?.id;
+    let cleanupNotice = "";
+    if (clearLocalRag && accountId) {
+      try {
+        const removed = await removeAccountLocalRagBundles(accountId);
+        cleanupNotice = removed > 0
+          ? `已退出，并清除当前账户的 ${removed} 份本机资料缓存。`
+          : "已退出，当前账户在此设备没有本机资料缓存。";
+      } catch {
+        cleanupNotice = "已退出，但此浏览器未能清除本机资料缓存；请重新登录后在资料库逐份移除。";
+      }
+    }
     if (client) await client.auth.signOut();
     setApiAccessToken(null);
-    setAuthNotice("");
+    setAuthNotice(cleanupNotice);
     setPasswordRecovery(false);
   }
 

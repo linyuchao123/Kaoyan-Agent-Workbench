@@ -58,7 +58,7 @@ test("注册时保存学习昵称并限制昵称长度", () => {
 });
 
 test("登录后可以修改昵称、可选密码并退出", () => {
-  assert.match(pageSource, /function AccountSecurity\(\{ email, initialDisplayName, onClose, onSignOut, onUserUpdated \}/);
+  assert.match(pageSource, /function AccountSecurity\(\{ accountId, email, initialDisplayName, onClose, onSignOut, onUserUpdated \}/);
   assert.match(pageSource, /function accountPasswordUpdateErrorMessage\(error: unknown\)/);
   assert.match(pageSource, /const \[accountSecurityOpen, setAccountSecurityOpen\] = useState\(false\)/);
   assert.match(pageSource, /aria-label="打开账户安全"/);
@@ -68,6 +68,13 @@ test("登录后可以修改昵称、可选密码并退出", () => {
   assert.match(pageSource, /metadataDisplayName \|\| user\?\.email\?\.split\("@"\)\[0\]/);
   assert.match(pageSource, /学习昵称已更新。侧边栏已同步显示新昵称/);
   assert.match(pageSource, /退出当前账户/);
+});
+
+test("退出时可选清理当前账户的本机资料缓存", () => {
+  assert.match(pageSource, /退出时清除此账户的本机资料缓存/);
+  assert.match(pageSource, /removeAccountLocalRagBundles\(accountId\)/);
+  assert.match(pageSource, /onSignOut\(clearLocalRagOnSignOut\)/);
+  assert.match(pageSource, /不影响云端资料或其他账户/);
 });
 
 test("Auth 昵称变更由数据库触发器同步到个人资料", () => {
