@@ -25,7 +25,7 @@ from app.agents.context import (
 from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.domain.agent_daily_plan import build_daily_plan_tasks, is_daily_plan_request
 from app.domain.dashboard import (
     active_stage_title,
@@ -106,6 +106,33 @@ search_provider = get_search_provider(settings)
 WRITE_INTENT_MARKERS = ("安排", "创建", "添加", "生成任务", "调整计划", "写入", "建立任务")
 
 
+def deployment_readiness(current_settings: Settings) -> dict[str, object]:
+    production = current_settings.app_env.strip().casefold() == "production"
+    origins = current_settings.origins
+    checks = {
+        "runtime_mode": not (production and current_settings.demo_mode),
+        "supabase": current_settings.demo_mode
+        or bool(current_settings.supabase_url and current_settings.supabase_anon_key),
+        "cors": bool(origins)
+        and not (
+            production
+            and any(
+                origin == "*"
+                or "localhost" in origin.casefold()
+                or "127.0.0.1" in origin
+                for origin in origins
+            )
+        ),
+    }
+    ready = all(checks.values())
+    return {
+        "status": "ready" if ready else "not_ready",
+        "environment": current_settings.app_env,
+        "mode": "demo" if current_settings.demo_mode else "supabase",
+        "checks": checks,
+    }
+
+
 @app.exception_handler(RepositoryError)
 async def repository_error_handler(_: Request, error: RepositoryError) -> JSONResponse:
     logger.error("Repository request failed: %s", error)
@@ -168,6 +195,20 @@ async def health() -> dict[str, object]:
             "renderer_configured": bool(ocr_provider.pdftoppm_path),
         },
     }
+
+
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    readiness = deployment_readiness(settings)
+    return JSONResponse(
+        status_code=200 if readiness["status"] == "ready" else 503,
+        content=readiness,
+    )
 
 
 def prepare_document_chunks(content: bytes, content_type: str):

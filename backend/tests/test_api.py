@@ -105,6 +105,52 @@ class ApiFlowTests(TestCase):
         self.assertNotIn("api_key", serialized)
         self.assertNotIn("token", serialized)
 
+    def test_health_probes_distinguish_liveness_and_deployment_readiness(self):
+        live = self.client.get("/health/live")
+        self.assertEqual(live.status_code, 200)
+        self.assertEqual(live.json(), {"status": "ok"})
+
+        readiness = main.deployment_readiness(
+            Settings(_env_file=None, app_env="development", demo_mode=True)
+        )
+        self.assertEqual(readiness["status"], "ready")
+        self.assertTrue(all(readiness["checks"].values()))
+
+    def test_production_readiness_rejects_demo_missing_supabase_and_local_cors(self):
+        production_settings = Settings(
+            _env_file=None,
+            app_env="production",
+            demo_mode=True,
+            app_origins="http://localhost:3000",
+        )
+        readiness = main.deployment_readiness(production_settings)
+
+        self.assertEqual(readiness["status"], "not_ready")
+        self.assertEqual(
+            readiness["checks"],
+            {"runtime_mode": False, "supabase": True, "cors": False},
+        )
+        with patch.object(main, "settings", production_settings):
+            response = self.client.get("/health/ready")
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json(), readiness)
+
+    def test_production_readiness_accepts_supabase_and_public_origin(self):
+        readiness = main.deployment_readiness(
+            Settings(
+                _env_file=None,
+                app_env="production",
+                demo_mode=False,
+                supabase_url="https://project.supabase.co",
+                supabase_anon_key="public-anon-key",
+                app_origins="https://study.example.com",
+            )
+        )
+
+        self.assertEqual(readiness["status"], "ready")
+        self.assertTrue(all(readiness["checks"].values()))
+        self.assertNotIn("public-anon-key", str(readiness))
+
     def test_agent_sse_stream_reports_status_delta_and_persisted_done_event(self):
         response = self.client.post(
             "/api/v1/agents/tutor/runs/stream",

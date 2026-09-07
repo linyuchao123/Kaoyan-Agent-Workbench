@@ -67,6 +67,8 @@ uvicorn app.main:app --reload
 
 API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户隔离的进程内仓库，重启 API 后会清空；`DEMO_MODE=false` 使用 Supabase PostgreSQL，并由用户 JWT 和 RLS 双重限制数据范围。未配置外部密钥时不会产生模型或联网搜索调用。
 
+部署平台可用 `GET /health/live` 判断 API 进程是否存活，用 `GET /health/ready` 判断配置是否可接收流量。生产环境应设置 `APP_ENV=production`、`DEMO_MODE=false`、完整的 Supabase 公开连接配置，并把 `APP_ORIGINS` 改为真实 HTTPS 前端域名；否则就绪探针返回 `503`。两个探针都不返回密钥或访问令牌。
+
 前端会自动连接 `http://localhost:8000`。未配置 Supabase 时页面保留演示数据；配置后必须先使用邮箱和密码登录，请求会自动携带可刷新访问令牌。
 
 ### v0.8+ AI 与 OCR 配置
