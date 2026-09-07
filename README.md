@@ -69,6 +69,15 @@ API 文档位于 `http://localhost:8000/docs`。`DEMO_MODE=true` 使用按用户
 
 部署平台可用 `GET /health/live` 判断 API 进程是否存活，用 `GET /health/ready` 判断配置是否可接收流量。生产环境应设置 `APP_ENV=production`、`DEMO_MODE=false`、完整的 Supabase 公开连接配置，并把 `APP_ORIGINS` 改为真实 HTTPS 前端域名；否则就绪探针返回 `503`。两个探针都不返回密钥或访问令牌。
 
+后端可从仓库根目录构建可复现镜像：
+
+```bash
+docker build -f backend/Dockerfile -t yantu-api .
+docker run --env-file backend/.env -p 8000:8000 yantu-api
+```
+
+镜像以非 root 用户运行，并包含扫描 PDF 所需的 Poppler。真实 `.env` 只在启动容器时注入，`.dockerignore` 会排除密钥、虚拟环境、上传文件、私有资料和本地启动记录，不要把环境变量写入 Dockerfile。
+
 前端会自动连接 `http://localhost:8000`。未配置 Supabase 时页面保留演示数据；配置后必须先使用邮箱和密码登录，请求会自动携带可刷新访问令牌。
 
 ### v0.8+ AI 与 OCR 配置
