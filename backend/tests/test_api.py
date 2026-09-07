@@ -568,6 +568,26 @@ class ApiFlowTests(TestCase):
             ["school", "career"],
         )
 
+    def test_structured_agent_question_skips_embedding_until_material_is_requested(self):
+        with patch.object(
+            main.embedding_provider,
+            "embed_query",
+            new=AsyncMock(return_value=None),
+        ) as embed_query:
+            structured = self.client.post(
+                "/api/v1/agents/tutor/runs",
+                json={"message": "分析我的实习投递进展"},
+            )
+            self.assertEqual(structured.status_code, 200)
+            embed_query.assert_not_awaited()
+
+            with_material = self.client.post(
+                "/api/v1/agents/tutor/runs",
+                json={"message": "结合我的简历资料分析实习投递"},
+            )
+            self.assertEqual(with_material.status_code, 200)
+            embed_query.assert_awaited_once()
+
     def test_combined_knowledge_question_does_not_create_write_proposal(self):
         run = self.client.post(
             "/api/v1/agents/combined/runs",

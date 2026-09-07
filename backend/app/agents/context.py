@@ -21,8 +21,36 @@ class AgentContext(TypedDict):
     recent_effective_minutes: int
 
 
-SCHOOL_CONTEXT_MARKERS = ("院校", "学校", "专业", "招生", "择校", "目标校", "复试")
+SCHOOL_CONTEXT_MARKERS = ("院校", "学校", "专业代码", "招生", "择校", "目标校", "复试")
 CAREER_CONTEXT_MARKERS = ("实习", "求职", "简历", "投递", "面试", "项目经历")
+PRIVATE_CONTEXT_MARKERS = (
+    "资料",
+    "原文",
+    "文档",
+    "pdf",
+    "markdown",
+    "讲义",
+    "笔记",
+    "教材",
+    "我上传",
+)
+
+
+def requested_decision_context(message: str) -> tuple[bool, bool]:
+    normalized = message.casefold()
+    return (
+        any(marker in normalized for marker in SCHOOL_CONTEXT_MARKERS),
+        any(marker in normalized for marker in CAREER_CONTEXT_MARKERS),
+    )
+
+
+def should_search_private_context(message: str) -> bool:
+    normalized = message.casefold()
+    wants_school, wants_career = requested_decision_context(normalized)
+    explicitly_requests_material = any(
+        marker in normalized for marker in PRIVATE_CONTEXT_MARKERS
+    )
+    return explicitly_requests_material or not (wants_school or wants_career)
 
 
 def _effective_minutes(session: dict[str, Any]) -> int:
@@ -68,12 +96,16 @@ async def build_agent_context(
         tasks_task = asyncio.create_task(repository.list_tasks(user))
         sessions_task = asyncio.create_task(repository.list_sessions(user))
         mistakes_task = asyncio.create_task(repository.list_mistakes(user, due_only=True))
-    normalized_message = message.casefold()
-    if any(marker in normalized_message for marker in SCHOOL_CONTEXT_MARKERS):
+    wants_school, wants_career = requested_decision_context(message)
+    if wants_school:
         schools_task = asyncio.create_task(repository.list_school_options(user))
-    if any(marker in normalized_message for marker in CAREER_CONTEXT_MARKERS):
+    if wants_career:
         career_task = asyncio.create_task(repository.list_career_items(user))
-    if route in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}:
+    if (
+        route in {"tutor", "combined"}
+        and retrieval_mode in {"private", "hybrid"}
+        and should_search_private_context(message)
+    ):
         sources_task = asyncio.create_task(
             repository.search_private_knowledge(
                 user,

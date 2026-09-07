@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from unittest import IsolatedAsyncioTestCase
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 from app.agents.context import build_agent_context
@@ -181,6 +182,30 @@ class AgentContextTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(context["school_options"], [])
         self.assertEqual(context["career_items"], [])
+
+    async def test_structured_decision_context_skips_unrequested_private_search(self):
+        with patch.object(
+            self.repository,
+            "search_private_knowledge",
+            new=AsyncMock(return_value=[]),
+        ) as private_search:
+            await build_agent_context(
+                self.repository,
+                self.user,
+                message="分析我的实习投递进展",
+                route="tutor",
+                retrieval_mode="private",
+            )
+            private_search.assert_not_awaited()
+
+            await build_agent_context(
+                self.repository,
+                self.user,
+                message="结合我的简历资料分析实习投递",
+                route="tutor",
+                retrieval_mode="private",
+            )
+            private_search.assert_awaited_once()
 
     async def test_web_context_keeps_traceable_sources(self):
         context = await build_agent_context(

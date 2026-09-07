@@ -17,7 +17,11 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from langchain_core.messages import HumanMessage
 from pypdf import PdfReader
 
-from app.agents.context import AgentContext, build_agent_context
+from app.agents.context import (
+    AgentContext,
+    build_agent_context,
+    should_search_private_context,
+)
 from app.agents.graph import build_graph, coach_fallback, tutor_fallback
 from app.agents.model import AgentModelConfigurationError, OpenAICompatibleAgentModel
 from app.auth import AuthUser, get_current_user
@@ -871,7 +875,9 @@ async def prepare_agent_execution(
     retrieval_mode = choose_retrieval_mode(payload.message)
     query_embedding = (
         await embedding_provider.embed_query(payload.message)
-        if agent in {"tutor", "combined"} and retrieval_mode in {"private", "hybrid"}
+        if agent in {"tutor", "combined"}
+        and retrieval_mode in {"private", "hybrid"}
+        and should_search_private_context(payload.message)
         else None
     )
     context = await build_agent_context(
