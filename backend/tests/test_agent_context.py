@@ -171,6 +171,35 @@ class AgentContextTests(IsolatedAsyncioTestCase):
         self.assertEqual(other_context["school_options"], [])
         self.assertEqual(other_context["career_items"], [])
 
+    async def test_school_context_uses_requested_exam_year(self):
+        for year in (2027, 2028):
+            await self.repository.create_school_option(
+                self.user,
+                SchoolOptionCreate(
+                    tier="match",
+                    university=f"{year} 示例大学",
+                    college="计算机学院",
+                    major_code="085405",
+                    major_name="软件工程",
+                    degree_type="professional",
+                    exam_year=year,
+                    source_url=f"https://example.edu/{year}",
+                ),
+            )
+
+        context = await build_agent_context(
+            self.repository,
+            self.user,
+            message="比较我保存的 2028 年目标院校",
+            route="tutor",
+            retrieval_mode="private",
+        )
+
+        self.assertEqual(
+            [school["exam_year"] for school in context["school_options"]],
+            [2028],
+        )
+
     async def test_context_skips_unrequested_decision_records(self):
         context = await build_agent_context(
             self.repository,

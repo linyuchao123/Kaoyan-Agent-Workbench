@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime
 from typing import Any, Literal, TypedDict
 
@@ -53,6 +54,14 @@ def should_search_private_context(message: str) -> bool:
     return explicitly_requests_material or not (wants_school or wants_career)
 
 
+def requested_exam_year(message: str) -> int | None:
+    for value in re.findall(r"(?<!\d)(20\d{2})(?!\d)", message):
+        year = int(value)
+        if 2026 <= year <= 2100:
+            return year
+    return None
+
+
 def _effective_minutes(session: dict[str, Any]) -> int:
     started_at = session.get("started_at")
     ended_at = session.get("ended_at")
@@ -98,7 +107,9 @@ async def build_agent_context(
         mistakes_task = asyncio.create_task(repository.list_mistakes(user, due_only=True))
     wants_school, wants_career = requested_decision_context(message)
     if wants_school:
-        schools_task = asyncio.create_task(repository.list_school_options(user))
+        schools_task = asyncio.create_task(
+            repository.list_school_options(user, exam_year=requested_exam_year(message))
+        )
     if wants_career:
         career_task = asyncio.create_task(repository.list_career_items(user))
     if (

@@ -1619,7 +1619,7 @@ const schoolTierMeta: Record<SchoolTier, { label: string; title: string }> = {
   safety: { label: "保", title: "保底" },
 };
 
-function SchoolsView({ isDemo, onOpenAdvisor }: { isDemo: boolean; onOpenAdvisor: () => void }) {
+function SchoolsView({ isDemo, onOpenAdvisor }: { isDemo: boolean; onOpenAdvisor: (examYear: number) => void }) {
   const [schools, setSchools] = useState<ApiSchoolOption[]>(isDemo ? demoSchools : []);
   const [loading, setLoading] = useState(!isDemo);
   const [status, setStatus] = useState(isDemo ? "当前显示离线演示院校" : "正在加载云端院校情报…");
@@ -1782,7 +1782,7 @@ function SchoolsView({ isDemo, onOpenAdvisor }: { isDemo: boolean; onOpenAdvisor
 
   const schoolRequestState: RequestState = loading ? "loading" : loadError ? "error" : visibleSchools.length ? "ready" : "empty";
 
-  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={onOpenAdvisor}>AI 对比院校</button><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div></div>
+  return <section className="content-view"><div className="view-title"><div><div className="eyebrow">精确到学院与专业代码</div><h1>院校情报</h1><p>招生信息会变化，所有结论都保留年份与官方来源。</p></div><div className="view-title-actions"><button className="outline-button" type="button" onClick={() => onOpenAdvisor(Number(yearFilter) || 2028)}>AI 对比院校</button><button className="primary-button" onClick={() => { if (formOpen) { setFormOpen(false); clearSchoolForm(); } else { clearSchoolForm(); setFormOpen(true); } }}>{formOpen ? "收起表单" : "＋ 添加院校"}</button></div></div>
     <div className="school-toolbar"><label>招生年份<input type="number" min="2026" max="2100" value={yearFilter} onChange={(event) => changeYearFilter(event.target.value)} /></label><label>院校梯度<select value={tierFilter} onChange={(event) => changeTierFilter(event.target.value as SchoolTier | "all")}><option value="all">全部梯度</option><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><span>● {status}</span></div>
     {formOpen && <form className="panel school-form" onSubmit={saveSchool}><div className="school-form-heading"><div className="eyebrow">{editingSchool ? "编辑院校档案" : "新增目标院校"}</div><h2>{editingSchool ? `更新 ${editingSchool.university} 的年度记录` : "保存可年度复核的招生档案"}</h2></div><label>院校梯度<select value={tier} onChange={(event) => setTier(event.target.value as SchoolTier)}><option value="stretch">冲刺</option><option value="match">匹配</option><option value="safety">保底</option></select></label><label>招生年份<input type="number" min="2026" max="2100" value={examYear} onChange={(event) => setExamYear(event.target.value)} required /></label><label>学校名称<input value={university} onChange={(event) => setUniversity(event.target.value)} maxLength={120} placeholder="例如：苏州大学" required /></label><label>学院名称<input value={college} onChange={(event) => setCollege(event.target.value)} maxLength={160} placeholder="精确到招生学院" required /></label><label>专业代码<input value={majorCode} onChange={(event) => setMajorCode(event.target.value)} maxLength={20} placeholder="例如：085405" required /></label><label>专业名称<input value={majorName} onChange={(event) => setMajorName(event.target.value)} maxLength={160} required /></label><label>培养类型<select value={degreeType} onChange={(event) => setDegreeType(event.target.value as DegreeType)}><option value="professional">专业学位</option><option value="academic">学术学位</option></select></label><label>培养地点<input value={location} onChange={(event) => setLocation(event.target.value)} maxLength={160} placeholder="例如：苏州" /></label><label className="school-form-wide">初试科目<input value={examSubjects} onChange={(event) => setExamSubjects(event.target.value)} placeholder="使用顿号分隔" required /></label><label className="school-form-wide">官方来源<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="招生目录或学院官网链接" required /></label><label className="school-form-wide">核对备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={5000} placeholder="记录科目变化、复试要求或待确认事项" /></label><div className="school-form-actions"><button type="button" onClick={() => { setFormOpen(false); clearSchoolForm(); }} disabled={busy}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : editingSchool ? "保存修改" : "保存院校档案"}</button></div></form>}
     <RequestStatePanel state={schoolRequestState} loadingText="正在加载你的云端院校情报…" emptyTitle="当前筛选下还没有院校" emptyDescription="添加第一所目标院校，并记录招生年份与官方来源。" errorText={loadError}>
@@ -3272,9 +3272,9 @@ function Workbench({ user, isDemo, onSignOut, onUserUpdated }: { user: User | nu
     setAgentPlanQuery("请结合我今天未完成的任务、到期错题和近期学习进度，生成今天的学习计划。请说明安排依据，并只生成待我批准的多任务提案，不要直接写入。");
     navigateToView("agents");
   }, [navigateToView]);
-  const openSchoolAdvisor = useCallback(() => {
+  const openSchoolAdvisor = useCallback((examYear: number) => {
     setAgentInitialMode("tutor");
-    setAgentPlanQuery("请根据我已保存的目标院校档案，比较冲刺、匹配和保底结构、考试科目与待核验信息。如需最新招生事实，请只依据可追溯来源。只做分析，不要创建或修改任何记录。");
+    setAgentPlanQuery(`请根据我已保存的 ${examYear} 年目标院校档案，比较冲刺、匹配和保底结构、考试科目与待核验信息。如需最新招生事实，请只依据可追溯来源。只做分析，不要创建或修改任何记录。`);
     navigateToView("agents");
   }, [navigateToView]);
   const openCareerAdvisor = useCallback(() => {

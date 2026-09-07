@@ -10,6 +10,8 @@ test("院校与求职页面只预填分析问题并进入资料导师", () => {
   assert.match(pageSource, /const openSchoolAdvisor = useCallback[\s\S]*?setAgentInitialMode\("tutor"\)/);
   assert.match(pageSource, /const openCareerAdvisor = useCallback[\s\S]*?setAgentInitialMode\("tutor"\)/);
   assert.match(pageSource, /只做分析，不要创建或修改任何记录/);
+  assert.match(pageSource, /onOpenAdvisor\(Number\(yearFilter\) \|\| 2028\)/);
+  assert.match(pageSource, /\$\{examYear\} 年目标院校档案/);
 });
 
 test("资料库预填带原文定位要求的可编辑问题", () => {
