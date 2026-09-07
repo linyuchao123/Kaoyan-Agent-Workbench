@@ -79,6 +79,7 @@ docker run --env-file backend/.env -p 8000:8000 yantu-api
 镜像以非 root 用户运行，并包含扫描 PDF 所需的 Poppler。真实 `.env` 只在启动容器时注入，`.dockerignore` 会排除密钥、虚拟环境、上传文件、私有资料和本地启动记录，不要把环境变量写入 Dockerfile。
 
 前端会自动连接 `http://localhost:8000`。未配置 Supabase 时页面保留演示数据；配置后必须先使用邮箱和密码登录，请求会自动携带可刷新访问令牌。
+构建前会自动执行 `npm run check:env`。开发/演示模式允许 Supabase 配置同时留空；若设置 `NEXT_PUBLIC_APP_ENV=production`，则必须提供完整的 Supabase URL/Anon Key 与非本机 HTTPS API 地址。Supabase 只填一项时任何模式都会立即终止构建，避免线上静默落入演示模式。
 
 ### v0.8+ AI 与 OCR 配置
 

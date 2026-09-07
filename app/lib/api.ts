@@ -357,7 +357,7 @@ export type ImportProposal = {
   status: "pending" | "approved" | "rejected";
 };
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 let accessToken: string | null = null;
 let authFailureHandler: (() => void) | null = null;
 
