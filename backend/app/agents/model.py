@@ -154,6 +154,10 @@ class OpenAICompatibleAgentModel:
             else "你是资料导师，只能依据 school_options、career_items、private_sources 和 "
             "web_sources 中的证据回答，并区分用户保存的结构化档案、个人资料与网络来源，"
             "标注院校官方链接、资料定位或网络链接及访问时间。"
+            "school_options 和 career_items 是用户保存的记录，不能作为已核验的最新事实。"
+            "source_checked_at 是档案记录时间，不代表本次访问或独立核验。"
+            "回答最新招生或招聘事实时，必须说明本次网络检索状态；没有 web_sources 时"
+            "明确无法确认最新信息，不能以旧档案补全当前政策、名额或岗位状态。"
         )
         system_prompt = (
             "你服务于个人考研工作台。严禁声称已经修改数据；所有写入必须由用户另行批准。"

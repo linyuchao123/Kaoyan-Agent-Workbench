@@ -198,3 +198,38 @@ class AgentContextTests(IsolatedAsyncioTestCase):
         history = await self.repository.list_web_search_records(self.user)
         self.assertEqual(history[0].provider, "fake-search")
         self.assertEqual(history[0].results[0].title, "某大学 2028 招生简章")
+
+    def test_saved_school_does_not_hide_missing_live_evidence(self):
+        school = {
+            "university": "示例大学", "college": "计算机学院",
+            "major_code": "085405", "major_name": "软件工程",
+            "exam_year": 2028, "source_url": "https://example.edu/admission",
+        }
+        for mode in ("web", "hybrid"):
+            for status, reason in (
+                ("unconfigured", "尚未配置联网检索服务"),
+                ("failed", "联网检索失败"),
+                ("success", "联网检索未返回来源"),
+            ):
+                with self.subTest(mode=mode, status=status):
+                    answer = tutor_fallback({
+                        "retrieval_mode": mode,
+                        "context": {"school_options": [school], "web_search_status": status},
+                    })
+                    self.assertIn("示例大学", answer)
+                    self.assertIn(reason, answer)
+                    self.assertIn("无法确认最新信息", answer)
+
+    def test_live_evidence_is_not_reported_as_missing(self):
+        answer = tutor_fallback({
+            "retrieval_mode": "web",
+            "context": {
+                "web_search_status": "success",
+                "web_sources": [{
+                    "title": "招生公告", "url": "https://example.edu/admission",
+                    "snippet": "公告正文", "accessed_at": "2026-09-07T00:00:00Z",
+                }],
+            },
+        })
+        self.assertIn("招生公告", answer)
+        self.assertNotIn("没有取得", answer)
